@@ -84,7 +84,9 @@ void TlsFeaturesTests() {
   Check(!CertificateTLSFeaturesAllowed({extra, none, ocsp}), "intermediate cannot remove issuer feature");
   Check(CertificateTLSFeaturesAllowed({none, Certificate(std::nullopt, false, true)}), "v1 anchor remains usable");
   Check(!CertificateTLSFeaturesAllowed({}), "empty path is not validated");
-  Check(!CertificateTLSFeaturesAllowed(std::vector<std::string>(65, none)), "path count bounded");
+  Check(CertificateTLSFeaturesAllowed(std::vector<std::string>(65, none)),
+        "64 presented certificates plus a separate anchor remain usable");
+  Check(!CertificateTLSFeaturesAllowed(std::vector<std::string>(66, none)), "path count bounded");
   for (const auto& malformed : {Bytes{0x30, 3, 2, 1, 0xff},
                                 Bytes{0x30, 4, 2, 2, 0, 5},
                                 Bytes{0x30, 5, 2, 3, 1, 0, 0},

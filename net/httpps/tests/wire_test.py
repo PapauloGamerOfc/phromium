@@ -111,7 +111,9 @@ async def main(args):
                             if kind == "hrr-repeated":
                                 writer.write(plain(retry))
                                 await writer.drain()
-                                await reader.read()
+                                alert = await reader.readexactly(7)
+                                assert alert == bytes([21, 3, 3, 0, 2, 2, 10]), alert
+                                observed_alerts.append(10)
                                 return
                             hello = second
                         ephemeral, public = c.traffic_key(hello.group)
@@ -262,6 +264,8 @@ async def main(args):
                 assert not handler_errors, (kind, handler_errors)
                 if kind in expected_alerts:
                     assert observed_alerts == [expected_alerts[kind]], (kind, observed_alerts)
+                if kind == "hrr-repeated":
+                    assert observed_alerts == [10], (kind, observed_alerts)
                 if kind in positives:
                     assert output == response, kind
                     assert len(requests) == 1, kind

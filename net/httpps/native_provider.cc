@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 #include "net/httpps/native_provider.h"
+#include "net/httpps/credential_validation.h"
 #include "net/httpps/ffdhe.h"
 
 #include <algorithm>
@@ -179,6 +180,7 @@ struct NativeProvider::Impl {
   void* (*X509_STORE_CTX_get0_chain)(const void*) = nullptr;
   int (*X509_VERIFY_PARAM_set_flags)(void*, unsigned long) = nullptr;
   void (*X509_VERIFY_PARAM_set_hostflags)(void*, unsigned) = nullptr;
+  void (*X509_VERIFY_PARAM_set_depth)(void*, int) = nullptr;
   int (*X509_VERIFY_PARAM_set1_host)(void*, const char*, size_t) = nullptr;
   int (*X509_VERIFY_PARAM_set1_ip_asc)(void*, const char*) = nullptr;
   void* (*OPENSSL_sk_new_null)() = nullptr;
@@ -230,6 +232,7 @@ struct NativeProvider::Impl {
     LOAD(X509_STORE_CTX_set_verify_cb); LOAD(X509_STORE_CTX_get_error); LOAD(X509_STORE_CTX_set_error);
     LOAD(X509_STORE_CTX_get_error_depth); LOAD(X509_STORE_CTX_get_current_cert); LOAD(X509_STORE_CTX_get0_chain);
     LOAD(X509_VERIFY_PARAM_set_flags); LOAD(X509_VERIFY_PARAM_set_hostflags);
+    LOAD(X509_VERIFY_PARAM_set_depth);
     LOAD(X509_VERIFY_PARAM_set1_host); LOAD(X509_VERIFY_PARAM_set1_ip_asc);
     LOAD(OPENSSL_sk_new_null); LOAD(OPENSSL_sk_free); LOAD(OPENSSL_sk_push); LOAD(OPENSSL_sk_num); LOAD(OPENSSL_sk_value);
 #undef LOAD
@@ -719,7 +722,7 @@ std::optional<std::vector<std::string>> NativeProvider::VerifyCertificatePath(
     const std::vector<std::string>& chain, const std::vector<std::string>& roots,
     std::string_view hostname, bool server, bool partial_chain) const {
   Impl::ThreadScope cleanup(*impl_);
-  if (chain.empty() || roots.empty() || chain.size() > 32 || roots.size() > 4096 ||
+  if (chain.empty() || roots.empty() || chain.size() > kMaxCertificates || roots.size() > 4096 ||
       (server && !ValidServiceIdentity(hostname)))
     return {};
   // Generic SSL purpose checks do not know TLS2's X25519 authentication role.
@@ -766,6 +769,7 @@ std::optional<std::vector<std::string>> NativeProvider::VerifyCertificatePath(
   if (api.X509_STORE_CTX_init(context.get(), store.get(), certificates.front().get(), untrusted.get()) != 1 ||
       api.X509_STORE_CTX_set_purpose(context.get(), server ? 2 : 1) != 1) return {};
   auto* parameters = api.X509_STORE_CTX_get0_param(context.get());
+  api.X509_VERIFY_PARAM_set_depth(parameters, static_cast<int>(kMaxCertificates));
   api.X509_VERIFY_PARAM_set_hostflags(parameters, 0x4 | 0x20);
   if (api.X509_VERIFY_PARAM_set_flags(parameters, 0x20 | 0x80 | 0x8000 | (partial_chain ? 0x80000 : 0)) != 1)
     return {};
@@ -832,7 +836,8 @@ std::optional<std::vector<std::string>> NativeProvider::VerifyCertificatePath(
   std::vector<Handle> owned_path;
   for (int i = 0; i < count; ++i)
     owned_path.emplace_back(api.OPENSSL_sk_value(path.get(), i), api.X509_free);
-  if (count < 1 || count > 64) return {};
+  // A path for 64 presented certificates can include one separate trust anchor.
+  if (count < 1 || static_cast<size_t>(count) > kMaxCertificates + 1) return {};
   std::vector<std::string> result;
   for (const auto& cert : owned_path) {
     const int length = api.i2d_X509(cert.get(), nullptr);

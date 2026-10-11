@@ -1073,6 +1073,7 @@ component("net") {
     "httpps/bootstrap.cc",
     "httpps/certificate_algorithms.cc",
     "httpps/credential_requests.cc",
+    "httpps/credential_validation.h",
     "httpps/integrity_only.cc",
     "httpps/integrity_only.h",
     "httpps/native_provider.cc",

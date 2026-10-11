@@ -756,6 +756,45 @@ void SelfTest() {
 }  // namespace
 
 int main(int argc, char** argv) {
+  if (argc >= 4 && std::string_view(argv[1]) == "--check-client-chain") {
+    net::httpps::ClientCredential credential;
+    auto key = ReadFile(argv[2]);
+    Require(key.size() == credential.private_key.size(), "raw client key length");
+    std::copy(key.begin(), key.end(), credential.private_key.begin());
+    OPENSSL_cleanse(key.data(), key.size());
+    for (int i = 3; i < argc; ++i)
+      credential.certificates.push_back(ReadFile(argv[i]));
+    net::httpps::Client client("localhost", {}, false);
+    return client.SetClientCredential(credential) ? 0 : 1;
+  }
+  if (argc >= 7 && std::string_view(argv[1]) == "--get-client-chain") {
+#if defined(_WIN32)
+    _setmode(_fileno(stdout), _O_BINARY);
+#endif
+    net::httpps::ClientCredential credential;
+    auto key = ReadFile(argv[5]);
+    Require(key.size() == credential.private_key.size(), "raw client key length");
+    std::copy(key.begin(), key.end(), credential.private_key.begin());
+    OPENSSL_cleanse(key.data(), key.size());
+    for (int i = 6; i < argc; ++i)
+      credential.certificates.push_back(ReadFile(argv[i]));
+    net::httpps::ClientOptions options;
+    options.post_handshake_auth = true;
+    return Get(argv[2], argv[3], argv[4], false, false, true, nullptr,
+               nullptr, options, nullptr, false, false, false, &credential);
+  }
+  if (argc >= 6 && std::string_view(argv[1]) == "--verify-native-chain") {
+    auto provider = net::httpps::NativeProvider::Load(argv[4]);
+    Require(provider != nullptr, "explicit native provider available");
+    std::vector<std::string> chain;
+    for (int i = 5; i < argc; ++i)
+      chain.push_back(ReadFile(argv[i]));
+    auto path = provider->VerifyCertificatePath(chain, {ReadFile(argv[3])}, argv[2]);
+    if (!path) return 1;
+    Require(net::httpps::CertificateTLSFeaturesAllowed(*path), "verified path TLSFeature policy");
+    std::cout << "verified path certificates: " << path->size() << '\n';
+    return 0;
+  }
   if (argc == 4 && std::string_view(argv[1]) == "--gost-provider-test") {
     RunGostProviderTests(argv[2], argv[3]);
     return 0;

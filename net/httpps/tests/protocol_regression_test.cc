@@ -96,6 +96,9 @@ class ProtocolRegressionPeer {
     client.state_ = Client::State::kCertificate;
     client.client_auth_requested_ = true;
   }
+  static void AwaitInitialCertificateRequest(Client& client) {
+    client.state_ = Client::State::kCertificate;
+  }
   static void PopulateSecrets(Client& client) {
     for (auto* secret : {&client.a_, &client.b_, &client.authenticator_a_,
                          &client.client_verifier_share_, &client.password_context_,
@@ -510,6 +513,24 @@ void RetryGroups() {
       Check(share.size() >= 6 && share[2] == 0 && share[3] == *group &&
                 share != initial.at(51), "valid group HRR replaces the traffic share");
     }
+    Check(!ReceivePlaintextHandshake(client, CookieRetry(1, group)) &&
+              client.TakeOutput().empty(), "second HRR cannot emit another ClientHello");
+    CheckAlert(client, 10, false);
+  }
+  for (int changed = 0; changed < 4; ++changed) {
+    Client client("example.test", {}, true);
+    Check(client.Start(), "second HRR parameter fixture starts");
+    client.TakeOutput();
+    Check(ReceivePlaintextHandshake(client, CookieRetry()), "first cookie retry is legal");
+    client.TakeOutput();
+    auto second = CookieRetry(1, changed == 0 ? uint16_t{23} : uint16_t{0xffff});
+    if (changed >= 2) {
+      second[39] = changed == 2 ? 0x13 : 0xaa;
+      second[40] = changed == 2 ? 2 : 0xaa;
+    }
+    Check(!ReceivePlaintextHandshake(client, second) && client.TakeOutput().empty(),
+          "second HRR is unexpected even with changed group or suite");
+    CheckAlert(client, 10, false);
   }
 }
 
@@ -868,6 +889,75 @@ Bytes CertificateRequest() {
   return Frame(13, body);
 }
 
+void CertificateRequestValidation() {
+  // Independently encoded DER Name (CN=A), not produced by the parser under test.
+  const Bytes name{0x30, 0x0c, 0x31, 0x0a, 0x30, 0x08, 0x06, 0x03,
+                   0x55, 0x04, 0x03, 0x0c, 0x01, 0x41};
+  const auto names = Vector16(Vector16(name));
+  Bytes trailing_name = name;
+  trailing_name.push_back(0);
+  Bytes nonminimal_name = name;
+  nonminimal_name.insert(nonminimal_name.begin() + 1, 0x81);
+  Bytes malformed_oid = name;
+  malformed_oid[8] = 0x80;
+  Bytes unsorted_name{0x30, 0x16, 0x31, 0x14};
+  Bytes attribute(name.begin() + 4, name.end());
+  attribute.back() = 0x42;
+  Append(&unsorted_name, attribute);
+  attribute.back() = 0x41;
+  Append(&unsorted_name, attribute);
+  struct Case { uint16_t type; Bytes data; bool valid; };
+  const Case cases[] = {
+      {47, names, true}, {47, Vector16(Vector16(Bytes{0x30, 0})), true},
+      {47, {}, false}, {47, {0, 0}, false}, {47, {0, 3, 0, 1, 0}, false},
+      {47, {0, 2, 0, 0}, false}, {47, Vector16(Vector16(trailing_name)), false},
+      {47, Vector16(Vector16(nonminimal_name)), false},
+      {47, Vector16(Vector16(malformed_oid)), false},
+      {47, Vector16(Vector16(unsorted_name)), false},
+      {5, {}, true}, {5, {0}, false}, {5, {1, 0, 0, 0, 0}, false},
+      {0xaaa0, {0}, true}};
+  for (const auto& test : cases) {
+    for (bool pha : {false, true}) {
+      ClientOptions options;
+      options.post_handshake_auth = true;
+      Client client("example.test", {}, true, options);
+      Check(client.Start(), "CR validation ClientHello");
+      ProtocolRegressionPeer::Prepare(client);
+      if (!pha) ProtocolRegressionPeer::AwaitInitialCertificateRequest(client);
+      auto base = CertificateRequest();
+      Bytes extensions(base.begin() + 8, base.end());
+      Extension(&extensions, 50, Bytes{0, 2, 8, 7});
+      Extension(&extensions, test.type, test.data);
+      Bytes body = pha ? Bytes{1, 7} : Bytes{0};
+      Append(&body, Vector16(extensions));
+      auto request = Frame(13, body);
+      Bytes record, application;
+      RecordCipher sender(ProtocolRegressionPeer::ReceivingSecret());
+      Check(sender.Seal(request, 22, &record), "protect known CR extension");
+      Check(client.Receive(record, &application) == test.valid,
+            "known CR/PHA syntax is validated without a local credential");
+      Check(application.empty(), "CR/PHA does not release application bytes");
+      if (!test.valid) {
+        CheckAlert(client, 50);
+        Check(ProtocolRegressionPeer::SecretsErased(client),
+              "malformed request erases connection secrets");
+      } else if (pha) {
+        Check(!client.TakeOutput().empty(), "valid PHA permits empty-credential refusal");
+      }
+
+      // Exported client authenticators must validate requests even when the
+      // caller selects no credential. Do not consume the context on failure.
+      Client authenticator("example.test", {}, true, options);
+      Check(authenticator.Start(), "authenticator request fixture starts");
+      ProtocolRegressionPeer::Prepare(authenticator);
+      Bytes response;
+      Check(authenticator.AuthenticateClient(request, nullptr, &response) == test.valid,
+            "client authenticator validates CA/OCSP syntax before empty response");
+      Check(response.empty() == !test.valid, "malformed EA request has no response");
+    }
+  }
+}
+
 void ClosedWriterControlMessages() {
   ClientCredential credential;
   credential.certificate_type = 2;
@@ -1098,6 +1188,7 @@ void RunProtocolRegressionTests() {
   HalfCloseKeepsOppositeDirection();
   ClosedWriterControlMessages();
   ClosedWriterFailures();
+  CertificateRequestValidation();
   KeyUpdates();
   PostHandshakeAuthentication();
   RetrospectiveLimits();

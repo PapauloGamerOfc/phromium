@@ -66,6 +66,7 @@ def main():
     interop('authenticator_interop_test.py', '--password-provider', provider,
             '--password-helper', helper)
     interop('credential_requests_test.py')
+    interop('chain_limit_interop_test.py', '--native-provider', provider)
     interop('transparency_interop_test.py')
     run(sys.executable, source/'transparency_oracle_test.py', '--binary',
         directory/f'httpps_transparency_test{suffix}', '--server-source', server)

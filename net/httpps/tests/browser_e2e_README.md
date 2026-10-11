@@ -8,7 +8,7 @@ disables the sandbox, or bypasses a browser certificate error through CDP.
 
 Prerequisites: Python 3.11+, the reference server's `requirements-dev.txt`
 (including the `h2` fixture dependency), and a clean checkout of
-`tls20-server` at `873c02a6827b424eab358b551b9625964d7e8bca`. The revision is
+`tls20-server` at `44b582941199e402b89a373e8bed7c2318415371`. The revision is
 checked before importing its protocol implementation. No dependencies are
 downloaded by the script.
 
@@ -21,6 +21,48 @@ provenance check, never certificate validation. Historical clean-revision
 results do not validate a subsequent optional-profile expansion.
 Use the server and browser from the same migration; the old numbered prototype
 is not wire-compatible with the current spec.
+
+## Certificate budgets, requests and retry alerts: 2026-10-11
+
+Wire parsing, local client credentials, cached material and both certificate
+verifiers now accept up to 64 presented certificates. A separately configured
+anchor may extend the verified path to 65 entries. Per-certificate, aggregate
+byte, identity, role and trust checks remain independent and mandatory.
+
+CertificateRequest validates known extension syntax even when no client
+credential is configured: authority vectors must be nonempty and contain valid
+DER Names, and the OCSP-request extension must be empty in this direction.
+The same checks apply to post-handshake and client-authenticator requests;
+server-authenticator requests retain the full ClientHello OCSP structure.
+A repeated HelloRetryRequest returns `unexpected_message`, including with
+unknown or changed suite/group fields, while invalid first selections remain
+`illegal_parameter` failures.
+
+Exact-alert socket tests allow a complete fatal-record write. Separate tests
+limit writes to three bytes and verify immediate closure, no credential or
+application-data response and no late callbacks. Fatal-alert delivery remains
+best effort; these tests do not require a closed transport to finish writing an
+alert or retain protocol secrets while waiting for it.
+
+`chain_limit_interop_test.py` exercises real chains of 9 and 64 certificates,
+initial/PHA client credentials, a separate anchor, and rejected 65-entry,
+wrong-key, untrusted and oversized inputs. Pass `--native-provider` with an
+explicit OpenSSL library to run the additional native-verifier boundary cases.
+Both forms are included in CI; the unconfigured form reports its three
+optional-provider skips explicitly.
+
+Final local Windows validation passed six portable CTest targets, 22
+interoperability invocations, 19 optional-provider commands, 12,108 selected
+integrated network tests, 30 service tests, eight component tests, 38 real-browser
+assertions and 34 provisioned-profile cases under each of the default and
+explicit network-sandbox policies. The network rerun had no retries or runtime
+skips; six pre-existing disabled tests matching that selection were not enabled.
+An initial run exposed the fixture's incorrect complete-alert expectation under
+short writes; the tests were separated as described above and the entire
+selection rerun, not just the failed test. The 15 harness self-checks and nine
+branding checks passed. Logs/reports are under `out/httpps-native/cert-conformance-*`
+and `out/Phromium/cert-conformance-*`. These are local Windows results, not
+completed remote Linux/macOS CI or a formal security audit.
 
 ## Failure metadata and directional delegation: 2026-10-11
 
@@ -177,6 +219,7 @@ under `out/reference-spec` rather than importing the moving default branch.
 ```powershell
 python net/httpps/tests/session_interop_test.py --native out/httpps-native/Release/httpps_native_test.exe --server-source ../tls20-server
 python net/httpps/tests/client_auth_interop_test.py --native out/httpps-native/Release/httpps_native_test.exe --server-source ../tls20-server
+python net/httpps/tests/chain_limit_interop_test.py --native out/httpps-native/Release/httpps_native_test.exe --server-source ../tls20-server
 python net/httpps/tests/spec_oracle_test.py --native out/httpps-native/Release/httpps_native_test.exe --server-source ../tls20-server --spec-source ../tls20-spec
 ```
 

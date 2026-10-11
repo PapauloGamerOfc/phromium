@@ -1,5 +1,6 @@
 // Copyright 2026 The Phromium Authors. BSD-style license: see LICENSE.
 #include "net/httpps/draft01.h"
+#include "net/httpps/credential_validation.h"
 
 #include <algorithm>
 #include <set>
@@ -20,6 +21,32 @@ bool Equal(ByteSpan a, ByteSpan b) {
 }
 bool NameValid(ByteSpan value) {
   if (value.empty() || value.size() > 65535) return false;
+  // X509_NAME may retain its original encoding. Do not rely only on an
+  // encode/decode round trip to reject BER lengths or noncanonical SET order.
+  CBS input, sequence;
+  CBS_init(&input, value.data(), value.size());
+  if (!CBS_get_asn1(&input, &sequence, CBS_ASN1_SEQUENCE) || CBS_len(&input))
+    return false;
+  while (CBS_len(&sequence)) {
+    CBS rdn;
+    if (!CBS_get_asn1(&sequence, &rdn, CBS_ASN1_SET) || !CBS_len(&rdn))
+      return false;
+    ByteSpan previous;
+    while (CBS_len(&rdn)) {
+      CBS encoded, attribute, oid, attribute_value;
+      if (!CBS_get_asn1_element(&rdn, &encoded, CBS_ASN1_SEQUENCE)) return false;
+      const auto current = BytesOf(encoded);
+      if (!previous.empty() && std::lexicographical_compare(
+              current.begin(), current.end(), previous.begin(), previous.end()))
+        return false;
+      previous = current;
+      if (!CBS_get_asn1(&encoded, &attribute, CBS_ASN1_SEQUENCE) ||
+          !CBS_get_asn1(&attribute, &oid, CBS_ASN1_OBJECT) ||
+          !CBS_is_valid_asn1_oid(&oid) ||
+          !CBS_get_any_asn1_element(&attribute, &attribute_value, nullptr, nullptr) ||
+          CBS_len(&attribute)) return false;
+    }
+  }
   const uint8_t* cursor = value.data();
   bssl::UniquePtr<X509_NAME> name(d2i_X509_NAME(nullptr, &cursor, value.size()));
   if (!name || cursor != value.subspan(value.size()).data()) return false;
@@ -88,6 +115,24 @@ bool CredentialRequestOptionsValid(const ClientOptions& options) {
   std::optional<Bytes> nonce;
   return options.ocsp_request_extensions.size() <= 65530 - ids_size &&
       Extensions(options.ocsp_request_extensions, &nonce);
+}
+
+bool ParseCertificateAuthorities(ByteSpan encoded,
+                                 std::vector<Bytes>* authorities) {
+  authorities->clear();
+  CBS input, names;
+  CBS_init(&input, encoded.data(), encoded.size());
+  if (!CBS_get_u16_length_prefixed(&input, &names) || CBS_len(&input) ||
+      CBS_len(&names) < 3) return false;
+  std::vector<Bytes> parsed;
+  while (CBS_len(&names)) {
+    CBS name;
+    if (!CBS_get_u16_length_prefixed(&names, &name) ||
+        !NameValid(BytesOf(name))) return false;
+    parsed.emplace_back(BytesOf(name).begin(), BytesOf(name).end());
+  }
+  *authorities = std::move(parsed);
+  return true;
 }
 
 bool OCSPRequestMatchesResponse(const ClientOptions& options, ByteSpan response) {

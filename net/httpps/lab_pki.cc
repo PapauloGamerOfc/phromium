@@ -7,6 +7,7 @@
 #include <ctime>
 
 #include "net/httpps/draft01.h"
+#include "net/httpps/credential_validation.h"
 #include "net/httpps/certificate_features.h"
 #include "net/httpps/native_provider.h"
 #include "third_party/boringssl/src/include/openssl/asn1.h"
@@ -315,7 +316,7 @@ std::optional<bool> CertificateRequiresOCSP(std::string_view der) {
 
 bool CertificateTLSFeaturesAllowed(
     const std::vector<std::string>& validated_path) {
-  if (validated_path.empty() || validated_path.size() > 64)
+  if (validated_path.empty() || validated_path.size() > kMaxCertificates + 1)
     return false;
   auto child = CertificateTLSFeatures(validated_path.front());
   if (!child)
@@ -337,7 +338,7 @@ static bool VerifyRestrictedLabChain(const std::vector<std::string>& chain,
                     const std::vector<std::string>& anchors,
                     std::string_view hostname,
                     Secret* server_public_key, bool signing_parent) {
-  if (chain.empty() || chain.size() > 8 || anchors.empty() ||
+  if (chain.empty() || chain.size() > kMaxCertificates || anchors.empty() ||
       anchors.size() > 32 || !ValidServiceIdentity(hostname) ||
       std::set(chain.begin(), chain.end()).size() != chain.size()) {
     return false;
@@ -435,7 +436,9 @@ static bool VerifyRestrictedLabChain(const std::vector<std::string>& chain,
     if (!X509_VERIFY_PARAM_set_purpose(parameters, X509_PURPOSE_ANY)) {
       return false;
     }
-    X509_VERIFY_PARAM_set_depth(parameters, 8);
+    // The separately provisioned trust anchor need not be sent in Certificate.
+    // Permit the same presented-chain budget as the wire parser and selector.
+    X509_VERIFY_PARAM_set_depth(parameters, static_cast<int>(kMaxCertificates));
     if (X509_verify_cert(context.get()) == 1) {
       if (!signing_parent)
         std::copy(encoded.begin() + 12, encoded.end(), server_public_key->begin());

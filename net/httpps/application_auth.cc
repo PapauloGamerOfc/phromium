@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 #include "net/httpps/draft01.h"
+#include "net/httpps/credential_validation.h"
 
 #include <algorithm>
 #if !defined(PHROMIUM_HTTPPS_STANDALONE)
@@ -151,11 +152,21 @@ bool ParseRequest(ByteSpan wire, Request* request) {
       return false;
   if (!request->server && request->extensions.count(0))
     return false;
+  // A client authenticator request inherits CR's empty OCSP request. A server
+  // authenticator request instead uses the full ClientHello OCSP structure.
+  if (!request->server && request->extensions.count(5) &&
+      !request->extensions.at(5).empty())
+    return false;
+  std::vector<Bytes> authorities;
+  if (request->extensions.count(47) &&
+      !ParseCertificateAuthorities(request->extensions.at(47), &authorities))
+    return false;
   std::copy(share->second.begin(), share->second.end(), request->share.begin());
   return Offers(request->extensions);
 }
 bool Certificate(const AuthenticatorIdentity& identity, Bytes* frame) {
-  if (identity.context.size() > 255 || identity.extensions.size() != identity.certificates.size())
+  if (identity.context.size() > 255 || identity.certificates.size() > kMaxCertificates ||
+      identity.extensions.size() != identity.certificates.size())
     return false;
   Bytes entries;
   for (size_t i = 0; i < identity.certificates.size(); ++i) {
@@ -183,6 +194,8 @@ bool ParseCertificate(ByteSpan body, AuthenticatorIdentity* identity) {
   identity->context.assign(context.begin(), context.end());
   reader.input = entries;
   while (!reader.input.empty()) {
+    if (identity->certificates.size() >= kMaxCertificates)
+      return false;
     ByteSpan der, extensions;
     Extensions parsed;
     if (!reader.Vector(3, &der) || der.empty() || !reader.Vector(2, &extensions) ||

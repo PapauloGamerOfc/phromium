@@ -348,6 +348,7 @@ class Peer : public SocketDataProvider {
   size_t discarded_early_bytes = 0;
   int client_hellos = 0;
   int client_finished = 0;
+  int initial_empty_certificates = 0;
   int end_of_early_data = 0;
   int pha_empty_certificates = 0;
   int pha_finished = 0;
@@ -399,6 +400,7 @@ class Peer : public SocketDataProvider {
     client_hellos = 0;
     last_client_alert = 0;
     client_finished = 0;
+    initial_empty_certificates = 0;
     end_of_early_data = 0;
     pha_empty_certificates = pha_finished = key_updates = close_notifies = 0;
     pha_transcript_.clear();
@@ -441,6 +443,13 @@ class Peer : public SocketDataProvider {
     }
     if (finished_) {
       ASSERT_EQ(type, 22);
+      if (send_initial_cr && !plaintext.empty() && plaintext[0] == 11) {
+        EXPECT_EQ(plaintext, Frame(11, Bytes{0, 0, 0, 0}));
+        EXPECT_EQ(initial_empty_certificates, 0);
+        Append(transcript_, plaintext);
+        ++initial_empty_certificates;
+        return;
+      }
       auto expected = httpps::Mac(httpps::Label(c_hs_, "finished", {}, 32),
                                   httpps::Hash(transcript_));
       EXPECT_EQ(plaintext, Frame(20, expected));
@@ -1336,8 +1345,8 @@ TEST_F(HttppsClientSocketTest, MalformedCertificateRequestVectorsSendDecodeError
   for (uint16_t type : {27, 34, 47, 48, 0xff04}) {
     for (const Bytes& malformed : {Bytes{}, Bytes{0, 0}, Bytes{0, 3, 4},
                                   Bytes{0, 2, 4, 3, 0}}) {
-      // Empty authority/filter lists are legal, unlike empty signature lists.
-      if ((type == 47 || type == 48) && malformed == Bytes({0, 0}))
+      // OID filters may be empty; an authority list must contain a DER Name.
+      if (type == 48 && malformed == Bytes({0, 0}))
         continue;
       SCOPED_TRACE(type);
       peer_.send_initial_cr = true;
@@ -1356,6 +1365,134 @@ TEST_F(HttppsClientSocketTest, MalformedCertificateRequestVectorsSendDecodeError
                 connected.GetResult(socket->Connect(connected.callback())));
       EXPECT_EQ(peer_.client_finished, 0);
       EXPECT_EQ(peer_.last_client_alert, 50);
+    }
+  }
+}
+
+TEST_F(HttppsClientSocketTest, CertificateRequestEvidenceSyntaxWithoutCredential) {
+  const Bytes name{0x30, 0x0c, 0x31, 0x0a, 0x30, 0x08, 0x06, 0x03,
+                   0x55, 0x04, 0x03, 0x0c, 0x01, 0x41};
+  Bytes authorities;
+  U16(authorities, name.size() + 2);
+  U16(authorities, name.size());
+  Append(authorities, name);
+  struct Case { uint16_t type; Bytes data; bool valid; };
+  const Case cases[] = {
+      {47, authorities, true}, {47, {0, 0}, false},
+      {47, {0, 3, 0, 1, 0}, false},
+      {5, {}, true}, {5, {0}, false}, {5, {1, 0, 0, 0, 0}, false},
+      {0xaaa0, {0}, true}};
+  for (IoMode mode : {SYNCHRONOUS, ASYNC}) {
+    for (bool pha : {false, true}) {
+      for (const auto& test : cases) {
+        SCOPED_TRACE(mode);
+        SCOPED_TRACE(pha);
+        SCOPED_TRACE(test.type);
+        SCOPED_TRACE(test.valid);
+        peer_.mode = mode;
+        peer_.read_chunk = 3;
+        // Fatal alerts are best effort before immediate disconnect. Give error
+        // cases a complete Write so this checks the exact decode_error; keep
+        // successful controls fragmented. Short fatal writes are tested below.
+        peer_.write_chunk = test.valid ? 7 : 65536;
+        Bytes extra;
+        U16(extra, test.type);
+        U16(extra, test.data.size());
+        Append(extra, test.data);
+        peer_.send_initial_cr = !pha;
+        peer_.initial_cr_extra = pha ? Bytes{} : extra;
+        httpps::ClientOptions options;
+        options.post_handshake_auth = true;
+        auto socket = Make(true, nullptr, std::nullopt, false, options);
+        TestCompletionCallback connected;
+        const int result = connected.GetResult(socket->Connect(connected.callback()));
+        if (!pha) {
+          EXPECT_EQ(test.valid ? OK : ERR_SSL_PROTOCOL_ERROR, result);
+          EXPECT_EQ(test.valid ? 1 : 0, peer_.initial_empty_certificates);
+          EXPECT_EQ(test.valid ? 1 : 0, peer_.client_finished);
+        } else {
+          ASSERT_EQ(OK, result);
+          peer_.RequestClientAuth(1, extra);
+          peer_.Application("after request");
+          auto response = base::MakeRefCounted<IOBufferWithSize>(32);
+          TestCompletionCallback read;
+          EXPECT_EQ(test.valid ? 13 : ERR_SSL_PROTOCOL_ERROR,
+                    read.GetResult(socket->Read(response.get(), response->size(), read.callback())));
+          EXPECT_EQ(test.valid ? 1 : 0, peer_.pha_empty_certificates);
+          EXPECT_EQ(test.valid ? 1 : 0, peer_.pha_finished);
+          if (test.valid)
+            EXPECT_EQ("after request", std::string(response->data(), 13));
+        }
+        EXPECT_EQ(test.valid ? 0 : 50, peer_.last_client_alert);
+        EXPECT_EQ(test.valid, socket->IsConnected());
+      }
+    }
+  }
+}
+
+TEST_F(HttppsClientSocketTest, MalformedCertificateRequestClosesAfterShortAlertWrite) {
+  for (IoMode mode : {SYNCHRONOUS, ASYNC}) {
+    for (bool pha : {false, true}) {
+      for (uint16_t type : {47, 5}) {
+        SCOPED_TRACE(mode);
+        SCOPED_TRACE(pha);
+        SCOPED_TRACE(type);
+        peer_.mode = mode;
+        peer_.read_chunk = 3;
+        peer_.write_chunk = 3;  // Shorter than even an unencrypted alert record.
+        // Empty authorities and nonempty status_request are malformed even
+        // when no client credential is configured.
+        const Bytes data = type == 47 ? Bytes{0, 0} : Bytes{0};
+        Bytes extra;
+        U16(extra, type);
+        U16(extra, data.size());
+        Append(extra, data);
+        peer_.send_initial_cr = !pha;
+        peer_.initial_cr_extra = pha ? Bytes{} : extra;
+        httpps::ClientOptions options;
+        options.post_handshake_auth = true;
+        auto socket = Make(true, nullptr, std::nullopt, false, options);
+        TestCompletionCallback connected;
+        const int result = connected.GetResult(socket->Connect(connected.callback()));
+        auto response = base::MakeRefCounted<IOBufferWithSize>(32);
+        if (!pha) {
+          EXPECT_EQ(ERR_SSL_PROTOCOL_ERROR, result);
+          EXPECT_EQ(0, peer_.client_finished);
+        } else {
+          ASSERT_EQ(OK, result);
+          peer_.RequestClientAuth(1, extra);
+          peer_.Application("must not be delivered");
+          TestCompletionCallback read;
+          EXPECT_EQ(ERR_SSL_PROTOCOL_ERROR,
+                    read.GetResult(socket->Read(response.get(), response->size(),
+                                                read.callback())));
+          EXPECT_EQ(1, peer_.client_finished);
+        }
+        // The partial fatal record proves an alert was attempted, but closing
+        // must not depend on the peer receiving its complete record.
+        EXPECT_FALSE(peer_.AllWriteDataConsumed());
+        EXPECT_EQ(0, peer_.last_client_alert);
+        EXPECT_EQ(0, peer_.initial_empty_certificates);
+        EXPECT_EQ(0, peer_.pha_empty_certificates);
+        EXPECT_EQ(0, peer_.pha_finished);
+        EXPECT_FALSE(socket->IsConnected());
+        EXPECT_FALSE(socket->IsConnectedAndIdle());
+        int unexpected_callbacks = 0;
+        EXPECT_EQ(ERR_SSL_PROTOCOL_ERROR,
+                  socket->Read(response.get(), response->size(),
+                               base::BindLambdaForTesting([&](int) {
+                                 ++unexpected_callbacks;
+                               })));
+        auto request = base::MakeRefCounted<StringIOBuffer>("must not be sent");
+        EXPECT_EQ(ERR_SSL_PROTOCOL_ERROR,
+                  socket->Write(request.get(), request->size(),
+                                base::BindLambdaForTesting([&](int) {
+                                  ++unexpected_callbacks;
+                                }), TRAFFIC_ANNOTATION_FOR_TESTS));
+        tasks_.RunUntilIdle();
+        EXPECT_EQ(0, unexpected_callbacks);
+        EXPECT_TRUE(peer_.received_application.empty());
+      }
     }
   }
 }

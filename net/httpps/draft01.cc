@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 #include "net/httpps/draft01.h"
+#include "net/httpps/credential_validation.h"
 #include "net/httpps/certificate_features.h"
 #include "net/httpps/pinning.h"
 #include "net/httpps/ffdhe.h"
@@ -254,7 +255,7 @@ bool ParseCertificates(ByteSpan body, std::vector<std::string>* certificates,
   }
   body = body.subspan(4u);
   while (!body.empty()) {
-    if (certificates->size() == 8 || body.size() < 5) {
+    if (certificates->size() >= kMaxCertificates || body.size() < 5) {
       return false;
     }
     size_t length = Read24(body.first(3u));
@@ -1009,7 +1010,7 @@ void Client::Diagnostic(std::string_view label, ByteSpan secret, bool exporter) 
 
 bool Client::SetClientCredential(const ClientCredential& credential) {
   if (state_ != State::kNew || credential.certificates.empty() ||
-      credential.certificates.size() > 8 ||
+      credential.certificates.size() > kMaxCertificates ||
       (credential.certificate_type != 0 && credential.certificate_type != 2 && credential.certificate_type != 3) ||
       (credential.certificate_type != 0 && credential.certificates.size() != 1))
     return false;
@@ -1111,6 +1112,10 @@ bool Client::AcceptCertificateRequest(ByteSpan frame, bool post_handshake) {
     if (!RequestExtensionAllowed(type, RequestExtensionContext::kCertificateRequest))
       return Fail(Error::kProtocol, 47);
   }
+  // A CR requests OCSP evidence with an empty extension, not the ClientHello
+  // OCSP request structure. Check known syntax even without a local credential.
+  if (extensions.count(5) && !extensions[5].empty())
+    return Fail(Error::kProtocol, 50);
   if (!extensions.count(0xff03) ||
       (client_certificate_type_ == 0 && !extensions.count(50)))
     return Fail(Error::kProtocol, 109);
@@ -1156,21 +1161,9 @@ bool Client::AcceptCertificateRequest(ByteSpan frame, bool post_handshake) {
     }
   }
   client_authorities_.clear();
-  if (extensions.count(47)) {
-    ByteSpan names = extensions[47];
-    if (names.size() < 2 || Read16(names.first(2u)) != names.size() - 2)
-      return Fail(Error::kProtocol, 50);
-    names = names.subspan(2u);
-    while (!names.empty()) {
-      if (names.size() < 2)
-        return Fail(Error::kProtocol, 50);
-      const auto size = Read16(names.first(2u));
-      if (size == 0 || size > names.size() - 2)
-        return Fail(Error::kProtocol, 50);
-      client_authorities_.emplace_back(names.begin() + 2, names.begin() + 2 + size);
-      names = names.subspan(size + 2);
-    }
-  }
+  if (extensions.count(47) &&
+      !ParseCertificateAuthorities(extensions[47], &client_authorities_))
+    return Fail(Error::kProtocol, 50);
   client_oid_filters_.clear();
   if (extensions.count(48)) {
     ByteSpan filters = extensions[48];
@@ -1555,7 +1548,8 @@ bool Client::Start(const SessionTicket* ticket, ByteSpan early_data,
     return Fail();
   size_t cached_bytes = 0;
   for (const auto& [kind, chain] : options_.cached_certificates) {
-    if ((kind != 0 && kind != 2 && kind != 3) || chain.empty() || (kind != 0 && chain.size() != 1))
+    if ((kind != 0 && kind != 2 && kind != 3) || chain.empty() ||
+        chain.size() > kMaxCertificates || (kind != 0 && chain.size() != 1))
       return Fail();
     for (const auto& der : chain) {
       cached_bytes += der.size();
@@ -2225,7 +2219,9 @@ bool Client::TrafficAgreement(uint16_t group, ByteSpan public_key, Bytes* shared
 }
 
 bool Client::RetryHello(ByteSpan frame, ByteSpan cookie, uint16_t group) {
-  if (retried_ || (group != 0 &&
+  if (retried_)
+    return Fail(Error::kProtocol, 10);
+  if ((group != 0 &&
       (group == traffic_group_ ||
        std::find(options_.groups.begin(), options_.groups.end(), group) == options_.groups.end())) ||
       (group == 0 && cookie.empty()))
@@ -2433,17 +2429,20 @@ bool Client::AcceptFrame(ByteSpan frame) {
         return Fail(Error::kProtocol, 50);
       if (extensions.at(43) != Bytes({4, 0}))
         return Fail(Error::kProtocol, 47);
-      const auto selected_suite = static_cast<uint16_t>(Read16(body.subspan(35u, 2u)));
-      if (std::find(options_.cipher_suites.begin(), options_.cipher_suites.end(), selected_suite) ==
-              options_.cipher_suites.end() || (retried_ && selected_suite != suite_))
-        return Fail();
-      suite_ = selected_suite;
       constexpr std::array<uint8_t, 32> kRetryRandom = {
           0xcf,0x21,0xad,0x74,0xe5,0x9a,0x61,0x11,
           0xbe,0x1d,0x8c,0x02,0x1e,0x65,0xb8,0x91,
           0xc2,0xa2,0x11,0x16,0x7a,0xbb,0x8c,0x5e,
           0x07,0x9e,0x09,0xe2,0xc8,0xa8,0x33,0x9c};
-      if (Equal(body.subspan(2u, 32u), kRetryRandom)) {
+      const bool retry = Equal(body.subspan(2u, 32u), kRetryRandom);
+      if (retry && retried_)
+        return Fail(Error::kProtocol, 10);
+      const auto selected_suite = static_cast<uint16_t>(Read16(body.subspan(35u, 2u)));
+      if (std::find(options_.cipher_suites.begin(), options_.cipher_suites.end(), selected_suite) ==
+              options_.cipher_suites.end() || (retried_ && selected_suite != suite_))
+        return Fail();
+      suite_ = selected_suite;
+      if (retry) {
         uint16_t group = 0;
         for (const auto& [type, data] : extensions) {
           if (type == 43)
