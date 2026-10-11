@@ -365,7 +365,9 @@ std::optional<std::vector<CTVerifiedSCT>> CTv2Policy::Verify(ByteSpan certificat
   CertificateData certificate, issuer;
   std::vector<CTBytes> items;
   if (!Certificate(certificate_der, &certificate) || !Certificate(issuer_der, &issuer) ||
-      !Items(tls_evidence, false, &items) || !Items(certificate.evidence, true, &items) ||
+      !Items(tls_evidence, false, &items)) return fail("invalid CT evidence carrier");
+  const size_t tls_item_count = items.size();
+  if (!Items(certificate.evidence, true, &items) ||
       !OcspSources(stapled_ocsp_der, certificate, issuer, &items)) return fail("invalid CT evidence carrier");
   const auto required_feature = RequiredTlsFeature(certificate.parsed.get(), 52);
   if (!required_feature || (*required_feature && tls_evidence.empty())) return fail("required transparency_info staple absent");
@@ -376,7 +378,9 @@ std::optional<std::vector<CTVerifiedSCT>> CTv2Policy::Verify(ByteSpan certificat
   struct Proof { CTBytes id; uint64_t first, second; std::vector<CTBytes> path; };
   std::vector<Proof> inclusions, consistencies;
   std::vector<CTVerifiedSCT> scts;
-  for (const auto& item : items) {
+  bool verified_tls_sct = false;
+  for (size_t index = 0; index < items.size(); ++index) {
+    const auto& item = items[index];
     auto input = Reader(item); uint16_t kind; CBS id;
     if (!CBS_get_u16(&input, &kind)) return fail("truncated TransItem");
     if (kind < 0x0102 || kind > 0x0106) continue;
@@ -394,6 +398,7 @@ std::optional<std::vector<CTVerifiedSCT>> CTv2Policy::Verify(ByteSpan certificat
       if (!VerifySignature(keys.at(identity), View(signature), signed_entry)) return fail("invalid SCT signature");
       CTBytes leaf{0}; Append(leaf, signed_entry);
       scts.push_back({identity, time, Hash(log.hash, leaf), false});
+      verified_tls_sct |= index < tls_item_count;
     } else if (kind == 0x0104) {
       const auto start = View(input); CTTreeHead head; CBS root, extensions, signature;
       if (!CBS_get_u64(&input, &head.timestamp_ms) || !CBS_get_u64(&input, &head.size) ||
@@ -414,6 +419,10 @@ std::optional<std::vector<CTVerifiedSCT>> CTv2Policy::Verify(ByteSpan certificat
       (kind == 0x0106 ? inclusions : consistencies).push_back(std::move(proof));
     }
   }
+  // Embedded/OCSP evidence may contribute log votes, but cannot satisfy an
+  // offered TLSFeature52 requirement for verified evidence in the TLS staple.
+  if (*required_feature && !verified_tls_sct)
+    return fail("required transparency_info staple has no verified SCT");
   for (const auto& [key, head] : heads) {
     const auto previous = trusted_tree_heads.find(key.first);
     if (previous == trusted_tree_heads.end()) continue;

@@ -142,6 +142,11 @@ octets), `public_key_spki`, optional `signature_scheme`, `hash`
 `maximum_merge_delay_seconds`. An optional `trusted_tree_head` supplies `size`,
 `timestamp_ms`, and `root`. These are trusted local log choices, not server
 suggestions. CT does not replace certificate path/name validation.
+If a certificate requires TLS `transparency_info` through TLSFeature 52, the
+TLS-carried evidence must itself contain a verified SCT from a configured log.
+Embedded or OCSP-carried SCTs can contribute to the ordinary log-count policy,
+but cannot substitute for that required TLS source. Unknown TransItems,
+untrusted-log SCTs or proof-only lists do not satisfy the requirement.
 
 `dane` contains absolute getdns `library`, DNSKEY/DS `trust_anchors`, a stable
 `application_policy_context`, and optional `allow_authenticated_denial`.

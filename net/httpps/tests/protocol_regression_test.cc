@@ -6,6 +6,7 @@
 // do not exercise. Secrets below are public test-only traffic-key fixtures.
 #include "net/httpps/draft01.h"
 
+#include <algorithm>
 #include <cstdlib>
 #include <iostream>
 #include <limits>
@@ -56,6 +57,69 @@ class ProtocolRegressionPeer {
   }
   static void Sequence(RecordCipher& cipher, uint64_t sequence) {
     cipher.sequence_ = sequence;
+  }
+  static void AgeTicket(Client& client, int64_t milliseconds) {
+    client.offered_ticket_->received_milliseconds -= milliseconds;
+  }
+  static uint32_t TicketAge(const Client& client) {
+    return static_cast<uint32_t>(MonotonicMilliseconds() -
+        client.offered_ticket_->received_milliseconds) + client.offered_ticket_->age_add;
+  }
+  static bool HasHandshakeSecrets(const Client& client) {
+    for (const auto* secret : {&client.root_, &client.c_hs_, &client.s_hs_})
+      if (secret->size() != 32 ||
+          std::all_of(secret->begin(), secret->end(), [](uint8_t value) { return value == 0; }))
+        return false;
+    return true;
+  }
+  static Bytes HandshakeSendingSecret(const Client& client) { return client.c_hs_; }
+  static void AwaitVerification(Client& client) {
+    client.state_ = Client::State::kVerifyingCertificate;
+  }
+  static void PopulateSecrets(Client& client) {
+    for (auto* secret : {&client.a_, &client.b_, &client.authenticator_a_,
+                         &client.client_verifier_share_, &client.password_context_,
+                         &client.external_psk_binding_})
+      secret->fill(0x52);
+    for (auto* secret : {&client.ec_private_, &client.kem_seed_, &client.root_,
+                         &client.c_hs_, &client.s_hs_, &client.expected_proof_,
+                         &client.master_, &client.resumption_, &client.early_exporter_})
+      *secret = Bytes(32, 0x52);
+    client.early_sender_ = std::make_unique<RecordCipher>(client.early_exporter_);
+    client.offered_ticket_.emplace();
+    client.offered_ticket_->psk = Bytes(32, 0x54);
+    client.tickets_.push_back(*client.offered_ticket_);
+    ExternalPSK psk;
+    psk.secret = Bytes(32, 0x50);
+    client.offered_psks_.push_back(psk);
+    client.options_.external_psks.push_back(psk);
+    client.client_credential_.emplace();
+    client.client_credential_->private_key.fill(0x43);
+    client.options_.bootstrap.emplace();
+    client.options_.bootstrap->credential = client.client_credential_;
+    client.options_.bootstraps.push_back(*client.options_.bootstrap);
+    client.pending_authenticators_[Bytes{1}].private_key.fill(0x41);
+  }
+  static bool SecretsErased(const Client& client) {
+    const auto zero = [](const auto& bytes) {
+      return std::all_of(bytes.begin(), bytes.end(), [](uint8_t value) { return value == 0; });
+    };
+    for (const auto* secret : {&client.a_, &client.b_, &client.authenticator_a_,
+                               &client.client_verifier_share_, &client.password_context_,
+                               &client.external_psk_binding_})
+      if (!zero(*secret)) return false;
+    for (const auto* secret : {&client.ec_private_, &client.kem_seed_, &client.root_,
+                               &client.c_hs_, &client.s_hs_, &client.expected_proof_,
+                               &client.master_, &client.c_app_, &client.s_app_,
+                               &client.exporter_, &client.resumption_, &client.early_exporter_})
+      if (!zero(*secret)) return false;
+    return !client.sender_ && !client.receiver_ && !client.early_sender_ &&
+        !client.client_credential_ && !client.offered_ticket_ && client.tickets_.empty() &&
+        client.offered_psks_.empty() && client.options_.external_psks.empty() &&
+        !client.options_.password && client.pending_authenticators_.empty() &&
+        (!client.options_.bootstrap || !client.options_.bootstrap->credential) &&
+        std::all_of(client.options_.bootstraps.begin(), client.options_.bootstraps.end(),
+            [](const auto& binding) { return !binding.credential; });
   }
 };
 }  // namespace net::httpps
@@ -228,6 +292,262 @@ Bytes Plaintext(ByteSpan frame, uint8_t major = 3, uint8_t minor = 3) {
   return result;
 }
 
+Bytes CookieRetry() {
+  Bytes body{3, 3};
+  Append(&body, Bytes{0xcf,0x21,0xad,0x74,0xe5,0x9a,0x61,0x11,
+      0xbe,0x1d,0x8c,0x02,0x1e,0x65,0xb8,0x91,
+      0xc2,0xa2,0x11,0x16,0x7a,0xbb,0x8c,0x5e,
+      0x07,0x9e,0x09,0xe2,0xc8,0xa8,0x33,0x9c});
+  Append(&body, Bytes{0, 0x13, 1, 0});
+  Bytes extensions;
+  Extension(&extensions, 43, Bytes{4, 0});
+  Extension(&extensions, 44, Bytes{0, 1, 7});
+  Append(&body, Vector16(extensions));
+  return Frame(2, body);
+}
+
+Bytes HelloPsk(ByteSpan hello) {
+  const auto read16 = [&](size_t offset) {
+    Check(offset + 2 <= hello.size(), "ClientHello uint16 framing");
+    return (size_t{hello[offset]} << 8) | hello[offset + 1];
+  };
+  size_t cursor = 4 + 34;
+  Check(cursor < hello.size(), "ClientHello fixed header");
+  cursor += 1 + hello[cursor];
+  cursor += 2 + read16(cursor);
+  Check(cursor < hello.size(), "ClientHello compression framing");
+  cursor += 1 + hello[cursor];
+  Check(cursor + 2 + read16(cursor) == hello.size(), "ClientHello extension vector");
+  cursor += 2;
+  while (cursor + 4 <= hello.size()) {
+    const auto type = read16(cursor), length = read16(cursor + 2);
+    cursor += 4;
+    Check(cursor + length <= hello.size(), "ClientHello extension length");
+    if (type == 41) {
+      Check(cursor + length == hello.size(), "PSK is last after retry cookie");
+      return Bytes(hello.begin() + cursor, hello.begin() + cursor + length);
+    }
+    cursor += length;
+  }
+  Check(false, "ClientHello offers PSK");
+  return {};
+}
+
+uint32_t PskAge(ByteSpan psk) {
+  Check(psk.size() >= 8, "PSK identity framing");
+  const size_t length = (size_t{psk[2]} << 8) | psk[3];
+  const size_t offset = 4 + length;
+  Check(offset + 4 <= psk.size(), "PSK age framing");
+  return (uint32_t{psk[offset]} << 24) | (uint32_t{psk[offset + 1]} << 16) |
+      (uint32_t{psk[offset + 2]} << 8) | psk[offset + 3];
+}
+
+void RetryTicketAges() {
+  ClientOptions options;
+  options.ordinary_httpps = false;
+  options.allow_unauthenticated = true;
+  SessionTicket ticket;
+  ticket.identity = Bytes{0x54};
+  ticket.psk = Bytes(32, 0x71);
+  ticket.hostname = "example.test";
+  ticket.authentication = Authentication::kUnauthenticated;
+  ticket.lifetime = 3600;
+  ticket.received_milliseconds = MonotonicMilliseconds() - 1000;
+  ticket.age_add = std::numeric_limits<uint32_t>::max() - 5000;
+  Client client("example.test", {}, false, options);
+  Check(client.Start(&ticket), "resumption ClientHello before retry");
+  const auto first_records = client.TakeOutput();
+  const auto first = ByteSpan(first_records).subspan(kPreface.size() + 5);
+  const auto first_psk = HelloPsk(first);
+  // Move only the private ticket timestamp, so this test needs no clock sleep.
+  ProtocolRegressionPeer::AgeTicket(client, 9000);
+  const auto before = ProtocolRegressionPeer::TicketAge(client);
+  const auto retry = CookieRetry();
+  Bytes application;
+  Check(client.Receive(Plaintext(retry), &application), "ticket cookie retry accepted");
+  const auto after = ProtocolRegressionPeer::TicketAge(client);
+  const auto second_records = client.TakeOutput();
+  const auto second = ByteSpan(second_records).subspan(5u);
+  const auto second_psk = HelloPsk(second);
+  const auto age = PskAge(second_psk);
+  Check(age >= before && age <= after &&
+            static_cast<uint32_t>(age - PskAge(first_psk)) >= 9000,
+        "CH2 refreshes ticket age with uint32 obfuscation wrap");
+  Check(first_psk.size() == second_psk.size() &&
+            std::equal(first_psk.begin(), first_psk.begin() + 5, second_psk.begin()),
+        "retry preserves offered ticket identity and vector lengths");
+  Bytes transcript(StringBytes(kPreface).begin(), StringBytes(kPreface).end());
+  Append(&transcript, Frame(254, SuiteHash(0x1301, first)));
+  Append(&transcript, retry);
+  Append(&transcript, second.first(second.size() - 35));
+  const auto early = SuiteMac(0x1301, Bytes(32), ticket.psk);
+  const auto binder = SuiteLabel(0x1301, early, "res binder", SuiteHash(0x1301, {}), 32);
+  const auto finished = SuiteLabel(0x1301, binder, "finished", {}, 32);
+  const auto expected = SuiteMac(0x1301, finished, SuiteHash(0x1301, transcript));
+  Check(std::equal(expected.begin(), expected.end(), second_psk.end() - 32),
+        "CH2 binder authenticates the refreshed ticket age and HRR transcript");
+
+  Client expired("example.test", {}, false, options);
+  Check(expired.Start(&ticket), "unexpired ticket initial offer");
+  expired.TakeOutput();
+  ProtocolRegressionPeer::AgeTicket(expired, 3600000);
+  Check(!expired.Receive(Plaintext(retry), &application) && expired.TakeOutput().empty(),
+        "ticket expiring during retry is not offered again");
+
+  ClientOptions external_options;
+  ExternalPSK external;
+  external.identity = Bytes{0x45};
+  external.secret = Bytes(32, 0x65);
+  external.hostname = "example.test";
+  external_options.external_psks.push_back(external);
+  Client external_client("example.test", {}, false, external_options);
+  Check(external_client.Start(), "external PSK initial offer");
+  external_client.TakeOutput();
+  Check(external_client.Receive(Plaintext(retry), &application), "external PSK retry");
+  const auto external_records = external_client.TakeOutput();
+  Check(PskAge(HelloPsk(ByteSpan(external_records).subspan(5u))) == 0,
+        "external PSK age remains zero after retry");
+}
+
+void FragmentInterleaving() {
+  const auto retry = CookieRetry();
+  for (uint8_t alert : {0, 90}) {
+    Client client("example.test", {}, true);
+    Check(client.Start(), "fragmented HRR ClientHello");
+    client.TakeOutput();
+    Bytes application;
+    Check(client.Receive(Plaintext(ByteSpan(retry).first(9u)), &application),
+          "initial HRR fragment accepted");
+    // RFC compatibility CCS remains ignorable anywhere in this initial flight.
+    Check(client.Receive(Bytes{20, 3, 3, 0, 1, 1}, &application),
+          "compatibility CCS does not interrupt handshake reassembly");
+    Check(!client.Receive(Bytes{21, 3, 3, 0, 2, 1, alert}, &application),
+          "plaintext alert cannot interrupt fragmented HRR");
+    CheckAlert(client, 10, false);
+    Check(!client.Receive(Plaintext(ByteSpan(retry).subspan(9u)), &application) &&
+              client.TakeOutput().empty(), "failed fragmented HRR never emits CH2");
+    for (bool initial : {false, true}) {
+      Client protected_client("example.test", {}, true);
+      ProtocolRegressionPeer::Prepare(protected_client, initial);
+      Check(protected_client.Receive(Protect(Bytes{initial ? uint8_t{8} : uint8_t{24}, 0, 22}),
+                                     &application), "protected handshake fragment accepted");
+      Check(!protected_client.Receive(Protect(Bytes{1, alert, 21}, 1), &application),
+            "protected alert cannot interrupt initial or post-handshake message");
+      CheckAlert(protected_client, 10);
+    }
+  }
+}
+
+void FailedSecretErasure() {
+  auto password = std::make_shared<PasswordCredential>();
+  password->password = "public test password";
+  for (bool peer_alert : {false, true}) {
+    ClientOptions options;
+    options.password = password;
+    options.post_handshake_auth = true;
+    Client client("example.test", {}, true, options);
+    ProtocolRegressionPeer::Prepare(client);
+    ProtocolRegressionPeer::PopulateSecrets(client);
+    Bytes application;
+    Check(!client.Receive(peer_alert ? Protect(Bytes{2, 40, 21}) : Bytes{23, 3, 3, 0, 0},
+                          &application), "fatal peer or local record error latches failure");
+    Check(ProtocolRegressionPeer::SecretsErased(client),
+          "failed live Client immediately erases derived secrets and credential copies");
+    Check(client.TakeTickets().empty() && !client.Export("test", {}, 32, &application) &&
+              !client.ExportEarly("test", {}, 32, &application),
+          "failed connection retains no ticket or exporter capability");
+    Check(password->password == "public test password" &&
+              options.password->password == password->password,
+          "failure never mutates shared persistent provisioning");
+    if (peer_alert)
+      Check(client.TakeFatalAlert().empty(), "peer fatal alert is not answered");
+    else
+      CheckAlert(client, 20);
+  }
+}
+
+void HandshakeFailureLifecycle() {
+  ClientOptions options;
+  ExternalPSK psk;
+  psk.identity = Bytes{0x50};
+  psk.secret = Bytes(32, 0x70);
+  psk.hostname = "example.test";
+  options.external_psks.push_back(psk);
+  Client client("example.test", {}, true, options);
+  Check(client.Start(), "failure-lifecycle initial ClientHello");
+  client.TakeOutput();
+  Secret private_key{}, public_key{};
+  private_key.fill(0x29);
+  X25519_public_from_private(public_key.data(), private_key.data());
+  Bytes share{0, 29};
+  Append(&share, Vector16(public_key));
+  Bytes extensions;
+  Extension(&extensions, 43, Bytes{4, 0});
+  Extension(&extensions, 41, Bytes{0, 0});
+  Extension(&extensions, 51, share);
+  Bytes body{3, 3};
+  Append(&body, Bytes(32, 0x53));
+  Append(&body, Bytes{0, 0x13, 1, 0});
+  Append(&body, Vector16(extensions));
+  Bytes application;
+  Check(client.Receive(Plaintext(Frame(2, body)), &application) &&
+            ProtocolRegressionPeer::HasHandshakeSecrets(client),
+        "actual ServerHello derives all handshake secrets before failure");
+  const auto sending_secret = ProtocolRegressionPeer::HandshakeSendingSecret(client);
+  ProtocolRegressionPeer::AwaitVerification(client);
+  Check(!client.CompleteCertificateVerification(false) &&
+            ProtocolRegressionPeer::SecretsErased(client),
+        "negative asynchronous verifier decision immediately erases derived state");
+  Check(!client.CompleteCertificateVerification(true) &&
+            !client.Receive(Bytes{23, 3, 3, 0, 0}, &application) &&
+            !client.OutputFlushed() && client.error() == Client::Error::kCertificate &&
+            ProtocolRegressionPeer::SecretsErased(client),
+        "repeated failure cannot revive secrets or overwrite the original error");
+  RecordCipher peer(sending_secret);
+  uint8_t type = 0;
+  Check(peer.Open(client.TakeFatalAlert(), &type, &application) && type == 21 &&
+            application == Bytes({2, 42}),
+        "single outbound fatal alert uses the old handshake key before erasure");
+  Check(client.TakeFatalAlert().empty() && !client.CompleteCertificateVerification(false) &&
+            client.TakeFatalAlert().empty(), "repeated failures cannot duplicate the fatal alert");
+  Check(options.external_psks.front().secret == psk.secret && psk.secret == Bytes(32, 0x70),
+        "failed Client erases only its own copies of persistent external PSKs");
+
+  Client unflushed("example.test", {}, true, options);
+  Check(unflushed.Start(), "initial output deliberately remains unflushed");
+  Check(!unflushed.Receive(Bytes{23, 3, 3, 0, 0}, &application) &&
+            ProtocolRegressionPeer::SecretsErased(unflushed) &&
+            unflushed.TakeOutput().empty() && unflushed.TakeFatalAlert().empty(),
+        "failure discards queued output without emitting an alert ahead of it");
+}
+
+void HalfCloseKeepsOppositeDirection() {
+  Client incoming_close("example.test", {}, true);
+  ProtocolRegressionPeer::Prepare(incoming_close);
+  Bytes application, record;
+  Check(incoming_close.Receive(Protect(Bytes{1, 0, 21}), &application) &&
+            incoming_close.closed(), "authenticated peer closure closes the read direction");
+  Check(incoming_close.Export("half-close", {}, 32, &application) &&
+            incoming_close.Send(Bytes{7, 8}, &record),
+        "peer half-close retains exporter and opposite-direction traffic keys");
+  RecordCipher peer(ProtocolRegressionPeer::SendingSecret());
+  uint8_t type = 0;
+  Check(peer.Open(record, &type, &application) && type == 23 && application == Bytes({7, 8}),
+        "application bytes remain authenticated after peer half-close");
+  Check(incoming_close.Close(&record) && peer.Open(record, &type, &application) &&
+            type == 21 && application == Bytes({1, 0}), "local close follows the final application record");
+
+  Client outgoing_close("example.test", {}, true);
+  ProtocolRegressionPeer::Prepare(outgoing_close);
+  Check(outgoing_close.Close(&record) && !outgoing_close.closed(),
+        "local close leaves the peer read direction open");
+  Check(outgoing_close.Receive(Protect(Bytes{9, 23}), &application) && application == Bytes{9},
+        "local close retains receiving keys until authenticated peer closure");
+  Check(outgoing_close.Receive(Protect(Bytes{1, 0, 21}, 1), &application) &&
+            outgoing_close.closed() && outgoing_close.TakeFatalAlert().empty(),
+        "orderly bidirectional close does not become a failure");
+}
+
 void VersionAlerts() {
   Bytes duplicate, malformed, wrong;
   Extension(&duplicate, 43, Bytes{4, 0});
@@ -394,6 +714,11 @@ void RunProtocolRegressionTests() {
   RecordAlerts();
   RecordFramingAlerts();
   VersionAlerts();
+  RetryTicketAges();
+  FragmentInterleaving();
+  FailedSecretErasure();
+  HandshakeFailureLifecycle();
+  HalfCloseKeepsOppositeDirection();
   KeyUpdates();
   PostHandshakeAuthentication();
   RetrospectiveLimits();

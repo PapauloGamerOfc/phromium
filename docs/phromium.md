@@ -467,7 +467,45 @@ the distinction between engine, async-adapter and real-browser coverage.
 
 ### Local validation status
 
-#### Bootstrap inventories and state-boundary corrections: 2026-10-11
+#### Conformance and secret-lifecycle corrections: 2026-10-11
+
+The Windows x64 browser and `net_unittests` were rebuilt successfully. All
+**1,504 focused** and **10,073 broader** network tests passed with two jobs and
+zero automatic retries; these overlapping selections must not be added.
+The async socket tests accept correctly fragmented KeyUpdate messages in both
+I/O modes and reject advisory-alert interleaving before any following data.
+
+HelloRetryRequest refreshes ticket age and its binder, with expiration checks.
+Fatal failures promptly cleanse connection-owned traffic/exporter/master secrets
+and release owned PSK, ticket and credential copies. Tests cover rejection after
+handshake key derivation, repeated failure, a single decryptable outbound alert,
+queued-output suppression and correct half-close behavior. Shared long-lived
+provisioning is not modified. This is controlled-buffer cleanup, not a guarantee
+about every runtime/provider copy, swap or crash dumps.
+
+All **34 production-profile browser cases** passed with upstream sandbox
+defaults and again with `NetworkServiceSandbox` explicitly enabled. Paired CT v2
+cases accept a required valid TLS staple and reject unknown-only TLS evidence
+even when the certificate embeds a valid SCT. The CT oracle passed **560 checks**
+across five signature keys and three hashes. The general browser suite passed
+**38 assertions**, including actual 0-RTT, HTTP 425 retry, resumption, cookie
+isolation and certificate rejection; it reported no asynchronous errors.
+Fifteen harness self-tests and nine branding checks passed. Portable verification
+passed six CTest tests, 19 interoperability invocations and 18 optional-provider
+commands. Matching server validation ran 586 tests, with only two POSIX-specific
+checks skipped on Windows.
+
+Logs and reports use `out/Phromium/conformance-fixes-*` and
+`out/httpps-native/conformance-fixes-*`. CI and the browser harness pin server
+revision `a321375dd7e95a569ca07282c0aa15c8775388c2`. The general browser check was
+repeated against that clean revision without `--allow-server-worktree`, with
+the same source fingerprint as the preceding worktree run; its final report is
+`out/Phromium/conformance-fixes-browser-pinned.json`.
+These local checks are not a formal
+security audit, validation of the unfiltered upstream test suites, installers,
+or a complete Linux/macOS browser build. Earlier results below are historical.
+
+#### Historical baseline — bootstrap inventories and state boundaries: 2026-10-11
 
 The complete Windows x64 browser and `net_unittests` were rebuilt after the
 bootstrap, record-alert, KeyUpdate, PHA and negotiated-record-limit changes.

@@ -495,6 +495,7 @@ class HTTPPS_EXPORT Client {
   bool ClaimAuthenticatorContext(const Bytes& context);
   bool AuthenticatorKeys(bool server, Bytes* context, Bytes* finished) const;
   void EraseHandshakeSecrets();
+  void EraseConnectionSecrets();
   Bytes Hash(ByteSpan input) const;
   Bytes Mac(ByteSpan key, ByteSpan input) const;
   Bytes Label(ByteSpan secret, std::string_view label, ByteSpan context,

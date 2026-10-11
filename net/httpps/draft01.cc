@@ -886,10 +886,7 @@ Client::Client(std::string hostname,
       use_external_verifier_(use_external_verifier) {}
 
 Client::~Client() {
-  DisableAuthenticators();
-  EraseHandshakeSecrets();
-  for (auto* secret : {&master_, &c_app_, &s_app_, &exporter_, &resumption_, &early_exporter_})
-    OPENSSL_cleanse(secret->data(), secret->size());
+  EraseConnectionSecrets();
 }
 
 Bytes Client::Hash(ByteSpan input) const { return SuiteHash(suite_, input, options_.native_provider.get()); }
@@ -927,6 +924,30 @@ void Client::EraseHandshakeSecrets() {
   OPENSSL_cleanse(client_verifier_share_.data(), client_verifier_share_.size());
 }
 
+void Client::EraseConnectionSecrets() {
+  DisableAuthenticators();
+  EraseHandshakeSecrets();
+  for (auto* secret : {&master_, &c_app_, &s_app_, &exporter_, &resumption_,
+                       &early_exporter_}) {
+    OPENSSL_cleanse(secret->data(), secret->size());
+    secret->clear();
+  }
+  for (auto* secret : {&password_context_, &external_psk_binding_})
+    OPENSSL_cleanse(secret->data(), secret->size());
+  sender_.reset();
+  receiver_.reset();
+  early_sender_.reset();
+  client_credential_.reset();
+  // These are connection-owned copies. Their destructors erase secret bytes;
+  // releasing a shared provisioned credential never mutates its other owners.
+  offered_ticket_.reset();
+  tickets_.clear();
+  offered_psks_.clear();
+  options_.external_psks.clear();
+  options_.password.reset();
+  options_.pinning.reset();
+}
+
 bool Client::Fail(Error error, uint8_t alert) {
   if (state_ == State::kFailed) {
     return false;
@@ -943,12 +964,8 @@ bool Client::Fail(Error error, uint8_t alert) {
     }
   }
   state_ = State::kFailed;
-  DisableAuthenticators();
   error_ = error;
-  EraseHandshakeSecrets();
-  sender_.reset();
-  receiver_.reset();
-  early_sender_.reset();
+  EraseConnectionSecrets();
   output_.clear();
   reassembly_.clear();
   return false;
@@ -2207,6 +2224,13 @@ bool Client::RetryHello(ByteSpan frame, ByteSpan cookie, uint16_t group) {
        std::find(options_.groups.begin(), options_.groups.end(), group) == options_.groups.end())) ||
       (group == 0 && cookie.empty()))
     return Fail();
+  if (offered_ticket_) {
+    const auto age = MonotonicMilliseconds() - offered_ticket_->received_milliseconds;
+    if (age < 0 || static_cast<uint64_t>(age) >=
+                       uint64_t(offered_ticket_->lifetime) * 1000)
+      return Fail();
+    offered_psk_ages_[0] = static_cast<uint32_t>(age) + offered_ticket_->age_add;
+  }
   retried_ = true;
   Bytes public_key;
   if (PasswordSuite(suite_)) {
@@ -2244,9 +2268,12 @@ bool Client::RetryHello(ByteSpan frame, ByteSpan cookie, uint16_t group) {
       Bytes shares;
       Vector16(&shares, share);
       Extension(&extensions, type, shares);
-    } else if (type != 42) {
-      if (type == 41 && !cookie.empty())
+    } else if (type == 41) {
+      if (!cookie.empty())
         Extension(&extensions, 44, cookie);
+      if (!AddPskExtension(&extensions))
+        return Fail();
+    } else if (type != 42) {
       Extension(&extensions, type, value);
     }
     old_extensions = old_extensions.subspan(length + 4);
@@ -2961,20 +2988,19 @@ bool Client::Receive(ByteSpan record, Bytes* application_data) {
     if (length > kMaxRecordContent) return Fail(Error::kProtocol, 22);
     if (length != record.size() - 5) return Fail(Error::kProtocol, 50);
     if (!length) return Fail(Error::kProtocol, 10);
-    if (record[0] == 21) {
-      if (length != 2) return Fail(Error::kProtocol, 50);
-      if (record[6] == 90)
-        return true;  // user_canceled is followed by close_notify or fatal alert.
-      return Fail(Error::kProtocol, 0);
-    }
-    type = 22;
+    if (record[0] == 21 && length != 2) return Fail(Error::kProtocol, 50);
+    type = record[0];
     content.assign(record.begin() + 5, record.end());
   } else if (!receiver_ || !receiver_->Open(record, &type, &content)) {
     return Fail(Error::kProtocol, receiver_ ? receiver_->alert() : 20);
   }
+  if (type == 21 && content[1] != 0 && content[1] != 90)
+    return Fail(Error::kProtocol, 0);  // Never answer a peer fatal alert.
+  if (type != 22 && !reassembly_.empty())
+    return Fail(Error::kProtocol, 10);
   if (type == 21) {
     if (content.size() == 2 && content[1] == 90)
-      return true;  // Does not close a direction or discard the pending message.
+      return true;  // Does not close a direction at a handshake boundary.
     if (!handshake && content.size() == 2 && content[1] == 0) {
       state_ = State::kClosed;
       DisableAuthenticators();

@@ -76,8 +76,8 @@ def main(args):
                     return log_key.sign(data, padding.PSS(mgf=padding.MGF1(digest), salt_length=digest.digest_size), digest)
                 return log_key.sign(data, ec.ECDSA(digest))
 
-            def sct(*, precert=False, extensions=b'', at=timestamp):
-                tbs = precertificate_tbs(cert, version=2) if precert else cert.tbs_certificate_bytes
+            def sct(*, leaf=cert, precert=False, extensions=b'', at=timestamp):
+                tbs = precertificate_tbs(leaf, version=2) if precert else leaf.tbs_certificate_bytes
                 signed = (0x101 if precert else 0x100).to_bytes(2, 'big') + at.to_bytes(8, 'big')
                 signed += vec(hashlib.new(hash_name, spki(ca_key)).digest(), 1) + vec(tbs, 3) + vec(extensions)
                 item = (0x103 if precert else 0x102).to_bytes(2, 'big') + vec(log.log_id, 1) + at.to_bytes(8, 'big') + vec(extensions) + vec(sign(signed))
@@ -119,6 +119,30 @@ def main(args):
             check(log, b'', leaf=embedded)
             wrong_embedded = builder.add_extension(x509.UnrecognizedExtension(x509.ObjectIdentifier('1.3.101.75'), _der(4, listed(item))), False).sign(ca_key, hashes.SHA256())
             check(log, b'', leaf=wrong_embedded, expected=1)
+
+            # A valid embedded SCT cannot lend its log vote to an ineffective
+            # TLS staple when the signed certificate requires TLSFeature52.
+            required_builder = builder.add_extension(x509.UnrecognizedExtension(
+                x509.ObjectIdentifier('1.3.6.1.5.5.7.1.24'), b'\x30\x03\x02\x01\x34'), False)
+            required_plain = required_builder.sign(ca_key, hashes.SHA256())
+            required_sct, required_node = sct(leaf=required_plain, precert=True)
+            required_embedded = required_builder.add_extension(x509.UnrecognizedExtension(
+                x509.ObjectIdentifier('1.3.101.75'), _der(4, listed(required_sct))), False).sign(ca_key, hashes.SHA256())
+            assert precertificate_tbs(required_embedded, version=2) == required_plain.tbs_certificate_bytes
+            check(log, b'', leaf=required_embedded, expected=1)
+            check(log, listed(b'\x03\x03unknown'), leaf=required_embedded, expected=1)
+            unknown_log_sct = b'\x01\x03' + vec(log.log_id + b'\x01', 1) + required_sct[3 + len(log.log_id):]
+            check(log, listed(unknown_log_sct), leaf=required_embedded, expected=1)
+            required_head_data = timestamp.to_bytes(8, 'big') + (1).to_bytes(8, 'big') + vec(required_node, 1) + b'\0\0'
+            required_head = b'\x01\x04' + vec(log.log_id, 1) + required_head_data + vec(sign(required_head_data))
+            required_proof = b'\x01\x06' + vec(log.log_id, 1) + (1).to_bytes(8, 'big') + bytes(8) + b'\0\0'
+            check(log, listed(required_head, required_proof), leaf=required_embedded, inclusion=True, expected=1)
+            check(log, listed(required_sct), leaf=required_embedded)
+            check(log, listed(b'\x03\x03unknown', required_sct), leaf=required_embedded)
+            check(log, listed(required_sct, required_head, required_proof), leaf=required_embedded, inclusion=True)
+            # Without a must-staple requirement, mixed-source evidence keeps its
+            # ordinary meaning and unknown items still do not contribute votes.
+            check(log, listed(b'\x03\x03unknown'), leaf=embedded)
 
             # OCSP's CT information belongs to SingleResponse extensions. Build
             # and actually sign that envelope independently of the native parser.

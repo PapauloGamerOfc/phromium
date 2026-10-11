@@ -237,6 +237,20 @@ class Peer : public SocketDataProvider {
     sender_ = std::make_unique<httpps::RecordCipher>(s_app_);
   }
 
+  void FragmentedKeyUpdate(std::optional<uint8_t> interleaved_alert) {
+    const auto update = Frame(24, Bytes{0});
+    Bytes encrypted;
+    ASSERT_TRUE(sender_->Seal(ByteSpan(update).first(2u), 22, &encrypted));
+    server_bytes_.append(encrypted.begin(), encrypted.end());
+    if (interleaved_alert) {
+      Alert(*interleaved_alert);
+    }
+    ASSERT_TRUE(sender_->Seal(ByteSpan(update).subspan(2u), 22, &encrypted));
+    server_bytes_.append(encrypted.begin(), encrypted.end());
+    s_app_ = httpps::Label(s_app_, "traffic upd", {}, 32);
+    sender_ = std::make_unique<httpps::RecordCipher>(s_app_);
+  }
+
   void ReleaseWrite() {
     ASSERT_FALSE(held_write_.empty());
     hold_writes = false;
@@ -1357,6 +1371,41 @@ TEST_F(HttppsClientSocketTest, UserCanceledWaitsForCloseNotify) {
   auto buffer = base::MakeRefCounted<IOBufferWithSize>(100);
   EXPECT_EQ(14, done.GetResult(socket->Read(buffer.get(), 100, done.callback())));
   EXPECT_EQ(0, done.GetResult(socket->Read(buffer.get(), 100, done.callback())));
+}
+
+TEST_F(HttppsClientSocketTest, FragmentedKeyUpdatePreservesEpoch) {
+  for (IoMode mode : {SYNCHRONOUS, ASYNC}) {
+    SCOPED_TRACE(mode);
+    peer_.mode = mode;
+    peer_.read_chunk = peer_.write_chunk = 20000;
+    auto socket = Make();
+    TestCompletionCallback done;
+    ASSERT_EQ(OK, done.GetResult(socket->Connect(done.callback())));
+    peer_.FragmentedKeyUpdate(std::nullopt);
+    peer_.Application("after update");
+    auto buffer = base::MakeRefCounted<IOBufferWithSize>(100);
+    EXPECT_EQ(12, done.GetResult(socket->Read(buffer.get(), 100, done.callback())));
+    EXPECT_EQ("after update", std::string(buffer->data(), 12));
+    EXPECT_TRUE(socket->IsConnected());
+  }
+}
+
+TEST_F(HttppsClientSocketTest, InterleavedAlertCannotResumeFragmentedKeyUpdate) {
+  for (IoMode mode : {SYNCHRONOUS, ASYNC}) {
+    SCOPED_TRACE(mode);
+    peer_.mode = mode;
+    peer_.read_chunk = peer_.write_chunk = 20000;
+    auto socket = Make();
+    TestCompletionCallback done;
+    ASSERT_EQ(OK, done.GetResult(socket->Connect(done.callback())));
+    peer_.FragmentedKeyUpdate(90);
+    peer_.Application("must not be delivered");
+    auto buffer = base::MakeRefCounted<IOBufferWithSize>(100);
+    EXPECT_EQ(ERR_SSL_PROTOCOL_ERROR,
+              done.GetResult(socket->Read(buffer.get(), 100, done.callback())));
+    EXPECT_EQ(peer_.last_client_alert, 10);
+    EXPECT_FALSE(socket->IsConnected());
+  }
 }
 
 TEST_F(HttppsClientSocketTest, NoAlpnRequiresExplicitHttp11Profile) {

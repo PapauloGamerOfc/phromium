@@ -76,28 +76,60 @@ def stage_library(source, directory):
     return staged
 
 
-def ct_fixture(credentials, root, tampered):
+def ct_fixture(credentials, root, tampered, *, required_tls_source=False, unknown_tls_staple=False):
     from cryptography import x509
     from cryptography.hazmat.primitives import hashes, serialization
     from cryptography.hazmat.primitives.asymmetric import ec
+    from tls20_server.transparency import TrustedLog, _der, precertificate_tbs, validate_ct_v2_list
     def vec(value, width=2):
         return len(value).to_bytes(width, "big") + value
     certificate = x509.load_der_x509_certificate(credentials.chain_der[0])
+    if required_tls_source:
+        # This CA is local to the paired fixtures, so the required feature and
+        # the embedded SCT are genuinely signed without retaining Fixtures' CA.
+        ca = ec.generate_private_key(ec.SECP256R1())
+        name = x509.load_der_x509_certificate(root).subject
+        base = (x509.CertificateBuilder().issuer_name(name)
+            .not_valid_before(certificate.not_valid_before_utc)
+            .not_valid_after(certificate.not_valid_after_utc))
+        root = (base.subject_name(name).public_key(ca.public_key())
+            .serial_number(x509.random_serial_number())
+            .add_extension(x509.BasicConstraints(True, 0), True)
+            .add_extension(x509.KeyUsage(False, False, False, False, False, True, True, False, False), True)
+            .sign(ca, hashes.SHA256()).public_bytes(serialization.Encoding.DER))
+        builder = (base.subject_name(certificate.subject).public_key(credentials.private_key.public_key())
+            .serial_number(certificate.serial_number))
+        for extension in certificate.extensions:
+            builder = builder.add_extension(extension.value, extension.critical)
+        builder = builder.add_extension(x509.UnrecognizedExtension(
+            x509.ObjectIdentifier("1.3.6.1.5.5.7.1.24"), b"\x30\x03\x02\x01\x34"), False)
+        certificate = builder.sign(ca, hashes.SHA256())
     issuer = x509.load_der_x509_certificate(root).public_key().public_bytes(
         serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)
     key = ec.generate_private_key(ec.SECP256R1())
     now = int(time.time() * 1000)
-    entry = b"\x01\x00" + now.to_bytes(8, "big") + vec(hashlib.sha256(issuer).digest(), 1)
+    entry = (b"\x01\x01" if required_tls_source else b"\x01\x00") + now.to_bytes(8, "big") + vec(hashlib.sha256(issuer).digest(), 1)
     entry += vec(certificate.tbs_certificate_bytes, 3) + b"\x00\x00"
     signature = key.sign(entry, ec.ECDSA(hashes.SHA256()))
     if tampered:
         signature = signature[:-1] + bytes([signature[-1] ^ 1])
     log_id = bytes.fromhex("2b06010401")
-    sct = b"\x01\x02" + vec(log_id, 1) + now.to_bytes(8, "big") + b"\x00\x00" + vec(signature)
-    credentials = replace(credentials, entry_extensions=(((52, vec(vec(sct))),),))
+    sct = (b"\x01\x03" if required_tls_source else b"\x01\x02") + vec(log_id, 1) + now.to_bytes(8, "big") + b"\x00\x00" + vec(signature)
+    evidence = vec(vec(sct))
+    if required_tls_source:
+        embedded = builder.add_extension(x509.UnrecognizedExtension(
+            x509.ObjectIdentifier("1.3.101.75"), _der(4, evidence)), False).sign(ca, hashes.SHA256())
+        assert precertificate_tbs(embedded, version=2) == certificate.tbs_certificate_bytes
+        encoded = embedded.public_bytes(serialization.Encoding.DER)
+        assert validate_ct_v2_list(evidence, encoded, root,
+            {log_id: TrustedLog(log_id, key.public_key(), 0x0403)}, now_ms=now)
+        credentials = replace(credentials, chain_der=[encoded])
+        if unknown_tls_staple:
+            evidence = vec(vec(b"\x03\x03unknown"))
+    credentials = replace(credentials, entry_extensions=(((52, evidence),),))
     policy = {"minimum_logs": 1, "logs": [{"id": b64(log_id), "public_key_spki": b64(
         key.public_key().public_bytes(serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo))}]}
-    return credentials, policy
+    return credentials, policy, root
 
 
 def dane_fixture(credentials, host, port, wrong_association):
@@ -201,6 +233,7 @@ async def run(args):
             cases = ["private-ca", "no-alpn", "client-mac", "raw-key", "external-psk", "imported-psk",
                      "combined-psk", "retry-cookie", "hybrid", "wrong-psk", "wrong-raw-key", "wrong-scope", "malformed",
                      "missing-native-library", "invalid-native-library", "ct-v2", "ct-v2-tampered",
+                     "ct-v2-required-tls-source-valid", "ct-v2-required-tls-source",
                      "bootstrap-multiple", "bootstrap-multiple-retry", "bootstrap-unknown", "bootstrap-wrong-key"]
             if args.manifest:
                 cases += ["native-x448", "native-sm", "native-gost", "password", "mixed-password",
@@ -296,7 +329,10 @@ async def run(args):
                 elif kind == "malformed":
                     options["ignore_certificate_errors"] = True
                 elif kind.startswith("ct-v2"):
-                    credentials, options["ct_v2"] = ct_fixture(credentials, fixtures.root, kind.endswith("tampered"))
+                    credentials, options["ct_v2"], ct_root = ct_fixture(credentials, fixtures.root,
+                        kind.endswith("tampered"), required_tls_source=kind.startswith("ct-v2-required-tls-source"),
+                        unknown_tls_staple=kind == "ct-v2-required-tls-source")
+                    options["trust_anchors"] = [b64(ct_root)]
                 elif kind.startswith("its"):
                     credentials, its_options = its_fixture(server_environment, kind.endswith("revoked"))
                     its_options["library"] = environment["TLS20_TEST_ITS_LIBRARY"]
@@ -357,7 +393,7 @@ async def run(args):
                 file.write_text(json.dumps(config), encoding="utf-8")
                 success = kind not in ("wrong-psk", "wrong-raw-key", "wrong-scope", "malformed",
                                        "wrong-password", "missing-native-library", "invalid-native-library",
-                                       "ct-v2-tampered", "dane-wrong-association", "its-revoked",
+                                       "ct-v2-tampered", "ct-v2-required-tls-source", "dane-wrong-association", "its-revoked",
                                        "bootstrap-unknown", "bootstrap-wrong-key")
                 health_port = None
                 if kind in ("missing-native-library", "invalid-native-library"):
