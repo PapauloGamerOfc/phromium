@@ -311,7 +311,8 @@ void ResourceLoader::Start() {
   // stoppable. We also disable throttling and stopping for non-http[s]
   // requests.
   if (resource_->Options().synchronous_policy == kRequestSynchronously ||
-      request.GetKeepalive() || !request.Url().ProtocolIsInHttpFamily()) {
+      request.GetKeepalive() ||
+      !request.Url().ProtocolIsInHttpFamilyOrHTTPPS()) {
     throttle_option =
         ResourceLoadScheduler::ThrottleOption::kCanNotBeStoppedOrThrottled;
   } else if (!IsThrottlableRequestContext(request.GetRequestContext())) {

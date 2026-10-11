@@ -110,6 +110,14 @@ CookieAccessResult CookieBase::IncludeForRequestURL(
     const CookieOptions& options,
     const CookieAccessParams& params) const {
   CookieInclusionStatus status;
+  // Namespace isolation is unconditional: legacy scope settings, trustworthy
+  // origin exceptions, and the scheme-bound cookies experiment must not expose
+  // HTTP(S) cookies to the experimental HTTPPS transport (or vice versa).
+  if ((source_scheme_ == CookieSourceScheme::kHttpps) !=
+      url.SchemeIs(url::kHttppsScheme)) {
+    status.AddExclusionReason(
+        CookieInclusionStatus::ExclusionReason::EXCLUDE_SCHEME_MISMATCH);
+  }
   // Filter out HttpOnly cookies, per options.
   if (options.exclude_httponly() && IsHttpOnly()) {
     status.AddExclusionReason(
@@ -317,6 +325,15 @@ CookieAccessResult CookieBase::IsSetPermittedInContext(
         CookieInclusionStatus::ExclusionReason::EXCLUDE_NONCOOKIEABLE_SCHEME);
   }
 
+  // Canonical cookies can arrive through APIs as well as Set-Cookie parsing.
+  // Reject a mismatched source namespace rather than allowing an API caller to
+  // use one protocol to overwrite or delete a cookie belonging to the other.
+  if ((source_scheme_ == CookieSourceScheme::kHttpps) !=
+      source_url.SchemeIs(url::kHttppsScheme)) {
+    access_result.status.AddExclusionReason(
+        CookieInclusionStatus::ExclusionReason::EXCLUDE_SCHEME_MISMATCH);
+  }
+
   if (!IsDomainMatch(source_url.host())) {
     access_result.status.AddExclusionReason(
         CookieInclusionStatus::ExclusionReason::EXCLUDE_DOMAIN_MISMATCH);
@@ -444,15 +461,17 @@ bool CookieBase::IsDomainMatch(const std::string_view host) const {
 }
 
 bool CookieBase::IsSecure() const {
-  return SecureAttribute() || (cookie_util::IsSchemeBoundCookiesEnabled() &&
-                               source_scheme_ == CookieSourceScheme::kSecure);
+  return source_scheme_ == CookieSourceScheme::kHttpps || SecureAttribute() ||
+         (cookie_util::IsSchemeBoundCookiesEnabled() &&
+          source_scheme_ == CookieSourceScheme::kSecure);
 }
 
 bool CookieBase::IsFirstPartyPartitioned() const {
   return IsPartitioned() && !CookiePartitionKey::HasNonce(partition_key_) &&
-         partition_key_->site().IsSameSiteWith(GURL(
-             base::StrCat({url::kHttpsScheme, url::kStandardSchemeSeparator,
-                           DomainWithoutDot()})));
+         partition_key_->site().IsSameSiteWith(GURL(base::StrCat(
+             {source_scheme_ == CookieSourceScheme::kHttpps ? url::kHttppsScheme
+                                                            : url::kHttpsScheme,
+              url::kStandardSchemeSeparator, DomainWithoutDot()})));
 }
 
 bool CookieBase::IsThirdPartyPartitioned() const {
@@ -471,7 +490,8 @@ UniqueCookieKey CookieBase::StrictlyUniqueKey() const {
 
 UniqueCookieKey CookieBase::UniqueKey() const {
   std::optional<CookieSourceScheme> source_scheme =
-      cookie_util::IsSchemeBoundCookiesEnabled()
+      (source_scheme_ == CookieSourceScheme::kHttpps ||
+       cookie_util::IsSchemeBoundCookiesEnabled())
           ? std::make_optional(source_scheme_)
           : std::nullopt;
 
@@ -490,7 +510,8 @@ UniqueCookieKey CookieBase::UniqueKey() const {
 
 RefUniqueCookieKey CookieBase::RefUniqueKey() const {
   std::optional<CookieSourceScheme> source_scheme =
-      cookie_util::IsSchemeBoundCookiesEnabled()
+      (source_scheme_ == CookieSourceScheme::kHttpps ||
+       cookie_util::IsSchemeBoundCookiesEnabled())
           ? std::make_optional(source_scheme_)
           : std::nullopt;
 
@@ -511,7 +532,8 @@ RefUniqueCookieKey CookieBase::RefUniqueKey() const {
 
 UniqueCookieKey CookieBase::LegacyUniqueKey() const {
   return UniqueCookieKey::Legacy(base::PassKey<CookieBase>(), partition_key_,
-                                 name_, domain_, path_);
+                                 name_, domain_, path_,
+                                 source_scheme_ == CookieSourceScheme::kHttpps);
 }
 
 void CookieBase::SetSourcePort(int port) {

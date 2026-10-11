@@ -283,7 +283,8 @@ base::Time CanonicalCookie::ValidateAndAdjustExpiryDate(
   }
   base::Time maximum_expiry_date;
   if (!cookie_util::IsTimeLimitedInsecureCookiesEnabled() ||
-      scheme == net::CookieSourceScheme::kSecure) {
+      scheme == net::CookieSourceScheme::kSecure ||
+      scheme == net::CookieSourceScheme::kHttpps) {
     maximum_expiry_date = fixed_creation_date + base::Days(400);
   } else {
     maximum_expiry_date = fixed_creation_date + base::Hours(3);
@@ -445,7 +446,9 @@ std::unique_ptr<CanonicalCookie> CanonicalCookie::Create(
   // cookie from getting "trapped" if the url loses trustworthiness.
 
   CookieSourceScheme source_scheme;
-  if (parsed_cookie.IsSecure() || url.SchemeIsCryptographic()) {
+  if (url.SchemeIs(url::kHttppsScheme)) {
+    source_scheme = CookieSourceScheme::kHttpps;
+  } else if (parsed_cookie.IsSecure() || url.SchemeIsCryptographic()) {
     // It's possible that a trustworthy origin is setting this cookie with the
     // `Secure` attribute even if the url's scheme isn't secure. In that case
     // we'll act like it was a secure scheme. This cookie will be rejected later
@@ -649,7 +652,9 @@ std::unique_ptr<CanonicalCookie> CanonicalCookie::CreateSanitizedCookie(
     // we'll act like it was a secure scheme. This cookie will be rejected later
     // if the url isn't allowed to access secure cookies so this isn't a
     // problem.
-    source_scheme = (secure || url.SchemeIsCryptographic())
+    source_scheme = url.SchemeIs(url::kHttppsScheme)
+                        ? CookieSourceScheme::kHttpps
+                    : (secure || url.SchemeIsCryptographic())
                         ? CookieSourceScheme::kSecure
                         : CookieSourceScheme::kNonSecure;
 
@@ -853,6 +858,10 @@ base::ByteSize CanonicalCookie::ValueSize() const {
 
 bool CanonicalCookie::IsEquivalentForSecureCookieMatching(
     const CanonicalCookie& secure_cookie) const {
+  if ((SourceScheme() == CookieSourceScheme::kHttpps) !=
+      (secure_cookie.SourceScheme() == CookieSourceScheme::kHttpps)) {
+    return false;
+  }
   // Partition keys must both be equivalent.
   bool same_partition_key = PartitionKey() == secure_cookie.PartitionKey();
 

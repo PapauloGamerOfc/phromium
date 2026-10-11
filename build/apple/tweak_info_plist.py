@@ -297,6 +297,8 @@ def _SetDirectLaunchUrlScheme(plist, bundle_identifier):
         # this scheme for non-stable channels during signing.
     elif bundle_identifier == 'org.chromium.Chromium':
         scheme = 'chromium'
+    elif bundle_identifier == 'io.github.papaulogamerofc.Phromium':
+        scheme = 'phromium'
 
     url_types = plist.get('CFBundleURLTypes')
     if not url_types:
@@ -322,6 +324,12 @@ def _SetDirectLaunchUrlScheme(plist, bundle_identifier):
             new_url_types.append(url_type)
 
     plist['CFBundleURLTypes'] = new_url_types
+    if scheme == 'phromium':
+        # Do not register experimental HTTPPS for the Google Chrome brands.
+        new_url_types.append({
+            'CFBundleURLName': 'HTTPPS web site URL',
+            'CFBundleURLSchemes': ['httpps'],
+        })
 
 
 def Main(argv):
@@ -436,6 +444,12 @@ def Main(argv):
         default=None,
         help='The id of the privileged helper executable.',
     )
+    parser.add_option(
+        '--legacy-icon',
+        action='store_true',
+        default=False,
+        help='Use CFBundleIconFile without an AppIcon asset catalog.',
+    )
     (options, args) = parser.parse_args(argv)
 
     if len(args) > 0:
@@ -449,6 +463,8 @@ def Main(argv):
     # Read the plist into its parsed format.
     with open(options.plist_path, 'rb') as f:
         plist = plistlib.load(f)
+    if options.legacy_icon:
+        plist.pop('CFBundleIconName', None)
 
     # Convert overrides.
     overrides = {}

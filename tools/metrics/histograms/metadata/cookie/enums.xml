@@ -146,6 +146,7 @@ chromium-metrics-reviews@google.com.
   <int value="20" label="Ws Scheme"/>
   <int value="21" label="Wss Scheme"/>
   <int value="22" label="Chrome Extension Scheme"/>
+  <int value="23" label="Httpps Scheme"/>
 </enum>
 
 <enum name="CookieSourceType">

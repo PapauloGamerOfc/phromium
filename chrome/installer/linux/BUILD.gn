@@ -294,10 +294,12 @@ group("linux") {
   deps = [
     ":beta",
     ":canary",
-    ":deb_repo_package",
     ":stable",
     ":unstable",
   ]
+  if (is_chrome_branded) {
+    deps += [ ":deb_repo_package" ]
+  }
 }
 
 action("deb_repo_package") {
@@ -322,7 +324,7 @@ action("deb_repo_package") {
   if (is_chrome_branded) {
     package = "google-chrome-repo"
   } else {
-    package = "chromium-browser-repo"
+    package = "phromium-repo"
   }
 
   outputs = [ "$root_out_dir/${package}_${deb_arch}.deb" ]
@@ -565,7 +567,7 @@ template("linux_package") {
   if (is_chrome_branded) {
     package = "google-chrome"
   } else {
-    package = "chromium-browser"
+    package = "phromium"
   }
 
   deb_target_name = "${target_name}_deb"

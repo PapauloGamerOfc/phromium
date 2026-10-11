@@ -4,21 +4,28 @@
 
 #include "net/socket/ssl_client_socket.h"
 
+#include <algorithm>
+#include <map>
 #include <string>
+#include <tuple>
 
 #include "base/containers/flat_tree.h"
+#include "base/functional/bind.h"
 #include "base/logging.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/observer_list.h"
 #include "base/values.h"
 #include "net/base/features.h"
+#include "net/base/session_usage.h"
 #include "net/cert/x509_certificate_net_log_param.h"
 #include "net/log/net_log.h"
 #include "net/log/net_log_event_type.h"
+#include "net/socket/httpps_client_socket.h"
 #include "net/socket/ssl_client_socket_impl.h"
 #include "net/socket/stream_socket.h"
 #include "net/ssl/ssl_client_session_cache.h"
+#include "net/ssl/ssl_config.h"
 #include "net/ssl/ssl_connection_status_flags.h"
 #include "net/ssl/ssl_info.h"
 #include "net/ssl/ssl_key_logger.h"
@@ -69,6 +76,48 @@ base::DictValue NetLogClearMatchingCachedClientCertParams(
 }
 
 }  // namespace
+
+struct SSLClientContext::HttppsSessionCache {
+  struct Key {
+    SSLClientSessionCache::Key scope;
+    int verification_flags = 0;
+    NextProtoVector protocols;
+
+    bool operator<(const Key& other) const {
+      return std::tie(scope, verification_flags, protocols) <
+             std::tie(other.scope, other.verification_flags, other.protocols);
+    }
+  };
+  struct Entry {
+    httpps::SessionTicket ticket;
+    size_t bytes = 0;
+    uint64_t order = 0;
+  };
+  static Key MakeKey(const HostPortPair& server, const SSLConfig& config) {
+    Key key;
+    key.scope.server = server;
+    // Keep partitioning even when the ordinary TLS experiment is disabled.
+    key.scope.network_anonymization_key = config.network_anonymization_key;
+    key.scope.privacy_mode = config.privacy_mode;
+    key.scope.proxy_chain = config.proxy_chain;
+    key.scope.proxy_chain_index = config.proxy_chain_index;
+    key.scope.session_usage = config.session_usage;
+    key.verification_flags = config.GetCertVerifyFlags();
+    key.protocols = config.alpn_protos;
+    return key;
+  }
+  static bool Usable(const httpps::SessionTicket& ticket, int64_t now) {
+    return ticket.lifetime > 0 && ticket.lifetime <= 604800 &&
+           ticket.received_milliseconds >= 0 &&
+           ticket.received_milliseconds <= now &&
+           now - ticket.received_milliseconds <
+               static_cast<int64_t>(ticket.lifetime) * 1000;
+  }
+  std::map<Key, Entry> entries;
+  size_t bytes = 0;
+  uint64_t next_order = 0;
+  uint64_t ordinary_cache_generation = 0;
+};
 
 // static
 void SSLClientSocket::RecordSSLConnectResult(
@@ -221,7 +270,8 @@ SSLClientContext::SSLClientContext(
     TransportSecurityState* transport_security_state,
     SSLClientSessionCache* ssl_client_session_cache,
     SCTAuditingDelegate* sct_auditing_delegate)
-    : ssl_config_service_(ssl_config_service),
+    : httpps_session_cache_(std::make_unique<HttppsSessionCache>()),
+      ssl_config_service_(ssl_config_service),
       cert_verifier_(cert_verifier),
       transport_security_state_(transport_security_state),
       ssl_client_session_cache_(ssl_client_session_cache),
@@ -235,6 +285,10 @@ SSLClientContext::SSLClientContext(
   }
   cert_verifier_->AddObserver(this);
   CertDatabase::GetInstance()->AddObserver(this);
+  if (ssl_client_session_cache_) {
+    httpps_session_cache_->ordinary_cache_generation =
+        ssl_client_session_cache_->generation_number();
+  }
 }
 
 SSLClientContext::~SSLClientContext() {
@@ -256,10 +310,131 @@ bool SSLClientContext::IsEchEnabled(std::string_view hostname) const {
   return GetEchMode(hostname) != EchMode::kDisabled;
 }
 
+void SSLClientContext::ClearHttppsSessions() {
+  ++httpps_session_generation_;
+  httpps_session_cache_->entries.clear();
+  httpps_session_cache_->bytes = 0;
+  if (ssl_client_session_cache_) {
+    httpps_session_cache_->ordinary_cache_generation =
+        ssl_client_session_cache_->generation_number();
+  }
+}
+
+void SSLClientContext::SynchronizeHttppsSessionGeneration() {
+  // HttpNetworkSession::ClearSSLSessionCache and memory-pressure flushes also
+  // invalidate HTTPPS, without ever storing TLS 2.0 PSKs as SSL_SESSIONs.
+  if (ssl_client_session_cache_ &&
+      httpps_session_cache_->ordinary_cache_generation !=
+          ssl_client_session_cache_->generation_number()) {
+    ClearHttppsSessions();
+  }
+}
+
+void SSLClientContext::SetHttppsTrustAnchors(
+    const std::vector<std::string>& roots) {
+  if (roots != httpps_trust_anchors_) {
+    httpps_trust_anchors_ = roots;
+    NotifySSLConfigChanged(SSLConfigChangeType::kCertDatabaseChanged);
+  }
+}
+
+void SSLClientContext::SetHttppsProxyTrustAnchors(
+    const std::vector<std::string>& roots) {
+  if (roots != httpps_proxy_trust_anchors_) {
+    httpps_proxy_trust_anchors_ = roots;
+    NotifySSLConfigChanged(SSLConfigChangeType::kCertDatabaseChanged);
+  }
+}
+
+std::optional<httpps::SessionTicket> SSLClientContext::TakeHttppsSession(
+    const HostPortPair& server, const SSLConfig& config) {
+  SynchronizeHttppsSessionGeneration();
+  if (!ssl_client_session_cache_ || !config.is_httpps) {
+    return std::nullopt;
+  }
+  auto& cache = *httpps_session_cache_;
+  auto found = cache.entries.find(HttppsSessionCache::MakeKey(server, config));
+  if (found == cache.entries.end()) {
+    return std::nullopt;
+  }
+  auto ticket = std::move(found->second.ticket);
+  cache.bytes -= found->second.bytes;
+  cache.entries.erase(found);
+  // Removal happens before the handshake starts: concurrent sockets cannot
+  // replay one ticket. A failed attempt does not put it back into the cache.
+  if (!HttppsSessionCache::Usable(ticket, httpps::MonotonicMilliseconds())) {
+    return std::nullopt;
+  }
+  return ticket;
+}
+
+void SSLClientContext::StoreHttppsSession(uint64_t generation,
+                                        const HostPortPair& server,
+                                        const SSLConfig& config,
+                                        httpps::SessionTicket ticket) {
+  SynchronizeHttppsSessionGeneration();
+  if (!ssl_client_session_cache_ || !config.is_httpps ||
+      generation != httpps_session_generation_ ||
+      ticket.hostname != server.host() || ticket.identity.empty() ||
+      ticket.identity.size() > 65535 || ticket.certificates.empty() ||
+      ticket.certificates.size() > 64 ||
+      !HttppsSessionCache::Usable(ticket, httpps::MonotonicMilliseconds())) {
+    return;
+  }
+  // Local memory budgets, not protocol limits. Do not persist PSKs to disk.
+  constexpr size_t kMaxEntryBytes = 1024 * 1024;
+  constexpr size_t kMaxCacheBytes = 16 * 1024 * 1024;
+  constexpr size_t kMaxEntries = 256;
+  size_t bytes = ticket.identity.size() + ticket.psk.size();
+  for (const auto& cert : ticket.certificates) {
+    if (cert.empty() || cert.size() > kMaxEntryBytes - bytes) {
+      return;
+    }
+    bytes += cert.size();
+  }
+  auto& cache = *httpps_session_cache_;
+  const auto key = HttppsSessionCache::MakeKey(server, config);
+  if (auto found = cache.entries.find(key); found != cache.entries.end()) {
+    cache.bytes -= found->second.bytes;
+    cache.entries.erase(found);
+  }
+  while (!cache.entries.empty() &&
+         (cache.entries.size() >= kMaxEntries ||
+          cache.bytes > kMaxCacheBytes - bytes)) {
+    auto oldest = std::min_element(
+        cache.entries.begin(), cache.entries.end(),
+        [](const auto& a, const auto& b) {
+          return a.second.order < b.second.order;
+        });
+    cache.bytes -= oldest->second.bytes;
+    cache.entries.erase(oldest);
+  }
+  cache.entries.emplace(key, HttppsSessionCache::Entry{
+                                 std::move(ticket), bytes, cache.next_order++});
+  cache.bytes += bytes;
+}
+
 std::unique_ptr<SSLClientSocket> SSLClientContext::CreateSSLClientSocket(
     std::unique_ptr<StreamSocket> stream_socket,
     const HostPortPair& host_and_port,
     const SSLConfig& ssl_config) {
+  if (ssl_config.is_httpps) {
+    // A proxy and an origin can have the same hostname/port but must not share
+    // trust authority. In particular, missing proxy roots stay empty.
+    const auto& roots = ssl_config.session_usage == SessionUsage::kProxy
+                            ? httpps_proxy_trust_anchors_
+                            : httpps_trust_anchors_;
+    auto ticket = TakeHttppsSession(host_and_port, ssl_config);
+    return std::make_unique<HttppsClientSocket>(
+        std::move(stream_socket), host_and_port, roots, cert_verifier_.get(),
+        std::move(ticket),
+        base::BindRepeating(&SSLClientContext::StoreHttppsSession,
+                            weak_factory_.GetWeakPtr(),
+                            httpps_session_generation_, host_and_port,
+                            ssl_config),
+        ssl_config.early_data_enabled &&
+            ssl_config.session_usage == SessionUsage::kDestination);
+  }
   return std::make_unique<SSLClientSocketImpl>(this, std::move(stream_socket),
                                                host_and_port, ssl_config);
 }
@@ -328,6 +503,9 @@ void SSLClientContext::OnClientCertStoreChanged() {
   base::flat_set<HostPortPair> servers =
       ssl_client_auth_cache_.GetCachedServers();
   if (servers.empty()) {
+    // HTTPPS tickets must also lose their pending generation when the client
+    // credential store changes before any ordinary TLS preference was cached.
+    ClearHttppsSessions();
     return;
   }
   ssl_client_auth_cache_.Clear();
@@ -407,6 +585,7 @@ void SSLClientContext::ClearMatchingClientCertificate(
 }
 
 void SSLClientContext::NotifySSLConfigChanged(SSLConfigChangeType change_type) {
+  ClearHttppsSessions();
   for (Observer& observer : observers_) {
     observer.OnSSLConfigChanged(change_type);
   }
@@ -414,6 +593,9 @@ void SSLClientContext::NotifySSLConfigChanged(SSLConfigChangeType change_type) {
 
 void SSLClientContext::NotifySSLConfigForServersChanged(
     const base::flat_set<HostPortPair>& servers) {
+  // Client-identity changes invalidate pending ticket callbacks as well as
+  // existing entries. Clearing this small cache is deliberately conservative.
+  ClearHttppsSessions();
   for (Observer& observer : observers_) {
     observer.OnSSLConfigForServersChanged(servers);
   }

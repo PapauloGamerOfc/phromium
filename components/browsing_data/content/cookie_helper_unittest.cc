@@ -344,6 +344,24 @@ TEST_F(CookieHelperTest, DeleteCookieWithCallback) {
   }
 }
 
+TEST_F(CookieHelperTest, DeleteCookiePermissionKeepsHttppsNamespace) {
+  for (const char* attributes : {"a=b", "a=b; Secure"}) {
+    auto cookie = net::CanonicalCookie::CreateForTesting(
+        GURL("httpps://example.com"), attributes, base::Time::Now(),
+        net::CookieSourceType::kOther);
+    ASSERT_TRUE(cookie);
+    bool checked = false;
+    auto helper = base::MakeRefCounted<CookieHelper>(
+        storage_partition(), base::BindLambdaForTesting([&](const GURL& url) {
+          checked = true;
+          EXPECT_EQ(GURL("httpps://example.com"), url);
+          return true;
+        }));
+    helper->DeleteCookie(*cookie);
+    EXPECT_TRUE(checked);
+  }
+}
+
 TEST_F(CookieHelperTest, CannedDeleteCookie) {
   CreateCookiesForTest();
   auto helper = base::MakeRefCounted<CannedCookieHelper>(storage_partition(),

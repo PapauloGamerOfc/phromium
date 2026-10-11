@@ -12,6 +12,7 @@
 #include "base/memory/raw_ptr.h"
 #include "base/memory/ref_counted.h"
 #include "base/strings/string_util.h"
+#include "base/test/task_environment.h"
 #include "crypto/hash.h"
 #include "net/base/net_errors.h"
 #include "net/base/test_completion_callback.h"
@@ -142,6 +143,30 @@ TEST_F(IgnoreErrorsCertVerifierTest, TestMatch) {
               IsOk());
 }
 
+TEST_F(IgnoreErrorsCertVerifierTest, HttppsCannotUseSpkiException) {
+  base::test::TaskEnvironment task_environment;
+  scoped_refptr<X509Certificate> cert;
+  ASSERT_NO_FATAL_FAILURE(GetAllowlistedTestCert(&cert));
+  for (bool asynchronous : {false, true}) {
+    SCOPED_TRACE(asynchronous);
+    mock_verifier_->set_async(asynchronous);
+    for (int expected : {OK, ERR_CERT_INVALID}) {
+      SCOPED_TRACE(expected);
+      mock_verifier_->set_default_result(expected);
+      CertVerifyResult result;
+      TestCompletionCallback callback;
+      std::unique_ptr<CertVerifier::Request> request;
+      const int rv = verifier_.Verify(
+          CertVerifier::RequestParams(cert, "example.com",
+                                      CertVerifier::VERIFY_HTTPPS_SERVER,
+                                      /*ocsp_response=*/{}, /*sct_list=*/{}),
+          &result, callback.callback(), &request, NetLogWithSource());
+      EXPECT_EQ(asynchronous ? ERR_IO_PENDING : expected, rv);
+      EXPECT_EQ(expected, callback.GetResult(rv));
+    }
+  }
+}
+
 class IgnoreCertificateErrorsSPKIListFlagTest
     : public ::testing::TestWithParam<bool> {
  public:
@@ -184,6 +209,22 @@ TEST_P(IgnoreCertificateErrorsSPKIListFlagTest, TestUserDataDirSwitchRequired) {
                     callback.callback(), &request, NetLogWithSource())),
                 IsError(ERR_CERT_INVALID));
   }
+}
+
+TEST_P(IgnoreCertificateErrorsSPKIListFlagTest,
+       HttppsCannotUseCommandLineSpkiException) {
+  scoped_refptr<X509Certificate> cert;
+  ASSERT_NO_FATAL_FAILURE(GetAllowlistedTestCert(&cert));
+  CertVerifyResult result;
+  TestCompletionCallback callback;
+  std::unique_ptr<CertVerifier::Request> request;
+  EXPECT_THAT(
+      callback.GetResult(verifier_->Verify(
+          CertVerifier::RequestParams(cert, "example.com",
+                                      CertVerifier::VERIFY_HTTPPS_SERVER,
+                                      /*ocsp_response=*/{}, /*sct_list=*/{}),
+          &result, callback.callback(), &request, NetLogWithSource())),
+      IsError(ERR_CERT_INVALID));
 }
 
 INSTANTIATE_TEST_SUITE_P(WithUserDataDirSwitchPresent,

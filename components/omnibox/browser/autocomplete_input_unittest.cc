@@ -14,6 +14,7 @@
 #include "base/test/task_environment.h"
 #include "build/build_config.h"
 #include "components/omnibox/browser/test_scheme_classifier.h"
+#include "components/omnibox/common/omnibox_features.h"
 #include "components/search_engines/search_engines_test_environment.h"
 #include "components/search_engines/template_url.h"
 #include "components/search_engines/template_url_data.h"
@@ -375,6 +376,38 @@ TEST(AutocompleteInputTest, InputTypeWithCursorPosition) {
     EXPECT_EQ(input_cases[i].normalized_input, input.text());
     EXPECT_EQ(input_cases[i].normalized_cursor_position,
               input.cursor_position());
+  }
+}
+
+TEST(AutocompleteInputTest, PhromiumPreservesHttpByDefault) {
+  EXPECT_EQ(base::FEATURE_DISABLED_BY_DEFAULT,
+            omnibox::kDefaultTypedNavigationsToHttps.default_state);
+  struct TestData {
+    const std::u16string input;
+    const GURL expected_url;
+  };
+  const TestData test_cases[] = {
+      {u"example.com", GURL("http://example.com/")},
+      {u"example.com:80/path", GURL("http://example.com/path")},
+      {u"http://example.com/path", GURL("http://example.com/path")},
+      {u"https://example.com/path", GURL("https://example.com/path")},
+  };
+  for (const auto& test_case : test_cases) {
+    AutocompleteInput input(test_case.input, metrics::OmniboxEventProto::OTHER,
+                            TestSchemeClassifier());
+    EXPECT_EQ(test_case.expected_url, input.canonicalized_url());
+    EXPECT_FALSE(input.added_default_scheme_to_typed_url());
+  }
+}
+
+TEST(AutocompleteInputTest, PhromiumHttppsInputRemainsHttpps) {
+  const std::u16string inputs[] = {u"httpps://example.com/path",
+                                   u"HTTPPS://EXAMPLE.COM:343/path"};
+  for (const auto& text : inputs) {
+    AutocompleteInput input(text, metrics::OmniboxEventProto::OTHER,
+                            TestSchemeClassifier());
+    EXPECT_EQ(metrics::OmniboxInputType::URL, input.type());
+    EXPECT_EQ(GURL("httpps://example.com/path"), input.canonicalized_url());
   }
 }
 

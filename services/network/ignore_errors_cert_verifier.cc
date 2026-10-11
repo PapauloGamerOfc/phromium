@@ -59,6 +59,13 @@ int IgnoreErrorsCertVerifier::Verify(const RequestParams& params,
                                      net::CompletionOnceCallback callback,
                                      std::unique_ptr<Request>* out_req,
                                      const net::NetLogWithSource& net_log) {
+  // HTTPPS requires a real trust decision, including its distinct leaf-key
+  // profile. TLS debugging allowlists must not synthesize a successful HTTPPS
+  // verification or skip the shared verifier's constraints and CT checks.
+  if (params.flags() & CertVerifier::VERIFY_HTTPPS_SERVER) {
+    return verifier_->Verify(params, verify_result, std::move(callback), out_req,
+                             net_log);
+  }
   std::vector<SHA256HashValue> public_key_hashes;
   for (const auto& buffer : params.certificate()->cert_buffers()) {
     std::string_view cert_spki;

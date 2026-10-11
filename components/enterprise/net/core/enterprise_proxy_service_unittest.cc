@@ -1065,6 +1065,29 @@ TEST_F(EnterpriseProxyServiceAuthChallengeTest, NotProxyChallenge) {
   ExpectDecisionHistogram(histogram_tester, Decision::kNotApplicable);
 }
 
+TEST_F(EnterpriseProxyServiceAuthChallengeTest,
+       HttppsCannotUseHttpsEnterpriseProxyCredentials) {
+  const GURL destination("https://foo.example.com/test");
+  net::AuthChallengeInfo auth_info = CreateProxyAuthChallengeInfo();
+  ASSERT_EQ(Decision::kNeedsCredentials,
+            Classify(auth_info, destination).decision);
+
+  // Use the exact managed HTTPS host and port. Only the transport changes.
+  auth_info.challenger =
+      url::SchemeHostPort("httpps", auth_info.challenger.host(),
+                          auth_info.challenger.port());
+  ASSERT_TRUE(auth_info.challenger.IsValid());
+  for (const char* realm : {"", "403"}) {
+    SCOPED_TRACE(realm);
+    base::HistogramTester histogram_tester;
+    auth_info.realm = realm;
+    const auto match = Classify(auth_info, destination);
+    EXPECT_EQ(Decision::kNotApplicable, match.decision);
+    EXPECT_FALSE(match.endpoint.has_value());
+    ExpectDecisionHistogram(histogram_tester, Decision::kNotApplicable);
+  }
+}
+
 TEST_F(EnterpriseProxyServiceAuthChallengeTest, NotManagedProxy) {
   base::HistogramTester histogram_tester;
 

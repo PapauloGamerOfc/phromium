@@ -34,6 +34,8 @@ def main() -> None:
     parser = installer.parse_common_args()
     parser.add_argument("-s", "--sysroot", required=True, help="sysroot")
     args = parser.parse_args()
+    if args.branding != "google_chrome":
+        parser.error("Phromium has no configured package update repository")
 
     output_dir = pathlib.Path(args.output_dir)
     script_dir = pathlib.Path(__file__).parent.absolute()
@@ -55,8 +57,8 @@ def main() -> None:
         config.info_vars["INSTALLDIR"] = "/opt/google/chrome-repo"
         config.info_vars["PACKAGE"] = "google-chrome-repo"
     else:
-        config.info_vars["INSTALLDIR"] = "/opt/chromium.org/chromium-repo"
-        config.info_vars["PACKAGE"] = "chromium-browser-repo"
+        config.info_vars["INSTALLDIR"] = "/opt/phromium-repo"
+        config.info_vars["PACKAGE"] = "phromium-repo"
 
     config.channel = "repo"
 

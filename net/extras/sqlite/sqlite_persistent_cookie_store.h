@@ -14,6 +14,7 @@
 #include "base/functional/callback_forward.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/task/task_traits.h"
+#include "net/cookies/cookie_constants.h"
 #include "net/cookies/cookie_monster.h"
 #include "net/extras/sqlite/cookie_crypto_delegate.h"
 #include "net/log/net_log_with_source.h"
@@ -36,9 +37,8 @@ base::TaskPriority COMPONENT_EXPORT(NET_EXTRAS)
 class COMPONENT_EXPORT(NET_EXTRAS) SQLitePersistentCookieStore
     : public CookieMonster::PersistentCookieStore {
  public:
-  // Contains the origin and a bool indicating whether or not the
-  // origin is secure.
-  typedef std::pair<std::string, bool> CookieOrigin;
+  // Keep HTTPPS separate from the HTTP/HTTPS namespace during session cleanup.
+  using CookieOrigin = std::pair<std::string, CookieSourceScheme>;
 
   // Port number to use for cookies whose source port is unknown at the time of
   // database migration to V13. The value -1 comes from url::PORT_UNSPECIFIED.

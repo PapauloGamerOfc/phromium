@@ -170,6 +170,9 @@ void MultiThreadedCertVerifier::InternalRequest::Start(
   if (params.flags() & CertVerifier::VERIFY_SXG_CT_REQUIREMENTS) {
     flags |= CertVerifyProc::VERIFY_SXG_CT_REQUIREMENTS;
   }
+  if (params.flags() & CertVerifier::VERIFY_HTTPPS_SERVER) {
+    flags |= CertVerifyProc::VERIFY_HTTPPS_SERVER;
+  }
   base::TimeTicks start_time = base::TimeTicks::Now();
   base::ThreadPool::PostTaskAndReplyWithResult(
       FROM_HERE,

@@ -29,6 +29,10 @@ TEST(ProxyInfo, SerializeAndDeserialize) {
       net::ProxyServer::SCHEME_HTTPS, "foo1", 443));
   infos.push_back(std::move(single_proxy_chain));
 
+  net::ProxyInfo httpps_proxy;
+  httpps_proxy.UsePacString("HTTPPS proxy.test:343; HTTPS backup.test:443");
+  infos.push_back(std::move(httpps_proxy));
+
   net::ProxyInfo multi_proxy_chain;
   multi_proxy_chain.UseProxyChain(net::ProxyChain::ForIpProtection({
       net::ProxyServer::FromSchemeHostAndPort(net::ProxyServer::SCHEME_HTTPS,

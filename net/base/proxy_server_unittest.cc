@@ -7,6 +7,7 @@
 #include <array>
 #include <optional>
 
+#include "base/pickle.h"
 #include "base/strings/string_number_conversions.h"
 #include "net/base/proxy_string_util.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -61,6 +62,7 @@ TEST(ProxyServerTest, FromSchemeHostAndPort) {
 
       // Other schemes
       {ProxyServer::SCHEME_HTTPS, "foopy", 111, "111", "foopy", 111},
+      {ProxyServer::SCHEME_HTTPPS, "foopy", 111, "111", "foopy", 111},
       {ProxyServer::SCHEME_QUIC, "foopy", 111, "111", "foopy", 111},
       {ProxyServer::SCHEME_SOCKS4, "foopy", 111, "111", "foopy", 111},
       {ProxyServer::SCHEME_SOCKS5, "foopy", 111, "111", "foopy", 111},
@@ -69,6 +71,7 @@ TEST(ProxyServerTest, FromSchemeHostAndPort) {
       // Default ports
       {ProxyServer::SCHEME_HTTP, "foopy", std::nullopt, "", "foopy", 80},
       {ProxyServer::SCHEME_HTTPS, "foopy", std::nullopt, "", "foopy", 443},
+      {ProxyServer::SCHEME_HTTPPS, "foopy", std::nullopt, "", "foopy", 343},
       {ProxyServer::SCHEME_QUIC, "foopy", std::nullopt, "", "foopy", 443},
       {ProxyServer::SCHEME_SOCKS4, "foopy", std::nullopt, "", "foopy", 1080},
       {ProxyServer::SCHEME_SOCKS5, "foopy", std::nullopt, "", "foopy", 1080},
@@ -112,6 +115,17 @@ TEST(ProxyServerTest, InvalidHostname) {
                                                     tests[i], 80);
     EXPECT_FALSE(proxy.is_valid());
   }
+}
+
+TEST(ProxyServerTest, HttppsPersistsDistinctScheme) {
+  const auto proxy = ProxyServer::FromSchemeHostAndPort(
+      ProxyServer::SCHEME_HTTPPS, "proxy.test", std::nullopt);
+  base::Pickle pickle;
+  proxy.Persist(&pickle);
+  base::PickleIterator iter(pickle);
+  EXPECT_EQ(proxy, ProxyServer::CreateFromPickle(&iter));
+  EXPECT_NE(proxy, ProxyServer::FromSchemeHostAndPort(ProxyServer::SCHEME_HTTPS,
+                                                      "proxy.test", 343));
 }
 
 TEST(ProxyServerTest, InvalidPort) {
@@ -207,6 +221,23 @@ TEST(ProxyServerTest, Properties) {
     EXPECT_TRUE(proxy.is_https());
     EXPECT_TRUE(proxy.is_http_like());
     EXPECT_TRUE(proxy.is_secure_http_like());
+  }
+
+  // HTTPPS is secure HTTP, but not TLS 1.3/HTTPS or QUIC.
+  {
+    auto proxy = ProxyServer::FromSchemeHostAndPort(ProxyServer::SCHEME_HTTPPS,
+                                                    "foo", std::nullopt);
+    ASSERT_TRUE(proxy.is_valid());
+    EXPECT_TRUE(proxy.is_httpps());
+    EXPECT_FALSE(proxy.is_http());
+    EXPECT_FALSE(proxy.is_https());
+    EXPECT_FALSE(proxy.is_quic());
+    EXPECT_FALSE(proxy.is_socks());
+    EXPECT_TRUE(proxy.is_http_like());
+    EXPECT_TRUE(proxy.is_secure_http_like());
+    EXPECT_FALSE(ProxyServer::FromSchemeHostAndPort(ProxyServer::SCHEME_HTTPS,
+                                                    "foo", 343)
+                     .is_httpps());
   }
 
   // QUIC proxy.

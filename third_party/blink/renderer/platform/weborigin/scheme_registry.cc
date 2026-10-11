@@ -70,8 +70,8 @@ class URLSchemesRegistry final {
          // is considered secure. Additional checks are performed to ensure that
          // other http pages are filtered out.
         service_worker_schemes({"http", "https"}),
-        fetch_api_schemes({"http", "https"}),
-        allowed_in_referrer_schemes({"http", "https"}) {
+        fetch_api_schemes({"http", "https", "httpps"}),
+        allowed_in_referrer_schemes({"http", "https", "httpps"}) {
     for (auto& scheme : url::GetCorsEnabledSchemes())
       cors_enabled_schemes.insert(String(scheme));
     for (auto& scheme : url::GetCSPBypassingSchemes()) {
@@ -159,7 +159,7 @@ bool SchemeRegistry::ShouldTreatURLSchemeAsDisplayIsolated(
 bool SchemeRegistry::ShouldTreatURLSchemeAsRestrictingMixedContent(
     const String& scheme) {
   DCHECK_EQ(scheme, scheme.ToAsciiLower());
-  return scheme == "https";
+  return scheme == "https" || scheme == "httpps";
 }
 
 bool SchemeRegistry::ShouldLoadURLSchemeAsEmptyDocument(const String& scheme) {
@@ -292,7 +292,8 @@ bool SchemeRegistry::ShouldTreatURLSchemeAsSupportingFetchAPI(
 bool SchemeRegistry::IsSpecialScheme(const String& scheme) {
   DCHECK_EQ(scheme, scheme.ToAsciiLower());
   return scheme == "ftp" || scheme == "file" || scheme == "http" ||
-         scheme == "https" || scheme == "ws" || scheme == "wss";
+         scheme == "https" || scheme == "httpps" || scheme == "ws" ||
+         scheme == "wss";
 }
 
 void SchemeRegistry::RegisterURLSchemeAsFirstPartyWhenTopLevel(

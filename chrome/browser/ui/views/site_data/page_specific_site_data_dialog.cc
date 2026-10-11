@@ -62,6 +62,7 @@
 #include "ui/views/layout/box_layout_view.h"
 #include "ui/views/view_class_properties.h"
 #include "url/origin.h"
+#include "url/url_constants.h"
 
 namespace {
 
@@ -347,7 +348,11 @@ class PageSpecificSiteDataDialogModelDelegate : public ui::DialogModelDelegate {
         absl::Overload{[&](const std::string& host) {
                          GURL current_url = web_contents_->GetVisibleURL();
                          GURL site_url = net::cookie_util::CookieOriginToURL(
-                             host, current_url.SchemeIsCryptographic());
+                             host, current_url.SchemeIs(url::kHttppsScheme)
+                                       ? net::CookieSourceScheme::kHttpps
+                                   : current_url.SchemeIsCryptographic()
+                                       ? net::CookieSourceScheme::kSecure
+                                       : net::CookieSourceScheme::kNonSecure);
                          return url::Origin::Create(site_url);
                        },
                        [](const url::Origin& origin) { return origin; }},

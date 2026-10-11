@@ -10,8 +10,12 @@ namespace blink {
 
 HttpsState CalculateHttpsState(const SecurityOrigin* security_origin,
                                std::optional<HttpsState> parent_https_state) {
-  if (security_origin && security_origin->Protocol() == "https")
+  // HTTPPS is a separate encrypted transport, but must enforce the same
+  // mixed-content restrictions as HTTPS in the Fetch state machine.
+  if (security_origin && (security_origin->Protocol() == "https" ||
+                          security_origin->Protocol() == "httpps")) {
     return HttpsState::kModern;
+  }
 
   if (parent_https_state && *parent_https_state != HttpsState::kNone)
     return *parent_https_state;

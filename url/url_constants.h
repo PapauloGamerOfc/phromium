@@ -42,6 +42,9 @@ inline constexpr char kHttpScheme[] = "http";
 inline constexpr char16_t kHttpScheme16[] = u"http";
 inline constexpr char kHttpsScheme[] = "https";
 inline constexpr char16_t kHttpsScheme16[] = u"https";
+// Experimental HTTP over the Phromium TLS20 transport; never an HTTPS alias.
+inline constexpr char kHttppsScheme[] = "httpps";
+inline constexpr char16_t kHttppsScheme16[] = u"httpps";
 inline constexpr char kJavaScriptScheme[] = "javascript";
 inline constexpr char16_t kJavaScriptScheme16[] = u"javascript";
 inline constexpr char kMailToScheme[] = "mailto";

@@ -351,6 +351,7 @@ class InstallerConfig:
     rpm_build_dir: pathlib.Path = None
     rpm_spec_file: pathlib.Path = None
     rpm_optional_man_page: str = ""
+    rpm_optional_repo_cron: str = ""
     rpm_package_filename: str = ""
     rpm_depends: str = ""
     rpm_provides: str = ""
@@ -423,6 +424,10 @@ class InstallerConfig:
 
         config = cls(**data)
         config.rpm_package_filename = f"{config.package_orig}-{config.channel}"
+        if config.repoconfig:
+            config.rpm_optional_repo_cron = (
+                f"/etc/cron.daily/{config.info_vars['PACKAGE']}"
+            )
         config.desktop_exec = f"/usr/bin/{config.usr_bin_symlink_name}"
         config.desktop_icon = config.info_vars["PACKAGE"]
         return config
@@ -435,15 +440,15 @@ class InstallerConfig:
             self.flatpak_tags = "\ntags=proprietary;"
             base_id = "com.google.Chrome"
         else:
-            self.developer_id = "org.chromium"
+            self.developer_id = "io.github.papaulogamerofc"
             self.project_license_spdx = (
                 "BSD-3-Clause and LGPL-2.1+ and Apache-2.0 and IJG and MIT "
                 "and GPL-2.0+ and ISC and OpenSSL and (MPL-1.1 or GPL-2.0 or "
                 "LGPL-2.0)"
             )
-            self.flatpak_command = "chromium"
+            self.flatpak_command = "phromium"
             self.flatpak_tags = ""
-            base_id = "org.chromium.Chromium"
+            base_id = "io.github.papaulogamerofc.Phromium"
 
         if self.channel == "stable":
             self.app_id = base_id
@@ -537,6 +542,10 @@ class InstallerConfig:
 
     @staticmethod
     def _compute_deb_repoconfig(arch: str, package: str) -> tuple[str, str]:
+        # Phromium has no package update repository. Do not borrow Google's
+        # source, signing keys, or implicit REPOCONFIG environment override.
+        if package == "phromium":
+            return "", ""
         base_repo_config = "dl.google.com/linux/chrome/deb/ stable main"
         default = f"deb [arch={arch}] https://{base_repo_config}"
         repoconfig = os.environ.get("REPOCONFIG", default)
@@ -547,6 +556,8 @@ class InstallerConfig:
 
     @staticmethod
     def _compute_rpm_repoconfig(package: str) -> tuple[str, str]:
+        if package == "phromium":
+            return "", ""
         # ${PACKAGE#google-} removes "google-" prefix.
         if package.startswith("google-"):
             repo_package = package[7:]
@@ -897,7 +908,7 @@ class InstallerConfig:
             if self.channel not in ["beta", "unstable", "canary"]:
                 self.uri_scheme = "x-scheme-handler/google-chrome;"
         else:
-            self.uri_scheme = "x-scheme-handler/chromium;"
+            self.uri_scheme = "x-scheme-handler/phromium;x-scheme-handler/httpps;"
 
         # apparmor profile
         artifacts.append(

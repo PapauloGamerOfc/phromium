@@ -51,6 +51,7 @@
 #include "services/network/public/mojom/network_context.mojom.h"
 #include "services/network/public/mojom/restricted_cookie_manager.mojom.h"
 #include "url/gurl.h"
+#include "url/url_constants.h"
 
 namespace network {
 
@@ -810,7 +811,8 @@ void RestrictedCookieManager::SetCanonicalCookie(
   // TODO(http://crbug.com/1024053): Log metrics
   const GURL& origin_url = origin_.GetURL();
   net::CookieSourceScheme source_scheme =
-      GURL::SchemeIsCryptographic(origin_.scheme())
+      origin_.scheme() == url::kHttppsScheme ? net::CookieSourceScheme::kHttpps
+      : GURL::SchemeIsCryptographic(origin_.scheme())
           ? net::CookieSourceScheme::kSecure
           : net::CookieSourceScheme::kNonSecure;
 

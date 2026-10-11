@@ -89,6 +89,11 @@ CookieDeletionInfo& CookieDeletionInfo::operator=(
 
 bool CookieDeletionInfo::Matches(const CanonicalCookie& cookie,
                                  const CookieAccessParams& params) const {
+  if (httpps_namespace.has_value() &&
+      *httpps_namespace !=
+          (cookie.SourceScheme() == CookieSourceScheme::kHttpps)) {
+    return false;
+  }
   if (session_control != SessionControl::IGNORE_CONTROL &&
       (cookie.IsPersistent() !=
        (session_control == SessionControl::PERSISTENT_COOKIES))) {

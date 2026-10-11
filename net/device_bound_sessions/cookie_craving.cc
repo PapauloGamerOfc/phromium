@@ -10,6 +10,7 @@
 #include "base/containers/fixed_flat_set.h"
 #include "base/debug/crash_logging.h"
 #include "base/debug/dump_without_crashing.h"
+#include "base/notreached.h"
 #include "base/strings/strcat.h"
 #include "net/base/url_util.h"
 #include "net/cookies/canonical_cookie.h"
@@ -23,6 +24,7 @@
 #include "net/device_bound_sessions/session_error.h"
 #include "net/url_request/url_request.h"
 #include "url/url_canon.h"
+#include "url/url_constants.h"
 
 namespace net::device_bound_sessions {
 
@@ -68,6 +70,9 @@ proto::CookieSourceScheme ProtoEnumFromCookieSourceScheme(
       return proto::CookieSourceScheme::NON_SECURE;
     case CookieSourceScheme::kSecure:
       return proto::CookieSourceScheme::SECURE;
+    case CookieSourceScheme::kHttpps:
+      // HTTPPS does not enable DBSC, and IsValid rejects this namespace.
+      NOTREACHED();
   }
 }
 
@@ -92,6 +97,10 @@ base::expected<CookieCraving, SessionError> CookieCraving::Create(
     const std::string& attributes,
     base::Time creation_time) {
   CHECK(url.is_valid());
+  if (url.SchemeIs(url::kHttppsScheme)) {
+    return base::unexpected(
+        SessionError{SessionError::kInvalidCredentialsCookie});
+  }
   if (creation_time.is_null()) {
     return base::unexpected(
         SessionError{SessionError::kInvalidCredentialsCookieCreationTime});
@@ -198,6 +207,9 @@ base::expected<CookieCraving, SessionError> CookieCraving::Create(
 // TODO(crbug.com/438792839): Much of this function is copied directly from
 // CanonicalCookie. Try to deduplicate it.
 bool CookieCraving::IsValid() const {
+  if (SourceScheme() == CookieSourceScheme::kHttpps) {
+    return false;
+  }
   if (ParsedCookie::ParseTokenString(Name()) != Name() ||
       !ParsedCookie::IsValidCookieName(Name())) {
     return false;
@@ -238,6 +250,9 @@ bool CookieCraving::IsSatisfiedBy(
     const CanonicalCookie& canonical_cookie) const {
   CHECK(IsValid());
   CHECK(canonical_cookie.IsCanonicalForFromStorage());
+  if (canonical_cookie.SourceScheme() == CookieSourceScheme::kHttpps) {
+    return false;
+  }
 
   // Note: Creation time is not required to match. DBSC configs may be set at
   // different times from the cookies they reference. DBSC also does not require

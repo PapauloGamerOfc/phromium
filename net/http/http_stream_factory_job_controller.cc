@@ -77,7 +77,8 @@ GURL CreateAltSvcUrl(const GURL& origin_url,
 
 void ConvertWsToHttp(url::SchemeHostPort& input) {
   if (base::EqualsCaseInsensitiveASCII(input.scheme(), url::kHttpScheme) ||
-      base::EqualsCaseInsensitiveASCII(input.scheme(), url::kHttpsScheme)) {
+      base::EqualsCaseInsensitiveASCII(input.scheme(), url::kHttpsScheme) ||
+      base::EqualsCaseInsensitiveASCII(input.scheme(), url::kHttppsScheme)) {
     return;
   }
 
@@ -170,7 +171,7 @@ HttpStreamFactory::JobController::JobController(
   DCHECK(factory_);
   DCHECK(session_);
   DCHECK(job_factory_);
-  DCHECK(request_info_.url.SchemeIsHTTPOrHTTPS() ||
+  DCHECK(request_info_.url.SchemeIsHTTPOrHTTPSOrHTTPPS() ||
          request_info_.url.SchemeIsWSOrWSS());
 
   net_log_.BeginEvent(NetLogEventType::HTTP_STREAM_JOB_CONTROLLER, [&] {
@@ -867,13 +868,15 @@ int HttpStreamFactory::JobController::DoResolveProxyComplete(int rv) {
   }
   // Remove unsupported proxies from the list.
   int supported_proxies = ProxyServer::SCHEME_HTTP | ProxyServer::SCHEME_HTTPS |
+                          ProxyServer::SCHEME_HTTPPS |
                           ProxyServer::SCHEME_SOCKS4 |
                           ProxyServer::SCHEME_SOCKS5;
   // WebSockets is not supported over QUIC proxies. Direct
   // WebSocket-over-HTTP/3 is supported via the `WS_OVER_H3` job type
   // when an existing QUIC session with Extended CONNECT support is
   // available (see `DoCreateJobs()`).
-  if (session_->IsQuicEnabled() && !is_websocket_) {
+  if (session_->IsQuicEnabled() && !is_websocket_ &&
+      !request_info_.url.SchemeIs(url::kHttppsScheme)) {
     supported_proxies |= ProxyServer::SCHEME_QUIC;
   }
   proxy_info_.RemoveProxiesWithoutScheme(supported_proxies);
@@ -905,6 +908,7 @@ int HttpStreamFactory::JobController::DoCreateJobs() {
       GetAdvertisedAltSvcFor(request_info_, delegate_, stream_type_);
 
   if (session_->host_resolver()->IsHappyEyeballsV3Enabled() &&
+      !request_info_.url.SchemeIs(url::kHttppsScheme) &&
       proxy_info_.is_direct() && !is_websocket_ &&
       request_info_.socket_tag == SocketTag()) {
     SwitchToHttpStreamPool();
@@ -1584,7 +1588,7 @@ int HttpStreamFactory::JobController::ReconsiderProxyAfterError(Job* job,
   // chains are not yet supported, and this is only tested with single-proxy
   // chains.
   for (auto& proxy_server : proxy_info_.proxy_chain().proxy_servers()) {
-    if (proxy_server.is_secure_http_like()) {
+    if (proxy_server.is_secure_http_like() && !proxy_server.is_httpps()) {
       session_->ssl_client_context()->ClearClientCertificate(
           proxy_server.host_port_pair());
     }

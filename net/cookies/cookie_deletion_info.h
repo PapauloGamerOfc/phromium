@@ -121,6 +121,10 @@ struct NET_EXPORT CookieDeletionInfo {
   // included for a request of |url|.
   std::optional<GURL> url;
 
+  // nullopt deletes both namespaces (user-driven clearing). Web-driven
+  // Clear-Site-Data sets this to the requesting origin's HTTPPS namespace.
+  std::optional<bool> httpps_namespace;
+
   // If has a value then any cookie with a domain/ip contained in this set
   // will be deleted (assuming other fields match).
   // Domains must not have a leading period. e.g "example.com" and not

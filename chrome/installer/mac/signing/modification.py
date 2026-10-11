@@ -25,7 +25,7 @@ _KS_PRODUCT_ID = 'KSProductID'
 
 def _should_keep_scheme(scheme, dist):
     """Returns True if the URL scheme should be kept in the Info.plist."""
-    if scheme not in ('google-chrome', 'chromium'):
+    if scheme not in ('google-chrome', 'chromium', 'phromium'):
         return True
 
     if dist.direct_launch_scheme is not None:

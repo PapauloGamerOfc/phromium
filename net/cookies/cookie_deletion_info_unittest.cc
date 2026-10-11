@@ -4,8 +4,11 @@
 
 #include "net/cookies/cookie_deletion_info.h"
 
+#include <string_view>
+
 #include "base/test/scoped_feature_list.h"
 #include "net/base/features.h"
+#include "net/cookies/canonical_cookie.h"
 #include "net/cookies/cookie_access_params.h"
 #include "net/cookies/cookie_constants.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -14,6 +17,34 @@
 namespace net {
 
 using TimeRange = CookieDeletionInfo::TimeRange;
+
+TEST(CookieDeletionInfoTest, HttppsNamespaceIsOptionalAndIndependentOfSecure) {
+  const CookieAccessParams params{CookieAccessSemantics::UNKNOWN,
+                                  CookieScopeSemantics::UNKNOWN, false};
+  for (const char* source :
+       {"http://example.com", "https://example.com", "httpps://example.com"}) {
+    for (const char* attributes : {"a=b", "a=b; Secure"}) {
+      const GURL url(source);
+      if (url.SchemeIs("http") &&
+          std::string_view(attributes) == "a=b; Secure") {
+        continue;
+      }
+      SCOPED_TRACE(source);
+      SCOPED_TRACE(attributes);
+      auto cookie = CanonicalCookie::CreateForTesting(
+          url, attributes, base::Time::Now(), CookieSourceType::kOther);
+      ASSERT_TRUE(cookie);
+      CookieDeletionInfo info;
+      EXPECT_TRUE(info.Matches(*cookie, params));
+      info.httpps_namespace = true;
+      EXPECT_EQ(url.SchemeIs("httpps"), info.Matches(*cookie, params));
+      info.httpps_namespace = false;
+      EXPECT_EQ(!url.SchemeIs("httpps"), info.Matches(*cookie, params));
+      info.httpps_namespace.reset();
+      EXPECT_TRUE(info.Matches(*cookie, params));
+    }
+  }
+}
 
 TEST(CookieDeletionInfoTest, TimeRangeValues) {
   TimeRange range;

@@ -268,6 +268,10 @@ class HttpsUpgradesBrowserTest
   ~HttpsUpgradesBrowserTest() override = default;
 
   void SetUp() override {
+    // These upstream tests exercise the opt-in upgrade implementation. Phromium
+    // defaults are covered separately below without enabling this feature.
+    upgrades_feature_list_.InitAndEnableFeature(features::kHttpsUpgrades);
+
     // HFM heuristics are disabled on enterprise managed machines, so some of
     // the tests may fail on bots. Explicitly set management status to false.
     // Some of the tests check enterprise policies, so this configuration is
@@ -795,6 +799,7 @@ class HttpsUpgradesBrowserTest
   // existing tests run with the prewarm feature enabled.
   test::ScopedPrewarmFeatureList prewarm_feature_list_{
       test::ScopedPrewarmFeatureList::PrewarmState::kDisabled};
+  base::test::ScopedFeatureList upgrades_feature_list_;
   base::test::ScopedFeatureList feature_list_;
   net::EmbeddedTestServer http_server_{net::EmbeddedTestServer::TYPE_HTTP};
   net::EmbeddedTestServer https_server_{net::EmbeddedTestServer::TYPE_HTTPS};
@@ -810,6 +815,141 @@ class HttpsUpgradesBrowserTest
   // during PostRunTestOnMainThread().
   base::SimpleTestClock test_clock_;
 };
+
+// Exercise Phromium's shipped defaults rather than a test override disabling
+// upgrades: an upstream default change must not silently undo this policy.
+class PhromiumHttpDefaultBrowserTest : public InProcessBrowserTest {
+ public:
+  void SetUpOnMainThread() override {
+    mock_cert_verifier_.mock_cert_verifier()->set_default_result(net::OK);
+    host_resolver()->AddRule("*", "127.0.0.1");
+    http_server_.AddDefaultHandlers(GetChromeTestDataDir());
+    https_server_.AddDefaultHandlers(GetChromeTestDataDir());
+    ASSERT_TRUE(http_server_.Start());
+    ASSERT_TRUE(https_server_.Start());
+    HttpsUpgradesInterceptor::SetHttpPortForTesting(http_server_.port());
+    HttpsUpgradesInterceptor::SetHttpsPortForTesting(https_server_.port());
+
+    EXPECT_FALSE(base::FeatureList::IsEnabled(features::kHttpsUpgrades));
+    EXPECT_FALSE(base::FeatureList::IsEnabled(
+        features::kHttpsFirstBalancedModeAutoEnable));
+    EXPECT_FALSE(base::FeatureList::IsEnabled(
+        features::kHttpsFirstModeDefaultSettingPairsWithEsb));
+    EXPECT_FALSE(base::FeatureList::IsEnabled(
+        features::kHttpsFirstModeV2ForEngagedSites));
+    EXPECT_FALSE(base::FeatureList::IsEnabled(
+        features::kHttpsFirstModeV2ForTypicallySecureUsers));
+    EXPECT_FALSE(base::FeatureList::IsEnabled(
+        features::kHttpsFirstModeForAdvancedProtectionUsers));
+    EXPECT_FALSE(base::FeatureList::IsEnabled(features::kHttpsFirstModeIncognito));
+  }
+
+  void TearDownOnMainThread() override {
+    HttpsUpgradesInterceptor::SetHttpPortForTesting(0);
+    HttpsUpgradesInterceptor::SetHttpsPortForTesting(0);
+  }
+
+  void SetUpCommandLine(base::CommandLine* command_line) override {
+    mock_cert_verifier_.SetUpCommandLine(command_line);
+  }
+
+  void SetUpInProcessBrowserTestFixture() override {
+    mock_cert_verifier_.SetUpInProcessBrowserTestFixture();
+  }
+
+  void TearDownInProcessBrowserTestFixture() override {
+    mock_cert_verifier_.TearDownInProcessBrowserTestFixture();
+  }
+
+ protected:
+  content::WebContents* contents() {
+    return browser()->GetTabStripModel()->GetActiveWebContents();
+  }
+
+  net::EmbeddedTestServer http_server_{net::EmbeddedTestServer::TYPE_HTTP};
+  net::EmbeddedTestServer https_server_{net::EmbeddedTestServer::TYPE_HTTPS};
+
+ private:
+  content::ContentMockCertVerifier mock_cert_verifier_;
+};
+
+IN_PROC_BROWSER_TEST_F(PhromiumHttpDefaultBrowserTest, HttpRemainsHttp) {
+  const GURL http_url =
+      http_server_.GetURL("phromium-example.com", "/simple.html");
+  EXPECT_TRUE(NavigateToURLWithLinkTransition(contents(), http_url, http_url));
+  EXPECT_FALSE(IsShowingHttpsFirstModeInterstitial(contents()));
+}
+
+IN_PROC_BROWSER_TEST_F(PhromiumHttpDefaultBrowserTest, IncognitoHttpRemainsHttp) {
+  auto* incognito = CreateIncognitoBrowser();
+  auto* incognito_contents =
+      incognito->GetTabStripModel()->GetActiveWebContents();
+  const GURL http_url =
+      http_server_.GetURL("phromium-example.com", "/simple.html");
+  EXPECT_TRUE(NavigateToURLWithLinkTransition(incognito_contents, http_url,
+                                             http_url));
+  EXPECT_FALSE(IsShowingHttpsFirstModeInterstitial(incognito_contents));
+}
+
+IN_PROC_BROWSER_TEST_F(PhromiumHttpDefaultBrowserTest,
+                       TypedSchemelessNavigationRemainsHttp) {
+  const GURL http_url =
+      http_server_.GetURL("phromium-example.com", "/simple.html");
+  OmniboxClient* client = BrowserWindow::FromBrowser(browser())
+                              ->GetLocationBar()
+                              ->GetOmniboxController()
+                              ->client();
+  content::TestNavigationObserver observer(contents(), 1);
+  client->OnAutocompleteAccept(
+      http_url, nullptr, WindowOpenDisposition::CURRENT_TAB,
+      ui::PageTransitionFromInt(ui::PAGE_TRANSITION_TYPED |
+                                ui::PAGE_TRANSITION_FROM_ADDRESS_BAR),
+      omnibox::AutocompleteMatchType::kUrlWhatYouTyped, base::TimeTicks(), true,
+      false, std::u16string(), AutocompleteMatch(), AutocompleteMatch());
+  observer.Wait();
+  EXPECT_TRUE(observer.last_navigation_succeeded());
+  EXPECT_EQ(http_url, contents()->GetLastCommittedURL());
+}
+
+IN_PROC_BROWSER_TEST_F(PhromiumHttpDefaultBrowserTest, ExplicitHttpsStillWorks) {
+  const GURL https_url =
+      https_server_.GetURL("phromium-example.com", "/simple.html");
+  EXPECT_TRUE(NavigateToURLWithLinkTransition(contents(), https_url, https_url));
+}
+
+IN_PROC_BROWSER_TEST_F(PhromiumHttpDefaultBrowserTest, ServerRedirectIsHonored) {
+  const GURL https_url =
+      https_server_.GetURL("phromium-example.com", "/simple.html");
+  const GURL redirect_url = http_server_.GetURL(
+      "phromium-example.com", "/server-redirect?" + https_url.spec());
+  EXPECT_TRUE(
+      NavigateToURLWithLinkTransition(contents(), redirect_url, https_url));
+}
+
+IN_PROC_BROWSER_TEST_F(PhromiumHttpDefaultBrowserTest, HstsIsHonored) {
+  const GURL https_url =
+      https_server_.GetURL("phromium-example.com", "/simple.html");
+  GURL::Replacements replacement;
+  replacement.SetSchemeStr(url::kHttpScheme);
+  const GURL http_url = https_url.ReplaceComponents(replacement);
+  base::RunLoop loop;
+  browser()->GetProfile()->GetDefaultStoragePartition()->GetNetworkContext()
+      ->AddHSTS(http_url.GetHost(), base::Time::Now() + base::Days(1), false,
+                loop.QuitClosure());
+  loop.Run();
+  EXPECT_TRUE(NavigateToURLWithLinkTransition(contents(), http_url, https_url));
+}
+
+IN_PROC_BROWSER_TEST_F(PhromiumHttpDefaultBrowserTest,
+                       ExplicitHttpsFirstPreferenceStillWorks) {
+  browser()->GetProfile()->GetPrefs()->SetBoolean(prefs::kHttpsOnlyModeEnabled,
+                                                 true);
+  const GURL http_url =
+      http_server_.GetURL("phromium-example.com", "/simple.html");
+  const GURL https_url =
+      https_server_.GetURL("phromium-example.com", "/simple.html");
+  EXPECT_TRUE(NavigateToURLWithLinkTransition(contents(), http_url, https_url));
+}
 
 // HttpsUpgradesBrowserTest is NOT instantiated for unusual configurations like
 // kHttpsFirstModeWithSiteEngagementWithoutBalancedMode.

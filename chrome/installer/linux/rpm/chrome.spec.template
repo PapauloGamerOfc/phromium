@@ -85,7 +85,7 @@ rm -rf "$RPM_BUILD_ROOT"
 
 # Be explicit about the files we scatter throughout the system we don't
 # accidentally "own" stuff that's not ours (crbug.com/40194046).
-/etc/cron.daily/@@PACKAGE
+@@rpm_optional_repo_cron
 %ghost %attr(755,root,root) /usr/bin/@@package_orig
 /usr/bin/@@usr_bin_symlink_name
 /usr/share/appdata/@@PACKAGE.appdata.xml
@@ -125,26 +125,28 @@ add_nss_symlinks
 
 remove_udev_symlinks
 
-if [ ! -e "$DEFAULTS_FILE" ]; then
-  echo 'repo_add_once="true"' > "$DEFAULTS_FILE"
-fi
+if [ "@@branding" = "google_chrome" ]; then
+  if [ ! -e "$DEFAULTS_FILE" ]; then
+    echo 'repo_add_once="true"' > "$DEFAULTS_FILE"
+  fi
 
-. "$DEFAULTS_FILE"
+  . "$DEFAULTS_FILE"
 
-if [ "$repo_add_once" = "true" ]; then
-  determine_rpm_package_manager
+  if [ "$repo_add_once" = "true" ]; then
+    determine_rpm_package_manager
 
-  for PACKAGEMANAGER in ${PACKAGEMANAGERS[*]}
-  do
-    case $PACKAGEMANAGER in
-    "yum")
-      install_yum
-      ;;
-    "zypp")
-      install_zypp
-      ;;
-    esac
-  done
+    for PACKAGEMANAGER in ${PACKAGEMANAGERS[*]}
+    do
+      case $PACKAGEMANAGER in
+      "yum")
+        install_yum
+        ;;
+      "zypp")
+        install_zypp
+        ;;
+      esac
+    done
+  fi
 fi
 
 CHANNEL=@@channel

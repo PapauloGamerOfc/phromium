@@ -228,6 +228,17 @@ TEST_F(CookieCravingTest, CreateFailInvalidParams) {
                   SessionError::kInvalidCredentialsCookieCreationTime)));
 }
 
+TEST_F(CookieCravingTest, HttppsCookiesCannotSatisfyHttpsCredentials) {
+  const GURL httpps("httpps://www.example.test/foo");
+  EXPECT_THAT(
+      CookieCraving::Create(httpps, kName, "Secure", kCreationTime),
+      ErrorIs(MatchesErrorType(SessionError::kInvalidCredentialsCookie)));
+  CookieCraving craving =
+      CreateValidCookieCraving(GURL(kUrlString), kName, "Secure");
+  EXPECT_FALSE(craving.IsSatisfiedBy(
+      CreateCanonicalCookie(httpps, std::string(kName) + "=value; Secure")));
+}
+
 TEST_F(CookieCravingTest, CreateFailBadDomain) {
   // URL does not match domain.
   EXPECT_THAT(CookieCraving::Create(GURL(kUrlString), kName,

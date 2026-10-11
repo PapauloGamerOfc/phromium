@@ -88,6 +88,21 @@ TEST_F(SecurityOriginTest, ValidPortsCreateTupleOrigins) {
   }
 }
 
+TEST_F(SecurityOriginTest, HttppsIsDistinctFromHttps) {
+  auto origin = SecurityOrigin::Create(KURL("httpps://example.test/path"));
+  auto default_port =
+      SecurityOrigin::Create(KURL("httpps://example.test:343/other"));
+  auto https = SecurityOrigin::Create(KURL("https://example.test:343/"));
+  auto other_port = SecurityOrigin::Create(KURL("httpps://example.test:443/"));
+  EXPECT_FALSE(origin->IsOpaque());
+  EXPECT_TRUE(origin->IsPotentiallyTrustworthy());
+  EXPECT_EQ("httpps://example.test", origin->ToString());
+  EXPECT_TRUE(origin->IsSameOriginWith(default_port.get()));
+  EXPECT_FALSE(origin->IsSameOriginWith(https.get()));
+  EXPECT_FALSE(origin->IsSameOriginWith(other_port.get()));
+  EXPECT_FALSE(origin->CanAccess(https.get()));
+}
+
 TEST_F(SecurityOriginTest, LocalAccess) {
   scoped_refptr<SecurityOrigin> file1 =
       SecurityOrigin::CreateFromString("file:///etc/passwd");

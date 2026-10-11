@@ -18,6 +18,7 @@
 #include "content/public/browser/web_contents.h"
 #include "net/base/registry_controlled_domains/registry_controlled_domain.h"
 #include "third_party/blink/public/common/storage_key/storage_key.h"
+#include "url/url_constants.h"
 
 namespace content {
 
@@ -87,6 +88,10 @@ class SiteDataClearer : public BrowsingDataRemover::Observer {
           BrowsingDataFilterBuilder::Create(
               BrowsingDataFilterBuilder::Mode::kDelete));
       cookie_filter_builder->AddRegisterableDomain(domain);
+      // A site's header must never clear login cookies belonging to the other
+      // protocol, even though they share the same registrable domain.
+      cookie_filter_builder->SetCookieHttppsNamespace(origin_.scheme() ==
+                                                      url::kHttppsScheme);
       cookie_filter_builder->SetCookiePartitionKeyCollection(
           net::CookiePartitionKeyCollection(cookie_partition_key_));
       cookie_filter_builder->SetPartitionedCookiesOnly(
@@ -97,9 +102,10 @@ class SiteDataClearer : public BrowsingDataRemover::Observer {
       }
 
       pending_task_count_++;
-      uint64_t remove_mask =
-          BrowsingDataRemover::DATA_TYPE_COOKIES |
-          BrowsingDataRemover::DATA_TYPE_DEVICE_BOUND_SESSIONS;
+      uint64_t remove_mask = BrowsingDataRemover::DATA_TYPE_COOKIES;
+      if (origin_.scheme() != url::kHttppsScheme) {
+        remove_mask |= BrowsingDataRemover::DATA_TYPE_DEVICE_BOUND_SESSIONS;
+      }
       if (avoid_closing_connections_) {
         remove_mask |= BrowsingDataRemover::DATA_TYPE_AVOID_CLOSING_CONNECTIONS;
       }
@@ -130,7 +136,9 @@ class SiteDataClearer : public BrowsingDataRemover::Observer {
     if (clear_site_data_types_.Has(ClearSiteDataType::kStorage)) {
       remove_mask |= BrowsingDataRemover::DATA_TYPE_DOM_STORAGE;
       remove_mask |= BrowsingDataRemover::DATA_TYPE_PRIVACY_SANDBOX;
-      remove_mask |= BrowsingDataRemover::DATA_TYPE_DEVICE_BOUND_SESSIONS;
+      if (origin_.scheme() != url::kHttppsScheme) {
+        remove_mask |= BrowsingDataRemover::DATA_TYPE_DEVICE_BOUND_SESSIONS;
+      }
       remove_mask |=
           BrowsingDataRemover::DATA_TYPE_DECLARATIVE_PERFORMANCE_OBSERVER;
       // Internal data should not be removed by site-initiated deletions.

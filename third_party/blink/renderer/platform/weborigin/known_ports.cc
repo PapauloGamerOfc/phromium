@@ -54,6 +54,8 @@ bool IsDefaultPortForProtocol(uint16_t port, const String& protocol) {
       return protocol == "http" || protocol == "ws";
     case 443:
       return protocol == "https" || protocol == "wss";
+    case 343:
+      return protocol == "httpps";
     case 21:
       return protocol == "ftp";
   }
@@ -67,6 +69,8 @@ uint16_t DefaultPortForProtocol(const String& protocol) {
     return 80;
   if (protocol == "https" || protocol == "wss")
     return 443;
+  if (protocol == "httpps")
+    return 343;
   if (protocol == "ftp")
     return 21;
 

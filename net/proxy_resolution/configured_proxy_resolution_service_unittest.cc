@@ -1589,6 +1589,218 @@ TEST_F(ConfiguredProxyResolutionServiceTest, PAC_RuntimeError) {
   EXPECT_LE(info.proxy_resolve_start_time(), info.proxy_resolve_end_time());
 }
 
+TEST_F(ConfiguredProxyResolutionServiceTest,
+       HttppsPacFailureAndBackoffRespectMandatorySetting) {
+  for (const char* url_spec : {"http://example.test/", "https://example.test/",
+                               "httpps://example.test/"}) {
+    SCOPED_TRACE(url_spec);
+    for (bool mandatory : {false, true}) {
+      SCOPED_TRACE(mandatory);
+      for (int resolver_error : {ERR_PAC_SCRIPT_FAILED, ERR_NOT_IMPLEMENTED}) {
+        SCOPED_TRACE(resolver_error);
+        ProxyConfig config =
+            ProxyConfig::CreateFromCustomPacURL(GURL("http://foopy/proxy.pac"));
+        config.set_pac_mandatory(mandatory);
+        auto config_service = std::make_unique<MockProxyConfigService>(config);
+        MockAsyncProxyResolver resolver;
+        auto factory = std::make_unique<MockAsyncProxyResolverFactory>(false);
+        auto* factory_ptr = factory.get();
+        ConfiguredProxyResolutionService service(
+            std::move(config_service), std::move(factory),
+            mock_host_resolver_.get(), nullptr, /*quick_check_enabled=*/true);
+        service.set_enable_pac_runtime_backoff_for_testing(true);
+
+        const GURL url(url_spec);
+        const int expected_result =
+            mandatory ? ERR_MANDATORY_PROXY_CONFIGURATION_FAILED : OK;
+        ProxyInfo info;
+        TestCompletionCallback callback;
+        std::unique_ptr<ProxyResolutionRequest> request;
+        ASSERT_THAT(service.ResolveProxy(url, "GET", NetworkAnonymizationKey(),
+                                         handles::kInvalidNetworkHandle, &info,
+                                         callback.callback(), &request,
+                                         NetLogWithSource(), DEFAULT_PRIORITY),
+                    IsError(ERR_IO_PENDING));
+        ASSERT_EQ(1u, factory_ptr->pending_requests().size());
+        factory_ptr->pending_requests()[0]->CompleteNowWithForwarder(OK,
+                                                                     &resolver);
+        ASSERT_EQ(1u, resolver.pending_jobs().size());
+        EXPECT_EQ(url, resolver.pending_jobs()[0]->url());
+        resolver.pending_jobs()[0]->CompleteNow(resolver_error);
+        EXPECT_EQ(expected_result, callback.WaitForResult());
+        EXPECT_EQ(!mandatory, info.is_direct_only());
+        request.reset();
+
+        if (resolver_error == ERR_PAC_SCRIPT_FAILED) {
+          ProxyInfo retry_info;
+          TestCompletionCallback retry_callback;
+          EXPECT_EQ(
+              expected_result,
+              service.ResolveProxy(url, "GET", NetworkAnonymizationKey(),
+                                   handles::kInvalidNetworkHandle, &retry_info,
+                                   retry_callback.callback(), &request,
+                                   NetLogWithSource(), DEFAULT_PRIORITY));
+          EXPECT_EQ(!mandatory, retry_info.is_direct_only());
+          EXPECT_TRUE(resolver.pending_jobs().empty());
+        }
+      }
+    }
+  }
+}
+
+TEST_F(ConfiguredProxyResolutionServiceTest,
+       HttppsAutomaticProxyInitializationFailureRespectsMandatorySetting) {
+  for (const char* url_spec : {"http://example.test/", "https://example.test/",
+                               "httpps://example.test/"}) {
+    SCOPED_TRACE(url_spec);
+    for (bool autodetect : {false, true}) {
+      SCOPED_TRACE(autodetect);
+      for (bool mandatory : {false, true}) {
+        SCOPED_TRACE(mandatory);
+        ProxyConfig config = autodetect ? ProxyConfig::CreateAutoDetect()
+                                        : ProxyConfig::CreateFromCustomPacURL(
+                                              GURL("http://foopy/proxy.pac"));
+        config.set_pac_mandatory(mandatory);
+        auto config_service = std::make_unique<MockProxyConfigService>(config);
+        auto factory = std::make_unique<MockAsyncProxyResolverFactory>(false);
+        auto* factory_ptr = factory.get();
+        ConfiguredProxyResolutionService service(
+            std::move(config_service), std::move(factory),
+            mock_host_resolver_.get(), nullptr, /*quick_check_enabled=*/true);
+        const GURL url(url_spec);
+        const int expected_result =
+            mandatory ? ERR_MANDATORY_PROXY_CONFIGURATION_FAILED : OK;
+        ProxyInfo info;
+        TestCompletionCallback callback;
+        std::unique_ptr<ProxyResolutionRequest> request;
+        ASSERT_THAT(service.ResolveProxy(url, "GET", NetworkAnonymizationKey(),
+                                         handles::kInvalidNetworkHandle, &info,
+                                         callback.callback(), &request,
+                                         NetLogWithSource(), DEFAULT_PRIORITY),
+                    IsError(ERR_IO_PENDING));
+        ASSERT_EQ(1u, factory_ptr->pending_requests().size());
+        EXPECT_EQ(autodetect ? PacFileData::TYPE_AUTO_DETECT
+                             : PacFileData::TYPE_SCRIPT_URL,
+                  factory_ptr->pending_requests()[0]->script_data()->type());
+        factory_ptr->pending_requests()[0]->CompleteNow(ERR_PAC_SCRIPT_FAILED,
+                                                        nullptr);
+        EXPECT_EQ(expected_result, callback.WaitForResult());
+        EXPECT_EQ(!mandatory, info.is_direct_only());
+        request.reset();
+
+        ProxyInfo retry_info;
+        TestCompletionCallback retry_callback;
+        EXPECT_EQ(
+            expected_result,
+            service.ResolveProxy(url, "GET", NetworkAnonymizationKey(),
+                                 handles::kInvalidNetworkHandle, &retry_info,
+                                 retry_callback.callback(), &request,
+                                 NetLogWithSource(), DEFAULT_PRIORITY));
+        EXPECT_EQ(!mandatory, retry_info.is_direct_only());
+        EXPECT_TRUE(factory_ptr->pending_requests().empty());
+      }
+    }
+  }
+}
+
+TEST_F(ConfiguredProxyResolutionServiceTest,
+       HttppsWpadDownloadFailureHonorsFallbackConfiguration) {
+  for (bool mandatory : {false, true}) {
+    SCOPED_TRACE(mandatory);
+    for (bool manual_proxy : {false, true}) {
+      SCOPED_TRACE(manual_proxy);
+      ProxyConfig config = ProxyConfig::CreateAutoDetect();
+      config.set_pac_mandatory(mandatory);
+      if (manual_proxy) {
+        config.proxy_rules().ParseFromString("foopy:8080");
+      }
+      auto config_service = std::make_unique<MockProxyConfigService>(config);
+      auto factory = std::make_unique<MockAsyncProxyResolverFactory>(true);
+      auto* factory_ptr = factory.get();
+      ConfiguredProxyResolutionService service(
+          std::move(config_service), std::move(factory),
+          mock_host_resolver_.get(), nullptr, /*quick_check_enabled=*/true);
+      auto fetcher = std::make_unique<MockPacFileFetcher>();
+      auto* fetcher_ptr = fetcher.get();
+      service.SetPacFileFetchers(
+          std::move(fetcher), std::make_unique<DoNothingDhcpPacFileFetcher>());
+
+      ProxyInfo info;
+      TestCompletionCallback callback;
+      std::unique_ptr<ProxyResolutionRequest> request;
+      ASSERT_THAT(service.ResolveProxy(GURL("httpps://example.test/"), "GET",
+                                       NetworkAnonymizationKey(),
+                                       handles::kInvalidNetworkHandle, &info,
+                                       callback.callback(), &request,
+                                       NetLogWithSource(), DEFAULT_PRIORITY),
+                  IsError(ERR_IO_PENDING));
+      EXPECT_TRUE(factory_ptr->pending_requests().empty());
+      ASSERT_TRUE(fetcher_ptr->has_pending_request());
+      EXPECT_EQ(GURL("http://wpad/wpad.dat"),
+                fetcher_ptr->pending_request_url());
+      fetcher_ptr->NotifyFetchCompletion(ERR_NAME_NOT_RESOLVED, std::string());
+
+      EXPECT_EQ(mandatory ? ERR_MANDATORY_PROXY_CONFIGURATION_FAILED : OK,
+                callback.WaitForResult());
+      if (mandatory) {
+        EXPECT_TRUE(info.is_empty());
+      } else if (manual_proxy) {
+        EXPECT_EQ("[foopy:8080]", info.proxy_chain().ToDebugString());
+      } else {
+        EXPECT_TRUE(info.is_direct_only());
+      }
+      EXPECT_TRUE(factory_ptr->pending_requests().empty());
+    }
+  }
+}
+
+TEST_F(ConfiguredProxyResolutionServiceTest, HttppsHonorsExplicitPacResult) {
+  for (bool mandatory : {false, true}) {
+    SCOPED_TRACE(mandatory);
+    for (bool direct : {false, true}) {
+      SCOPED_TRACE(direct);
+      ProxyConfig config =
+          ProxyConfig::CreateFromCustomPacURL(GURL("http://foopy/proxy.pac"));
+      config.set_pac_mandatory(mandatory);
+      auto config_service = std::make_unique<MockProxyConfigService>(config);
+      MockAsyncProxyResolver resolver;
+      auto factory = std::make_unique<MockAsyncProxyResolverFactory>(false);
+      auto* factory_ptr = factory.get();
+      ConfiguredProxyResolutionService service(
+          std::move(config_service), std::move(factory),
+          mock_host_resolver_.get(), nullptr, /*quick_check_enabled=*/true);
+      ProxyInfo info;
+      TestCompletionCallback callback;
+      std::unique_ptr<ProxyResolutionRequest> request;
+      ASSERT_THAT(
+          service.ResolveProxy(
+              GURL("httpps://user:pass@example.test/private?q=secret#ref"),
+              "GET", NetworkAnonymizationKey(), handles::kInvalidNetworkHandle,
+              &info, callback.callback(), &request, NetLogWithSource(),
+              DEFAULT_PRIORITY),
+          IsError(ERR_IO_PENDING));
+      ASSERT_EQ(1u, factory_ptr->pending_requests().size());
+      factory_ptr->pending_requests()[0]->CompleteNowWithForwarder(OK,
+                                                                   &resolver);
+      ASSERT_EQ(1u, resolver.pending_jobs().size());
+      EXPECT_EQ(GURL("httpps://example.test/"),
+                resolver.pending_jobs()[0]->url());
+      resolver.pending_jobs()[0]->results()->UsePacString(
+          direct ? "DIRECT" : "PROXY foopy:8080");
+      resolver.pending_jobs()[0]->CompleteNow(OK);
+      EXPECT_THAT(callback.WaitForResult(), IsOk());
+      if (direct) {
+        EXPECT_TRUE(info.is_direct_only());
+      } else {
+        EXPECT_EQ("[foopy:8080]", info.proxy_chain().ToDebugString());
+        EXPECT_FALSE(
+            info.Fallback(ERR_PROXY_CONNECTION_FAILED, NetLogWithSource()));
+        EXPECT_TRUE(info.is_empty());
+      }
+    }
+  }
+}
+
 // The proxy list could potentially contain the DIRECT fallback choice
 // in a location other than the very end of the list, and could even
 // specify it multiple times.

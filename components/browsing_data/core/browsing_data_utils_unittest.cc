@@ -319,4 +319,13 @@ TEST_F(BrowsingDataUtilsTest, SkillsCounterResult) {
   }
 }
 
+TEST_F(BrowsingDataUtilsTest, CookieSourceSchemeForDisplayPreservesHttpps) {
+  using Scheme = net::CookieSourceScheme;
+  EXPECT_EQ(Scheme::kHttpps, CookieSourceSchemeForDisplay(Scheme::kHttpps));
+  EXPECT_EQ(Scheme::kSecure, CookieSourceSchemeForDisplay(Scheme::kSecure));
+  EXPECT_EQ(Scheme::kNonSecure,
+            CookieSourceSchemeForDisplay(Scheme::kNonSecure));
+  EXPECT_EQ(Scheme::kSecure, CookieSourceSchemeForDisplay(Scheme::kUnset));
+}
+
 }  // namespace browsing_data

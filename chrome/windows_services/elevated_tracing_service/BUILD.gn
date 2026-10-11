@@ -10,6 +10,11 @@ import("//testing/test.gni")
 midl("tracing_service_idl") {
   sources = [ "tracing_service_idl.idl" ]
 
+  if (!is_chrome_branded && !is_chrome_for_testing) {
+    # The service uses OLE Automation, not the generated custom proxy stub.
+    dynamic_guids = "ignore_proxy_stub,E0B03E2D-7682-4D83-B9FF-4574AF720500=61140B98-D78F-531F-8D88-4AE925EEDDAD"
+  }
+
   writes_tlb = true
 }
 

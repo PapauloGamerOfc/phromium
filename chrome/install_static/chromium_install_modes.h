@@ -21,7 +21,7 @@ inline constexpr wchar_t kCompanyPathName[] = L"";
 
 // The brand-specific product name to be included as a component of the install
 // and user data directory paths.
-inline constexpr wchar_t kProductPathName[] = L"Chromium";
+inline constexpr wchar_t kProductPathName[] = L"Phromium";
 
 // The brand-specific safe browsing client name.
 inline constexpr char kSafeBrowsingName[] = "chromium";
@@ -54,47 +54,47 @@ inline constexpr auto kInstallModes = std::to_array<InstallConstants>({
         .logo_suffix = L"",  // No logo suffix for the primary install mode.
         .app_guid =
             L"",  // Empty app_guid since no integration with Google Update.
-        .base_app_name = L"Chromium",              // A distinct base_app_name.
-        .base_app_id = L"Chromium",                // A distinct base_app_id.
-        .browser_prog_id_prefix = L"ChromiumHTM",  // Browser ProgID prefix.
+        .base_app_name = L"Phromium",              // A distinct base_app_name.
+        .base_app_id = L"Phromium",                // A distinct base_app_id.
+        .browser_prog_id_prefix = L"PhromiumHTM",  // Browser ProgID prefix.
         .browser_prog_id_description =
-            L"Chromium HTML Document",  // Browser ProgID description.
-        .direct_launch_url_scheme = "chromium",
-        .pdf_prog_id_prefix = L"ChromiumPDF",  // PDF ProgID prefix.
+            L"Phromium HTML Document",  // Browser ProgID description.
+        .direct_launch_url_scheme = "phromium",
+        .pdf_prog_id_prefix = L"PhromiumPDF",  // PDF ProgID prefix.
         .pdf_prog_id_description =
-            L"Chromium PDF Document",  // PDF ProgID description.
+            L"Phromium PDF Document",  // PDF ProgID description.
         .active_setup_guid =
-            L"{7D2B3E1D-D096-4594-9D8F-A6667F12E0AC}",  // Active Setup
+            L"{15DB0A7D-A913-55D8-9728-4F1D322F7C27}",  // Active Setup
                                                         // GUID.
-        .toast_activator_clsid = {0x635EFA6F,
-                                  0x08D6,
-                                  0x4EC9,
-                                  {0xBD, 0x14, 0x8A, 0x0F, 0xDE, 0x97, 0x51,
-                                   0x59}},  // Toast Activator CLSID.
-        .elevator_clsid = {0xD133B120,
-                           0x6DB4,
-                           0x4D6B,
-                           {0x8B, 0xFE, 0x83, 0xBF, 0x8C, 0xA1, 0xB1,
-                            0xB0}},  // Elevator CLSID.
-        .elevator_iid = {0xbb19a0e5,
-                         0xc6,
-                         0x4966,
-                         {0x94, 0xb2, 0x5a, 0xfe, 0xc6, 0xfe, 0xd9,
-                          0x3a}},  // IElevator IID and TypeLib
-        // {BB19A0E5-00C6-4966-94B2-5AFEC6FED93A}.
+        .toast_activator_clsid = {0xd376dfae,
+                                  0x36ac,
+                                  0x537c,
+                                  {0x9e, 0x89, 0x59, 0xd7, 0xbe, 0x7e, 0x8a,
+                                   0x07}},  // Toast Activator CLSID.
+        .elevator_clsid = {0x770905cf,
+                           0x2e8a,
+                           0x5deb,
+                           {0x87, 0xea, 0x5b, 0xc2, 0xd2, 0xf1, 0xc4,
+                            0xab}},  // Elevator CLSID.
+        .elevator_iid = {0x51333cf0,
+                         0xf660,
+                         0x530e,
+                         {0x82, 0x97, 0x96, 0x73, 0x7e, 0x1b, 0xa8,
+                          0xe8}},  // IElevator IID and TypeLib
+        // {51333CF0-F660-530E-8297-96737E1BA8E8}.
         .old_elevator_iids = {},
-        .tracing_service_clsid = {0x83f69367,
-                                  0x442d,
-                                  0x447f,
-                                  {0x8b, 0xcc, 0x0e, 0x3f, 0x97, 0xbe, 0x9c,
-                                   0xf2}},  // SystemTraceSession CLSID.
-        .tracing_service_iid = {0xe0b03e2d,
-                                0x7682,
-                                0x4d83,
-                                {0xb9, 0xff, 0x45, 0x74, 0xaf, 0x72, 0x05,
-                                 0x00}},  // ISystemTraceSessionChromium IID and
+        .tracing_service_clsid = {0x71f276ea,
+                                  0x98e3,
+                                  0x5bfb,
+                                  {0x84, 0xe7, 0x03, 0x4c, 0xe1, 0xc7, 0x0e,
+                                   0x40}},  // SystemTraceSession CLSID.
+        .tracing_service_iid = {0x61140b98,
+                                0xd78f,
+                                0x531f,
+                                {0x8d, 0x88, 0x4a, 0xe9, 0x25, 0xee, 0xdd,
+                                 0xad}},  // ISystemTraceSessionChromium IID and
                                           // TypeLib
-        .old_tracing_service_iids = kOldTracingServiceIids,
+        .old_tracing_service_iids = {},
         .default_channel_name =
             L"",  // Empty default channel name since no update integration.
         .channel_strategy = ChannelStrategy::UNSUPPORTED,
@@ -111,7 +111,7 @@ inline constexpr auto kInstallModes = std::to_array<InstallConstants>({
         .sandbox_sid_prefix =
             L"S-1-15-2-3251537155-1984446955-2931258699-841473695-"
             L"1938553385-"
-            L"924012148-",  // App container sid prefix for sandbox.
+            L"366676605-",  // Phromium app container sid prefix for sandbox.
     },
 });
 

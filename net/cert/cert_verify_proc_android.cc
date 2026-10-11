@@ -444,6 +444,12 @@ int CertVerifyProcAndroid::VerifyInternal(X509Certificate* cert,
                                           int flags,
                                           CertVerifyResult* verify_result,
                                           const NetLogWithSource& net_log) {
+  // The platform verifier has no HTTPPS leaf-key profile. Never silently use
+  // its ordinary TLS policy for this request; the builtin verifier supports it.
+  if (flags & VERIFY_HTTPPS_SERVER) {
+    verify_result->cert_status |= CERT_STATUS_INVALID;
+    return ERR_CERT_INVALID;
+  }
   std::vector<std::string> cert_bytes;
   GetChainDEREncodedBytes(cert, &cert_bytes);
   if (!VerifyFromAndroidTrustManager(cert_bytes, hostname, ocsp_response,

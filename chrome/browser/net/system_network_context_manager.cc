@@ -5,11 +5,15 @@
 #include "chrome/browser/net/system_network_context_manager.h"
 
 #include <algorithm>
+#include <string>
 #include <unordered_map>
 #include <utility>
+#include <vector>
 
 #include "base/auto_reset.h"
+#include "base/base64.h"
 #include "base/build_time.h"
+#include "base/check.h"
 #include "base/check_is_test.h"
 #include "base/command_line.h"
 #include "base/compiler_specific.h"
@@ -36,6 +40,7 @@
 #include "chrome/browser/net/chrome_mojo_proxy_resolver_factory.h"
 #include "chrome/browser/net/convert_explicitly_allowed_network_ports_pref.h"
 #include "chrome/browser/net/default_dns_over_https_config_source.h"
+#include "chrome/browser/net/httpps_builtin_root.h"
 #include "chrome/browser/safe_browsing/safe_browsing_service.h"
 #include "chrome/browser/ssl/sct_reporting_service.h"
 #include "chrome/browser/ssl/ssl_config_service_manager.h"
@@ -194,7 +199,7 @@ network::mojom::HttpAuthDynamicParamsPtr CreateHttpAuthDynamicParams(
       auth_dynamic_params->patterns_allowed_to_use_all_schemes_for_proxies
           .push_back(item.GetString());
     }
-  // TODO(crbug.com/568728957): Remove once all users are on M161+.
+    // TODO(crbug.com/568728957): Remove once all users are on M161+.
   } else if (CHROME_VERSION_MAJOR < 161) {
     auth_dynamic_params->patterns_allowed_to_use_all_schemes_for_proxies =
         auth_dynamic_params->patterns_allowed_to_use_all_schemes;
@@ -983,6 +988,41 @@ void SystemNetworkContextManager::AddSSLConfigToNetworkContextParams(
 
 void SystemNetworkContextManager::ConfigureDefaultNetworkContextParams(
     network::mojom::NetworkContextParams* network_context_params) {
+  // Each flag accepts one public certificate, never a key or verification
+  // bypass. A private HTTPPS proxy CA is not added as a trusted origin issuer.
+  // Missing or malformed input adds no private anchor; built-in origin trust
+  // and the ordinary browser verifier remain unchanged.
+  const auto parse_httpps_root = [](const char* switch_name) {
+    std::vector<std::vector<uint8_t>> roots;
+    const std::string root_base64 =
+        base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
+            switch_name);
+    if (root_base64.empty()) {
+      return roots;
+    }
+    std::string root_der;
+    if (root_base64.size() <= 87384 &&
+        base::Base64Decode(root_base64, &root_der) && !root_der.empty() &&
+        root_der.size() <= 65536) {
+      roots.emplace_back(root_der.begin(), root_der.end());
+    } else {
+      LOG(ERROR) << "Invalid --" << switch_name << " public DER certificate";
+    }
+    return roots;
+  };
+  // This browser-specific root is deliberately not passed to CertVerifier or
+  // installed in the OS. Only HTTPPS origin sockets consume this field.
+  std::string builtin_root_der;
+  CHECK(
+      base::Base64Decode(phromium::kHttppsOriginRootBase64, &builtin_root_der));
+  network_context_params->httpps_trust_anchors = {
+      std::vector<uint8_t>(builtin_root_der.begin(), builtin_root_der.end())};
+  for (auto& additional_root : parse_httpps_root("httpps-trust-anchor")) {
+    network_context_params->httpps_trust_anchors.push_back(
+        std::move(additional_root));
+  }
+  network_context_params->httpps_proxy_trust_anchors =
+      parse_httpps_root("httpps-proxy-trust-anchor");
   variations::UpdateCorsExemptHeaderForVariations(network_context_params);
 
   if (auto* variations_ids_provider =

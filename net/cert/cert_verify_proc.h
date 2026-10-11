@@ -67,9 +67,13 @@ class NET_EXPORT CertVerifyProc
     // stricter fashion as required by Signed Exchanges.
     VERIFY_SXG_CT_REQUIREMENTS = 1 << 3,
 
+    // HTTPPS-only leaf key profile. All HTTPS trust and chain policies still
+    // apply; implementations that do not support this profile must fail closed.
+    VERIFY_HTTPPS_SERVER = 1 << 4,
+
     // Also update GetNetConstants() in net/log/net_log_util.cc when updating
     // this enum.
-    VERIFY_FLAGS_LAST = VERIFY_SXG_CT_REQUIREMENTS
+    VERIFY_FLAGS_LAST = VERIFY_HTTPPS_SERVER
   };
   // LINT.ThenChange(/net/log/net_log_util.cc:CertVerifyProc.VerifyFlags)
 

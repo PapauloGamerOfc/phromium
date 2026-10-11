@@ -270,6 +270,8 @@ TEST_P(AllowedByNosniffTest, AllTheSchemes) {
   } data[] = {
       {"http://example.com/bla.js", false},
       {"https://example.com/bla.js", false},
+      {"httpps://example.com/bla.js", false},
+      {"httpps://example.com/bla.mjs", false},
       {"file://etc/passwd.js", true},
       {"file://etc/passwd", false},
       {"chrome://dino/dino.js", true},

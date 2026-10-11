@@ -33,6 +33,7 @@ bool ProfileIOData::IsHandledProtocol(std::string_view scheme) {
   constexpr auto kProtocolList = base::MakeFixedFlatSet<std::string_view>({
       url::kHttpScheme,
       url::kHttpsScheme,
+      url::kHttppsScheme,
 #if BUILDFLAG(ENABLE_WEBSOCKETS)
       url::kWsScheme,
       url::kWssScheme,

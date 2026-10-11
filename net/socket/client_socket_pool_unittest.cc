@@ -23,6 +23,17 @@ namespace net {
 
 namespace {
 
+TEST(ClientSocketPool, HttppsNeverSharesHttpsSocketGroup) {
+  auto group = [](const char* scheme) {
+    return ClientSocketPool::GroupId(
+        url::SchemeHostPort(scheme, "example.test", 343),
+        PrivacyMode::PRIVACY_MODE_DISABLED, NetworkAnonymizationKey(),
+        SecureDnsPolicy::kAllow, false, handles::kInvalidNetworkHandle);
+  };
+  EXPECT_NE(group(url::kHttppsScheme), group(url::kHttpsScheme));
+  EXPECT_NE(group(url::kHttppsScheme), group(url::kHttpScheme));
+}
+
 TEST(ClientSocketPool, GroupIdOperators) {
   base::test::ScopedFeatureList feature_list;
   feature_list.InitAndEnableFeature(

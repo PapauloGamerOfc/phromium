@@ -12,6 +12,13 @@ import("//testing/test.gni")
 midl("elevation_service_idl") {
   sources = [ "elevation_service_idl.idl" ]
 
+  if (!is_chrome_branded && !is_chrome_for_testing) {
+    # Keep Phromium's COM registrations independent of Chromium. The MIDL
+    # helper updates headers, proxy tables and type libraries consistently.
+    # These interfaces use the OLE Automation marshaler, not a custom proxy.
+    dynamic_guids = "ignore_proxy_stub,B88C45B9-8825-4629-B83E-77CC67D9CEED=BBE01D77-81B9-5DF9-85C1-299380B2F6A7,BB19A0E5-00C6-4966-94B2-5AFEC6FED93A=51333CF0-F660-530E-8297-96737E1BA8E8"
+  }
+
   writes_tlb = true
 }
 

@@ -337,6 +337,11 @@ bool KURL::ProtocolIsInHttpFamily() const {
   return protocol_is_in_http_family_;
 }
 
+bool KURL::ProtocolIsInHttpFamilyOrHTTPPS() const {
+  return protocol_is_in_http_family_ ||
+         (IsValid() && ProtocolIs(url::kHttppsScheme));
+}
+
 bool KURL::HasPath() const {
   // Note that http://www.google.com/" has a path, the path is "/". This can
   // return false only for invalid or nonstandard URLs.

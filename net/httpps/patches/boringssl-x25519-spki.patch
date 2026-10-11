@@ -1,0 +1,13 @@
+diff --git a/pki/verify_signed_data.cc b/pki/verify_signed_data.cc
+--- a/pki/verify_signed_data.cc
++++ b/pki/verify_signed_data.cc
+@@ -162,6 +162,9 @@ bool ParsePublicKey(der::Input public_key_spki,
+       // TODO(davidben): Remove P-521 from here, or let callers configure this.
+       // We don't advertise it in TLS.
+       EVP_pkey_ec_p521(),
++      // Parsing does not confer trust: the path delegate still rejects X25519
++      // unless the caller explicitly permits an HTTPPS leaf key.
++      EVP_pkey_x25519(),
+       EVP_pkey_ml_dsa_44(),
+       EVP_pkey_ml_dsa_65(),
+       EVP_pkey_ml_dsa_87(),

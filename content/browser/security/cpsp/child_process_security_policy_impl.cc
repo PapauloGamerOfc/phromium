@@ -1228,6 +1228,7 @@ void ChildProcessSecurityPolicyImpl::RegisterDefaultSchemes() {
   // We know about these schemes and believe them to be safe.
   RegisterWebSafeScheme(url::kHttpScheme);
   RegisterWebSafeScheme(url::kHttpsScheme);
+  RegisterWebSafeScheme(url::kHttppsScheme);
 #if BUILDFLAG(ENABLE_WEBSOCKETS)
   RegisterWebSafeScheme(url::kWsScheme);
   RegisterWebSafeScheme(url::kWssScheme);

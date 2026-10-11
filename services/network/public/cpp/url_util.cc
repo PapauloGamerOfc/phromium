@@ -9,7 +9,7 @@
 namespace network {
 
 bool IsURLHandledByNetworkService(const GURL& url) {
-  return (url.SchemeIsHTTPOrHTTPS() || url.SchemeIsWSOrWSS());
+  return url.SchemeIsHTTPOrHTTPSOrHTTPPS() || url.SchemeIsWSOrWSS();
 }
 
 GURL SerializeResponseUrlForReporting(const GURL& url) {

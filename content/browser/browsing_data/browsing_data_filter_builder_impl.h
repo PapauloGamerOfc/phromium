@@ -44,6 +44,7 @@ class CONTENT_EXPORT BrowsingDataFilterBuilderImpl
   bool MatchesNothing() override;
   void SetPartitionedCookiesOnly(bool value) override;
   bool PartitionedCookiesOnly() const override;
+  void SetCookieHttppsNamespace(std::optional<bool> value) override;
   void SetStoragePartitionConfig(
       const StoragePartitionConfig& storage_partition_config) override;
   std::optional<StoragePartitionConfig> GetStoragePartitionConfig() override;
@@ -76,6 +77,7 @@ class CONTENT_EXPORT BrowsingDataFilterBuilderImpl
       net::CookiePartitionKeyCollection::ContainsAll();
   std::optional<blink::StorageKey> storage_key_ = std::nullopt;
   bool partitioned_cookies_only_ = false;
+  std::optional<bool> cookie_httpps_namespace_;
   std::optional<StoragePartitionConfig> storage_partition_config_ =
       std::nullopt;
 };

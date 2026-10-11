@@ -361,9 +361,10 @@ BASE_FEATURE(kOmniboxDebounceKeyboardVisibility, ENABLED);
 // necessary.
 // TODO(crbug.com/375004882): On non-iOS platforms, this feature is now
 // superseded by HTTPS-Upgrades and will be removed in the near future.
+// Phromium does not prefer HTTPS for schemeless input on any platform.
 BASE_FEATURE(kDefaultTypedNavigationsToHttps,
              "OmniboxDefaultTypedNavigationsToHttps",
-             enable_if(IS_IOS));
+             DISABLED);
 
 // Override the delay to create a spare renderer when the omnibox is focused
 // on Android.

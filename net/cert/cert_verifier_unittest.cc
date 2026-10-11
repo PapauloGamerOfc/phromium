@@ -101,6 +101,17 @@ TEST(CertVerifierTest, RequestParamsComparators) {
           false,
       },
       {
+          // An HTTPPS validation result must never satisfy an HTTPS request.
+          CertVerifier::RequestParams(ok_cert, "www.example.test",
+                                      CertVerifier::VERIFY_HTTPPS_SERVER,
+                                      /*ocsp_response=*/std::string(),
+                                      /*sct_list=*/std::string()),
+          CertVerifier::RequestParams(ok_cert, "www.example.test", 0,
+                                      /*ocsp_response=*/std::string(),
+                                      /*sct_list=*/std::string()),
+          false,
+      },
+      {
           // Different OCSP responses.
           CertVerifier::RequestParams(ok_cert, "www.example.test", 0,
                                       "ocsp response",

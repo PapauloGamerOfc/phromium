@@ -162,11 +162,16 @@ NET_EXPORT GURL CookieDomainAndPathToURL(std::string_view domain,
 
 // Convenience for converting a cookie origin (domain and https pair) to a URL.
 NET_EXPORT GURL CookieOriginToURL(std::string_view domain, bool is_https);
+// Preserves the HTTPPS cookie namespace when reconstructing an origin.
+NET_EXPORT GURL CookieOriginToURL(std::string_view domain,
+                                  CookieSourceScheme source_scheme);
 
 // Returns a URL that could have been the cookie's source.
 // Not guaranteed to actually be the URL that set the cookie. Not guaranteed to
 // be a valid GURL. Intended as a shim for SetCanonicalCookieAsync calls, where
 // a source URL is required but only a source scheme may be available.
+// HTTPPS cookies always retain the HTTPPS scheme, regardless of the requested
+// simulated scheme, to preserve their independent namespace.
 NET_EXPORT GURL SimulatedCookieSource(const CanonicalCookie& cookie,
                                       std::string_view source_scheme);
 

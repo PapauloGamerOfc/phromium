@@ -8,10 +8,13 @@
 #include <stdint.h>
 
 #include <memory>
+#include <optional>
+#include <string>
 #include <vector>
 
 #include "base/containers/flat_set.h"
 #include "base/memory/raw_ptr.h"
+#include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
 #include "net/base/load_timing_info.h"
 #include "net/base/net_export.h"
@@ -22,6 +25,10 @@
 #include "net/ssl/ssl_config_service.h"
 
 namespace net {
+
+namespace httpps {
+struct SessionTicket;
+}
 
 class HostPortPair;
 class SCTAuditingDelegate;
@@ -168,6 +175,13 @@ class NET_EXPORT SSLClientContext : public SSLConfigService::Observer,
 
   const SSLContextConfig& config() { return config_; }
 
+  // Set once when the network session is constructed, before opening sockets.
+  // These additional public DER roots are only for HTTPPS origins, not HTTPS
+  // or proxies. HTTPPS also uses the browser verifier's default trust policy.
+  void SetHttppsTrustAnchors(const std::vector<std::string>& roots);
+  // Additional proxy trust is independent; neither private store uses the other.
+  void SetHttppsProxyTrustAnchors(const std::vector<std::string>& roots);
+
   SSLConfigService* ssl_config_service() { return ssl_config_service_; }
   CertVerifier* cert_verifier() { return cert_verifier_; }
   TransportSecurityState* transport_security_state() {
@@ -266,6 +280,24 @@ class NET_EXPORT SSLClientContext : public SSLConfigService::Observer,
   void OnClientCertStoreChanged() override;
 
  private:
+  friend class SSLClientContextHttppsTestPeer;
+  struct HttppsSessionCache;
+  std::optional<httpps::SessionTicket> TakeHttppsSession(
+      const HostPortPair& server, const SSLConfig& config);
+  void StoreHttppsSession(uint64_t generation,
+                         const HostPortPair& server,
+                         const SSLConfig& config,
+                         httpps::SessionTicket ticket);
+  void ClearHttppsSessions();
+  void SynchronizeHttppsSessionGeneration();
+
+  std::vector<std::string> httpps_trust_anchors_;
+  std::vector<std::string> httpps_proxy_trust_anchors_;
+  // Memory-only, disjoint from BoringSSL's ordinary TLS session cache. The
+  // generation also rejects tickets from handshakes begun under old policy.
+  std::unique_ptr<HttppsSessionCache> httpps_session_cache_;
+  uint64_t httpps_session_generation_ = 0;
+
   void NotifySSLConfigChanged(SSLConfigChangeType change_type);
   void NotifySSLConfigForServersChanged(
       const base::flat_set<HostPortPair>& servers);
@@ -281,6 +313,7 @@ class NET_EXPORT SSLClientContext : public SSLConfigService::Observer,
   SSLClientAuthCache ssl_client_auth_cache_;
 
   base::ObserverList<Observer, true /* check_empty */> observers_;
+  base::WeakPtrFactory<SSLClientContext> weak_factory_{this};
 };
 
 }  // namespace net

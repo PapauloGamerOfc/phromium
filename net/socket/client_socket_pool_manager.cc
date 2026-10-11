@@ -113,8 +113,9 @@ int InitSocketPoolHelper(
       session->GetSocketPool(socket_pool_type, proxy_info.proxy_chain());
   ClientSocketPool::RespectLimits respect_limits =
       ClientSocketPool::RespectLimits::ENABLED;
-  if ((request_load_flags & LOAD_IGNORE_LIMITS) != 0)
+  if ((request_load_flags & LOAD_IGNORE_LIMITS) != 0) {
     respect_limits = ClientSocketPool::RespectLimits::DISABLED;
+  }
 
   std::optional<NetworkTrafficAnnotationTag> proxy_annotation =
       proxy_info.is_direct() ? std::nullopt
@@ -287,7 +288,8 @@ int PreconnectSocketsForHttpRequest(
   // Expect websocket schemes (ws and wss) to be converted to the http(s)
   // equivalent.
   DCHECK(endpoint.scheme() == url::kHttpScheme ||
-         endpoint.scheme() == url::kHttpsScheme);
+         endpoint.scheme() == url::kHttpsScheme ||
+         endpoint.scheme() == url::kHttppsScheme);
 
   return InitSocketPoolHelper(
       std::move(endpoint), request_load_flags, request_priority, session,

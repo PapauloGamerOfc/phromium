@@ -697,7 +697,7 @@ void CookieMonster::SetPersistSessionCookies(bool persist_session_cookies) {
 
 // static
 std::vector<std::string> CookieMonster::GetDefaultCookieableSchemes() {
-  return std::vector<std::string>{"http", "https", "ws", "wss"};
+  return std::vector<std::string>{"http", "https", "httpps", "ws", "wss"};
 }
 
 CookieChangeDispatcher& CookieMonster::GetChangeDispatcher() {
@@ -2988,7 +2988,8 @@ CookieMonster::IsCookieSentToSamePortThatSetIt(
   // means this is a newer cookie that therefore has its scheme set as well.
   DCHECK(source_scheme != CookieSourceScheme::kUnset);
   std::string source_scheme_string =
-      source_scheme == CookieSourceScheme::kSecure
+      source_scheme == CookieSourceScheme::kHttpps ? url::kHttppsScheme
+      : source_scheme == CookieSourceScheme::kSecure
           ? url::kHttpsScheme
           : url::kHttpScheme;  // wss/ws have the same default port values as
                                // https/http, so it's ok that we use these.

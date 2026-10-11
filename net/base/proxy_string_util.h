@@ -28,6 +28,7 @@ namespace net {
 // "DIRECT"
 // "PROXY"
 // "HTTPS"
+// "HTTPPS" (Phromium experimental TLS 2.0 transport)
 // "SOCKS4"
 // "SOCKS5"
 // "SOCKS" (canonicalizes to "SOCKS4")
@@ -43,6 +44,7 @@ namespace net {
 //   "DIRECT"           {scheme=DIRECT}
 //   "SOCKS5 foopy"     {scheme=SOCKS5, host="foopy", port=1080}
 //   "HTTPS foopy:123"  {scheme=HTTPS, host="foopy", port=123}
+//   "HTTPPS foopy"     {scheme=HTTPPS, host="foopy", port=343}
 //   "QUIC foopy:123"   {scheme=QUIC, host="foopy", port=123}
 //   "BLAH xxx:xx"      INVALID
 NET_EXPORT ProxyChain
@@ -66,6 +68,7 @@ NET_EXPORT std::string ProxyServerToPacResultElement(
 // "socks" (equivalent to "socks5")
 // "direct"
 // "https"
+// "httpps"
 // "quic"
 //
 // Both <scheme> and <port> are optional. If <scheme> is omitted, it will be
@@ -83,6 +86,7 @@ NET_EXPORT std::string ProxyServerToPacResultElement(
 //   "socks5://foopy"   {scheme=SOCKS5, host="foopy", port=1080}
 //   "http://foopy:17"  {scheme=HTTP, host="foopy", port=17}
 //   "https://foopy:17" {scheme=HTTPS, host="foopy", port=17}
+//   "httpps://foopy"   {scheme=HTTPPS, host="foopy", port=343}
 //   "quic://foopy:17"  {scheme=QUIC, host="foopy", port=17}
 //   "direct://"        {scheme=DIRECT}
 //   "foopy:X"          INVALID -- bad port.

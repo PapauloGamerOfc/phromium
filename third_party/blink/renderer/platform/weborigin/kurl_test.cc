@@ -845,6 +845,22 @@ TEST(KURLTest, PathAfterLastSlash) {
   EXPECT_EQ(22u, invalid_utf8.PathAfterLastSlash());
 }
 
+TEST(KURLTest, HttppsCanonicalizationAndHttpFamilyOptIn) {
+  KURL url("HTTPPS://Example.test:343/path?q=1#fragment");
+  ASSERT_TRUE(url.IsValid());
+  EXPECT_EQ("httpps://example.test/path?q=1#fragment", url.GetString());
+  EXPECT_FALSE(url.HasPort());
+  EXPECT_FALSE(url.ProtocolIsInHttpFamily());
+  EXPECT_TRUE(url.ProtocolIsInHttpFamilyOrHTTPPS());
+  EXPECT_EQ("httpps://example.test/path?q=1",
+            url.UrlStrippedForUseAsReferrer().GetString());
+  url.SetPort(443);
+  EXPECT_EQ("httpps://example.test:443/path?q=1#fragment", url.GetString());
+  url.SetPort(343);
+  EXPECT_FALSE(url.HasPort());
+  EXPECT_FALSE(KURL("httpps://").ProtocolIsInHttpFamilyOrHTTPPS());
+}
+
 TEST(KURLTest, ProtocolIsInHttpFamily) {
   const KURL url1("http://host/path/to/file.txt");
   EXPECT_TRUE(url1.ProtocolIsInHttpFamily());

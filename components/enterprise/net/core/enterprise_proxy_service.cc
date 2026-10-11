@@ -32,6 +32,7 @@
 #include "net/log/net_log_source_type.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "url/gurl.h"
+#include "url/url_constants.h"
 
 namespace enterprise_net {
 
@@ -316,6 +317,14 @@ EnterpriseProxyService::ClassifyProxyAuthChallenge(
   };
 
   if (!auth_info.is_proxy) {
+    return terminal(Decision::kNotApplicable);
+  }
+
+  // Enterprise provisioning has no HTTPPS transport profile. Do not alias an
+  // HTTPPS challenge to the HTTPS route below just because the host and port
+  // match: its credentials and managed-error handling belong to another
+  // authentication namespace.
+  if (auth_info.challenger.scheme() == url::kHttppsScheme) {
     return terminal(Decision::kNotApplicable);
   }
 

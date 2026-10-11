@@ -3842,6 +3842,7 @@ chromium-metrics-reviews@google.com.
   </token>
   <token key="ProxySchema">
     <variant name="Http"/>
+    <variant name="Httpps"/>
     <variant name="Https"/>
     <variant name="Quic"/>
   </token>

@@ -75,6 +75,8 @@ EnumTraits<network::mojom::ProxyScheme, net::ProxyServer::Scheme>::ToMojom(
       return network::mojom::ProxyScheme::kHttps;
     case ProxyServer::SCHEME_QUIC:
       return network::mojom::ProxyScheme::kQuic;
+    case ProxyServer::SCHEME_HTTPPS:
+      return network::mojom::ProxyScheme::kHttpps;
   }
   NOTREACHED();
 }
@@ -96,6 +98,8 @@ EnumTraits<network::mojom::ProxyScheme, net::ProxyServer::Scheme>::FromMojom(
       return ProxyServer::SCHEME_HTTPS;
     case network::mojom::ProxyScheme::kQuic:
       return ProxyServer::SCHEME_QUIC;
+    case network::mojom::ProxyScheme::kHttpps:
+      return ProxyServer::SCHEME_HTTPPS;
   }
   NOTREACHED();
 }

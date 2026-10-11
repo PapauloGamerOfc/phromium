@@ -107,6 +107,27 @@ class GURLTest : public testing::Test {
 
 // Different types of URLs should be handled differently, and handed off to
 // different canonicalizers.
+TEST_F(GURLTest, HttppsUsesDistinctSchemeAndDefaultPort) {
+  const GURL experimental("HTTPPS://Example.test:343/path?q=1#fragment");
+  ASSERT_TRUE(experimental.is_valid());
+  EXPECT_EQ("httpps://example.test/path?q=1#fragment", experimental.spec());
+  EXPECT_TRUE(experimental.IsStandard());
+  EXPECT_TRUE(experimental.SchemeIsCryptographic());
+  EXPECT_TRUE(experimental.SchemeIsHTTPOrHTTPSOrHTTPPS());
+  EXPECT_FALSE(experimental.SchemeIsHTTPOrHTTPS());
+  EXPECT_FALSE(experimental.SchemeIs(url::kHttpsScheme));
+  EXPECT_EQ(343, experimental.EffectiveIntPort());
+  EXPECT_EQ("httpps://example.test/next", experimental.Resolve("/next").spec());
+  EXPECT_EQ("httpps://example.test/path?q=1", experimental.GetAsReferrer().spec());
+  EXPECT_EQ(443, GURL("httpps://example.test:443/").EffectiveIntPort());
+  EXPECT_EQ("httpps://example.test:443/",
+            GURL("httpps://example.test:443/").spec());
+  EXPECT_FALSE(GURL("httpps://example.test:65536/").is_valid());
+  EXPECT_FALSE(GURL("httpps://").is_valid());
+  EXPECT_NE(experimental.DeprecatedGetOriginAsURL(),
+            GURL("https://example.test:343/"));
+}
+
 TEST_F(GURLTest, Types) {
   // URLs with unknown schemes should be treated as path URLs, even when they
   // have things like "://".

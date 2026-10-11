@@ -291,6 +291,8 @@ CookieSourceSchemeName GetSchemeNameEnum(const GURL& url) {
     return CookieSourceSchemeName::kHttpsScheme;
   } else if (url.SchemeIs(url::kHttpScheme)) {
     return CookieSourceSchemeName::kHttpScheme;
+  } else if (url.SchemeIs(url::kHttppsScheme)) {
+    return CookieSourceSchemeName::kHttppsScheme;
   } else if (url.SchemeIs(url::kWssScheme)) {
     return CookieSourceSchemeName::kWssScheme;
   } else if (url.SchemeIs(url::kWsScheme)) {

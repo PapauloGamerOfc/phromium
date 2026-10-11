@@ -106,13 +106,14 @@ def main() -> None:
         inst.stage_install_common()
 
         logging.info(f"Staging RPM install files in '{staging_dir}'...")
-        cron_file = staging_dir / "etc/cron.daily" / config.info_vars["PACKAGE"]
-        installer.process_template(
-            output_dir / "installer/common/rpmrepo.cron",
-            cron_file,
-            config.get_template_context(),
-        )
-        cron_file.chmod(installer.StandardPermissions.EXECUTABLE)
+        if config.repoconfig:
+            cron_file = staging_dir / "etc/cron.daily" / config.info_vars["PACKAGE"]
+            installer.process_template(
+                output_dir / "installer/common/rpmrepo.cron",
+                cron_file,
+                config.get_template_context(),
+            )
+            cron_file.chmod(installer.StandardPermissions.EXECUTABLE)
 
         # do_package logic
         logging.info(f"Packaging {args.arch}...")

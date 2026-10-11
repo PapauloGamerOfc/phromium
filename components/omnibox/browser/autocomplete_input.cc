@@ -311,7 +311,7 @@ metrics::OmniboxInputType AutocompleteInput::Parse(
     return metrics::OmniboxInputType::UNKNOWN;
   }
 
-  // If the user typed a scheme, and it's HTTP or HTTPS, we know how to parse it
+  // If the user typed HTTP, HTTPS or HTTPPS, we know how to parse it
   // well enough that we can fall through to the heuristics below.  If it's
   // something else, we can just determine our action based on what we do with
   // any input of this scheme.  In theory we could do better with some schemes
@@ -320,7 +320,9 @@ metrics::OmniboxInputType AutocompleteInput::Parse(
   if (parts->scheme.is_nonempty() &&
       !base::EqualsCaseInsensitiveASCII(parsed_scheme_utf8, url::kHttpScheme) &&
       !base::EqualsCaseInsensitiveASCII(parsed_scheme_utf8,
-                                        url::kHttpsScheme)) {
+                                        url::kHttpsScheme) &&
+      !base::EqualsCaseInsensitiveASCII(parsed_scheme_utf8,
+                                        url::kHttppsScheme)) {
     metrics::OmniboxInputType type =
         scheme_classifier.GetInputTypeForScheme(parsed_scheme_utf8);
     if (type != metrics::OmniboxInputType::EMPTY)

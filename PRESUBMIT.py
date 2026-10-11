@@ -976,6 +976,10 @@ _BANNED_CPP_FUNCTIONS: Sequence[BanRule] = (
             r'base/containers/span.h',
             # Test base::span<> compatibility against std::span<>.
             r'base/containers/span_unittest.cc',
+            # The isolated HTTPPS conformance harness has no //base dependency.
+            # This one adapter selects std only for its standalone CMake build;
+            # browser production builds continue to use base::span.
+            r'^net/httpps/portable\.h$',
             # //base/numerics can't use base or absl. So it uses std.
             r'base/numerics/.*',
             # These files are in a separate build target and use std::span to
@@ -1108,6 +1112,9 @@ _BANNED_CPP_FUNCTIONS: Sequence[BanRule] = (
             _THIRD_PARTY_EXCEPT_BLINK,
             # This uses openscreen API depending on std::chrono.
             'components/openscreen_platform/task_runner.cc',
+            # Isolated conformance tests have no //base dependency. The browser
+            # branch of this adapter uses base::TimeTicks, including mock time.
+            r'^net/httpps/portable\.h$',
         ]),
     BanRule(
         r'/#include <exception>',

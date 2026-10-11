@@ -21,6 +21,11 @@ fi
 
 remove_udev_symlinks
 
+# Phromium does not own an update repository or its signing keys.
+if [ "@@branding" != "google_chrome" ]; then
+  exit 0
+fi
+
 # Only remove the defaults file if it is not empty. An empty file was probably
 # put there by the sysadmin to disable automatic repository configuration, as
 # per the instructions on the package download page.

@@ -62,10 +62,13 @@ UniqueCookieKey UniqueCookieKey::Legacy(
     std::optional<CookiePartitionKey> partition_key,
     std::string name,
     std::string domain,
-    std::string path) {
+    std::string path,
+    bool is_httpps) {
   return UniqueCookieKey(KeyType::kLegacy, std::move(partition_key),
                          std::move(name), std::move(domain), std::move(path),
-                         /*source_scheme=*/std::nullopt,
+                         is_httpps
+                             ? std::make_optional(CookieSourceScheme::kHttpps)
+                             : std::nullopt,
                          /*port=*/std::nullopt);
 }
 

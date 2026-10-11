@@ -194,6 +194,10 @@ HttpNetworkSession::HttpNetworkSession(const HttpNetworkSessionParams& params,
   CHECK(http_server_properties_);
   DCHECK(context_.client_socket_factory);
 
+  ssl_client_context_.SetHttppsTrustAnchors(params.httpps_trust_anchors);
+  ssl_client_context_.SetHttppsProxyTrustAnchors(
+      params.httpps_proxy_trust_anchors);
+
   normal_socket_pool_manager_ = std::make_unique<ClientSocketPoolManagerImpl>(
       CreateCommonConnectJobParams(false /* for_websockets */),
       CreateCommonConnectJobParams(true /* for_websockets */),
@@ -389,6 +393,9 @@ void HttpNetworkSession::DisableQuic() {
 bool HttpNetworkSession::ShouldForceQuic(const url::SchemeHostPort& destination,
                                          const ProxyInfo& proxy_info,
                                          bool is_websocket) {
+  if (destination.scheme() == url::kHttppsScheme) {
+    return false;
+  }
   if (!IsQuicEnabled()) {
     return false;
   }

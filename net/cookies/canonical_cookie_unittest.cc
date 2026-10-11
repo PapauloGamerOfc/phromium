@@ -23,19 +23,24 @@
 #include "net/cookies/cookie_inclusion_status.h"
 #include "net/cookies/cookie_options.h"
 #include "net/cookies/cookie_partition_key.h"
+#include "net/cookies/cookie_util.h"
 #include "net/cookies/parsed_cookie.h"
+#include "net/cookies/ref_unique_cookie_key.h"
+#include "net/cookies/site_for_cookies.h"
+#include "net/cookies/unique_cookie_key.h"
 #include "net/http/http_util.h"
 #include "testing/gmock/include/gmock/gmock-matchers.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "url/gurl.h"
+#include "url/origin.h"
 #include "url/third_party/mozilla/url_parse.h"
 
 namespace net {
 
 namespace {
-const std::vector<std::string> kCookieableSchemes = {"http", "https", "ws",
-                                                     "wss"};
+const std::vector<std::string> kCookieableSchemes = {"http", "https", "httpps",
+                                                     "ws", "wss"};
 
 // Helper for testing BuildCookieLine
 void MatchCookieLineToVector(
@@ -2156,6 +2161,33 @@ void VerifyIncludeForRequestURLTestCases(
                                           test.expected_effective_samesite,
                                           access_semantics, true))
         << cookie->Name() << "=" << cookie->Value();
+  }
+}
+
+TEST(CanonicalCookieTest, HttppsSameSiteStrictDoesNotTreatHttpsAsSameSite) {
+  const GURL url("httpps://example.com");
+  auto cookie = CanonicalCookie::CreateForTesting(
+      url, "a=b; Secure; SameSite=Strict", base::Time::Now(),
+      CookieSourceType::kOther);
+  ASSERT_TRUE(cookie);
+  const CookieAccessParams params{CookieAccessSemantics::NONLEGACY,
+                                  CookieScopeSemantics::UNKNOWN, false};
+  for (const char* initiator :
+       {"httpps://example.com", "https://example.com"}) {
+    CookieOptions options;
+    options.set_same_site_cookie_context(
+        cookie_util::ComputeSameSiteContextForRequest(
+            "GET", {url}, SiteForCookies::FromUrl(url),
+            url::Origin::Create(GURL(initiator)),
+            /*is_main_frame_navigation=*/false,
+            /*force_ignore_site_for_cookies=*/false,
+            /*ignore_unsafe_method_for_same_site_lax=*/false));
+    const auto result = cookie->IncludeForRequestURL(url, options, params);
+    EXPECT_EQ(GURL(initiator).SchemeIs("httpps"), result.status.IsInclude());
+    if (!GURL(initiator).SchemeIs("httpps")) {
+      EXPECT_TRUE(result.status.HasExclusionReason(
+          CookieInclusionStatus::ExclusionReason::EXCLUDE_SAMESITE_STRICT));
+    }
   }
 }
 
@@ -5461,6 +5493,102 @@ TEST(CanonicalCookieTest, FromStorage) {
       url::PORT_INVALID, CookieSourceType::kOther,
       CanonicalCookieFromStorageCallSite::kTests);
   EXPECT_EQ(cc4->SourcePort(), url::PORT_INVALID);
+}
+
+TEST(CanonicalCookieTest, HttppsSourceSurvivesAllCreationPaths) {
+  const GURL url("httpps://www.example.test/");
+  const base::Time now = base::Time::Now();
+  for (bool secure : {false, true}) {
+    auto parsed = CanonicalCookie::CreateForTesting(
+        url, secure ? "a=b; Secure" : "a=b", now, CookieSourceType::kOther);
+    auto sanitized = CanonicalCookie::CreateSanitizedCookie(
+        url, "a", "b", "", "/", now, now + base::Days(30), now, secure, false,
+        CookieSameSite::LAX_MODE, COOKIE_PRIORITY_DEFAULT, std::nullopt,
+        nullptr);
+    ASSERT_TRUE(parsed);
+    ASSERT_TRUE(sanitized);
+    EXPECT_EQ(CookieSourceScheme::kHttpps, parsed->SourceScheme());
+    EXPECT_EQ(CookieSourceScheme::kHttpps, sanitized->SourceScheme());
+    EXPECT_EQ(343, parsed->SourcePort());
+    EXPECT_EQ(343, sanitized->SourcePort());
+    EXPECT_TRUE(parsed->IsSecure());
+    EXPECT_TRUE(sanitized->IsSecure());
+  }
+}
+
+TEST(CanonicalCookieTest, HttppsAlwaysHasDistinctCookieKeys) {
+  for (bool scheme_bound : {false, true}) {
+    base::test::ScopedFeatureList feature_list;
+    feature_list.InitWithFeatureState(features::kEnableSchemeBoundCookies,
+                                      scheme_bound);
+    for (const char* attributes : {"", "; Domain=example.test"}) {
+      const base::Time now = base::Time::Now();
+      auto https = CanonicalCookie::CreateForTesting(
+          GURL("https://www.example.test:343/"),
+          std::string("a=b; Secure") + attributes, now,
+          CookieSourceType::kOther);
+      auto httpps = CanonicalCookie::CreateForTesting(
+          GURL("httpps://www.example.test/"),
+          std::string("a=b; Secure") + attributes, now,
+          CookieSourceType::kOther);
+      ASSERT_TRUE(https);
+      ASSERT_TRUE(httpps);
+      EXPECT_NE(https->UniqueKey(), httpps->UniqueKey());
+      EXPECT_NE(https->RefUniqueKey(), httpps->RefUniqueKey());
+      EXPECT_NE(https->StrictlyUniqueKey(), httpps->StrictlyUniqueKey());
+      EXPECT_NE(https->LegacyUniqueKey(), httpps->LegacyUniqueKey());
+      EXPECT_FALSE(https->IsEquivalentForSecureCookieMatching(*httpps));
+      EXPECT_FALSE(httpps->IsEquivalentForSecureCookieMatching(*https));
+    }
+  }
+}
+
+TEST(CanonicalCookieTest,
+     HttppsIsolationIgnoresLegacyAndTrustworthyExceptions) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndDisableFeature(features::kEnableSchemeBoundCookies);
+  const GURL httpps("httpps://localhost/");
+  const GURL https("https://localhost:343/");
+  const GURL http("http://localhost:343/");
+  const auto options = CookieOptions::MakeAllInclusive();
+  const CookieAccessParams params(CookieAccessSemantics::LEGACY,
+                                  CookieScopeSemantics::LEGACY, true);
+  auto isolated = CanonicalCookie::CreateForTesting(
+      httpps, "a=b; Secure", base::Time::Now(), CookieSourceType::kOther);
+  auto unset = CanonicalCookie::CreateForTesting(
+      https, "a=b; Secure", base::Time::Now(), CookieSourceType::kOther);
+  ASSERT_TRUE(isolated);
+  ASSERT_TRUE(unset);
+  unset->SetSourceScheme(CookieSourceScheme::kUnset);
+  EXPECT_TRUE(isolated->IncludeForRequestURL(httpps, options, params)
+                  .status.IsInclude());
+  for (const auto& other : {http, https}) {
+    EXPECT_TRUE(
+        isolated->IncludeForRequestURL(other, options, params)
+            .status.HasExclusionReason(CookieInclusionStatus::ExclusionReason::
+                                           EXCLUDE_SCHEME_MISMATCH));
+    EXPECT_TRUE(
+        isolated
+            ->IsSetPermittedInContext(other, options, params,
+                                      kCookieableSchemes)
+            .status.HasExclusionReason(CookieInclusionStatus::ExclusionReason::
+                                           EXCLUDE_SCHEME_MISMATCH));
+  }
+  EXPECT_TRUE(
+      unset->IncludeForRequestURL(httpps, options, params)
+          .status.HasExclusionReason(
+              CookieInclusionStatus::ExclusionReason::EXCLUDE_SCHEME_MISMATCH));
+}
+
+TEST(CanonicalCookieTest, HttppsFirstPartyPartitionUsesHttppsSite) {
+  const GURL url("httpps://example.test/");
+  auto cookie = CanonicalCookie::CreateForTesting(
+      url, "a=b; Secure; Partitioned", base::Time::Now(),
+      CookieSourceType::kOther, std::nullopt,
+      CookiePartitionKey::FromURLForTesting(url));
+  ASSERT_TRUE(cookie);
+  EXPECT_TRUE(cookie->IsFirstPartyPartitioned());
+  EXPECT_FALSE(cookie->IsThirdPartyPartitioned());
 }
 
 TEST(CanonicalCookieTest, IsSetPermittedInContext) {

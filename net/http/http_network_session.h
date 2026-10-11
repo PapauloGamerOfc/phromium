@@ -80,6 +80,10 @@ struct NET_EXPORT HttpNetworkSessionParams {
   ~HttpNetworkSessionParams();
 
   bool ignore_certificate_errors = false;
+  // Separate additional private origin and proxy HTTPPS trust. Neither is
+  // imported into HTTPS or the other hop. Browser verifier trust is the default.
+  std::vector<std::string> httpps_trust_anchors;
+  std::vector<std::string> httpps_proxy_trust_anchors;
   uint16_t testing_fixed_http_port = 0;
   uint16_t testing_fixed_https_port = 0;
   bool enable_user_alternate_protocol_ports = false;

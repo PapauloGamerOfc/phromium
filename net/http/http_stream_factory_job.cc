@@ -141,6 +141,7 @@ HttpStreamFactory::Job::Job(
       delegate_(delegate),
       job_type_(job_type),
       using_ssl_(request_info_.url.SchemeIs(url::kHttpsScheme) ||
+                 request_info_.url.SchemeIs(url::kHttppsScheme) ||
                  request_info_.url.SchemeIs(url::kWssScheme)),
       using_quic_(
           alternative_protocol == NextProto::kProtoQUIC ||
@@ -160,7 +161,9 @@ HttpStreamFactory::Job::Job(
   DCHECK(base::EqualsCaseInsensitiveASCII(destination_.scheme(),
                                           url::kHttpScheme) ||
          base::EqualsCaseInsensitiveASCII(destination_.scheme(),
-                                          url::kHttpsScheme));
+                                          url::kHttpsScheme) ||
+         base::EqualsCaseInsensitiveASCII(destination_.scheme(),
+                                          url::kHttppsScheme));
 
   // This class is specific to a single `ProxyChain`, so `proxy_info_` must be
   // non-empty. Entries beyond the first are ignored. It should simply take a
@@ -385,6 +388,9 @@ bool HttpStreamFactory::Job::is_preconnect() const {
 
 url::SchemeHostPort HttpStreamFactory::Job::SchemeHostPortForSupportsSpdy()
     const {
+  if (request_info_.url.SchemeIs(url::kHttppsScheme)) {
+    return destination_;
+  }
   return url::SchemeHostPort(using_ssl_ ? url::kHttpsScheme : url::kHttpScheme,
                              spdy_session_key_.host_port_pair().HostForURL(),
                              spdy_session_key_.host_port_pair().port());
@@ -416,6 +422,11 @@ bool HttpStreamFactory::Job::UsingHttpProxyWithoutTunnel() const {
 
 bool HttpStreamFactory::Job::CanUseExistingSpdySession() const {
   DCHECK(!using_quic_);
+
+  // Never reuse an HTTPS connection for the distinct experimental protocol.
+  if (request_info_.url.SchemeIs(url::kHttppsScheme)) {
+    return false;
+  }
 
   if (session_->http_server_properties()->RequiresHTTP11(
           url::SchemeHostPort(request_info_.url),

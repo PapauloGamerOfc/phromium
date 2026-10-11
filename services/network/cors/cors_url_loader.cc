@@ -95,15 +95,17 @@ bool IsRevalidatingRequest(const ResourceRequest& request) {
 // reason why a preflight is needed.
 std::optional<PreflightRequiredReason> NeedsPreflight(
     const ResourceRequest& request) {
-  if (!IsCorsEnabledRequestMode(request.mode))
+  if (!IsCorsEnabledRequestMode(request.mode)) {
     return std::nullopt;
+  }
 
   if (request.mode == mojom::RequestMode::kCorsWithForcedPreflight) {
     return PreflightRequiredReason::kCorsWithForcedPreflightMode;
   }
 
-  if (!IsCorsSafelistedMethod(request.method))
+  if (!IsCorsSafelistedMethod(request.method)) {
     return PreflightRequiredReason::kDisallowedMethod;
+  }
 
   bool is_ad_auction_trusted_signals_request =
       request.trusted_params &&
@@ -203,8 +205,9 @@ mojom::FetchResponseType CalculateResponseTainting(
     bool cors_flag,
     bool tainted_origin,
     const OriginAccessList& origin_access_list) {
-  if (url.SchemeIs(url::kDataScheme))
+  if (url.SchemeIs(url::kDataScheme)) {
     return mojom::FetchResponseType::kBasic;
+  }
 
   if (cors_flag) {
     DCHECK(IsCorsEnabledRequestMode(request_mode));
@@ -278,8 +281,9 @@ std::optional<CorsErrorStatus> CheckRedirectLocation(
   // credentials, then return a network error.
   // See 4.4. HTTP-redirect fetch
   // (https://fetch.spec.whatwg.org/#http-redirect-fetch), step 10.
-  if (cors_flag && url_has_credentials)
+  if (cors_flag && url_has_credentials) {
     return CorsErrorStatus(mojom::CorsError::kRedirectContainsCredentials);
+  }
 
   return std::nullopt;
 }
@@ -468,8 +472,9 @@ CorsURLLoader::CorsURLLoader(
               "process_id", process_id_, "request_id", request_id_,
               "traffic_annotation_id", traffic_annotation_.unique_id_hash_code);
   CHECK(url_loader_network_service_observer_ != nullptr);
-  if (ignore_isolated_world_origin)
+  if (ignore_isolated_world_origin) {
     request_.isolated_world_origin = std::nullopt;
+  }
 
   receiver_.set_disconnect_handler(
       base::BindOnce(&CorsURLLoader::OnMojoDisconnect, base::Unretained(this)));
@@ -712,8 +717,9 @@ void CorsURLLoader::FollowRedirect(
 
   // The request method can be changed to "GET". In this case we need to
   // reset the request body manually.
-  if (request_.method == net::HttpRequestHeaders::kGetMethod)
+  if (request_.method == net::HttpRequestHeaders::kGetMethod) {
     request_.request_body = nullptr;
+  }
 
   const bool original_fetch_cors_flag = fetch_cors_flag_;
   SetCorsFlagIfNeeded();
@@ -798,8 +804,9 @@ void CorsURLLoader::FollowRedirect(
 
 void CorsURLLoader::SetPriority(net::RequestPriority priority,
                                 int32_t intra_priority_value) {
-  if (network_loader_)
+  if (network_loader_) {
     network_loader_->SetPriority(priority, intra_priority_value);
+  }
 }
 
 void CorsURLLoader::OnReceiveEarlyHints(mojom::EarlyHintsPtr early_hints) {
@@ -807,8 +814,9 @@ void CorsURLLoader::OnReceiveEarlyHints(mojom::EarlyHintsPtr early_hints) {
   DCHECK(forwarding_client_);
 
   // Only forward Early Hints for navigation.
-  if (request_.mode == mojom::RequestMode::kNavigate)
+  if (request_.mode == mojom::RequestMode::kNavigate) {
     forwarding_client_->OnReceiveEarlyHints(std::move(early_hints));
+  }
 }
 
 void CorsURLLoader::OnReceiveResponse(
@@ -992,7 +1000,7 @@ void CorsURLLoader::OnReceiveRedirect(const net::RedirectInfo& redirect_info,
         request_.mode == mojom::RequestMode::kNavigate &&
         process_id_ == OriginatingProcessId::browser();
     if (!is_browser_navigation &&
-        !redirect_info.new_url.SchemeIsHTTPOrHTTPS()) {
+        !redirect_info.new_url.SchemeIsHTTPOrHTTPSOrHTTPPS()) {
       censored_redirect_info.new_url = GURL("data:,");
     }
     deferred_redirect_url_ =
@@ -1230,9 +1238,8 @@ void CorsURLLoader::MaybeSetOriginHeader(
     return;
   }
 
-  std::string origin_value = tainted_
-                                 ? url::Origin().Serialize()
-                                 : request_.request_initiator->Serialize();
+  std::string origin_value = tainted_ ? url::Origin().Serialize()
+                                      : request_.request_initiator->Serialize();
   if (headers_update_params) {
     std::erase(headers_update_params->removed_headers,
                net::HttpRequestHeaders::kOrigin);
@@ -1554,8 +1561,9 @@ void CorsURLLoader::SetCorsFlagIfNeeded() {
     return;
   }
 
-  if (HasSpecialAccessToDestination())
+  if (HasSpecialAccessToDestination()) {
     return;
+  }
 
   fetch_cors_flag_ = true;
 }
@@ -1599,8 +1607,9 @@ std::optional<CorsErrorStatus> CorsURLLoader::CheckRedirectLocationForTesting(
 bool CorsURLLoader::PassesTimingAllowOriginCheck(
     const mojom::URLResponseHead& response) const {
   // If request’s timing allow failed flag is set, then return failure.
-  if (timing_allow_failed_flag_)
+  if (timing_allow_failed_flag_) {
     return false;
+  }
 
   // Let values be the result of getting, decoding, and splitting
   // `Timing-Allow-Origin` from response’s header list.
@@ -1611,8 +1620,9 @@ bool CorsURLLoader::PassesTimingAllowOriginCheck(
     mojom::TimingAllowOriginPtr tao = ParseTimingAllowOrigin(*tao_header_value);
     url::Origin origin = tainted_ ? url::Origin() : *request_.request_initiator;
 
-    if (TimingAllowOriginCheck(tao, origin))
+    if (TimingAllowOriginCheck(tao, origin)) {
       return true;
+    }
   }
 
   // If request’s mode is "navigate" and request’s current URL’s origin is not
@@ -1625,8 +1635,9 @@ bool CorsURLLoader::PassesTimingAllowOriginCheck(
   }
 
   // If request’s response tainting is "basic", then return success.
-  if (response_tainting_ == mojom::FetchResponseType::kBasic)
+  if (response_tainting_ == mojom::FetchResponseType::kBasic) {
     return true;
+  }
 
   return false;
 }
@@ -1670,6 +1681,5 @@ std::optional<std::string> CorsURLLoader::GetHeaderString(
   }
   return response.headers->GetNormalizedHeader(header_name);
 }
-
 
 }  // namespace network::cors

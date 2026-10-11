@@ -26,6 +26,7 @@
 #include "net/proxy_resolution/proxy_list.h"
 #include "net/proxy_resolution/proxy_resolver.h"
 #include "url/gurl.h"
+#include "url/url_constants.h"
 
 #if BUILDFLAG(IS_IOS)
 #include <CFNetwork/CFProxySupport.h>
@@ -216,6 +217,11 @@ int ProxyResolverApple::GetProxyForURL(
     CompletionOnceCallback /*callback*/,
     std::unique_ptr<Request>* /*request*/,
     const NetLogWithSource& net_log) {
+  // Do not let an unsupported scheme become a successful DIRECT fallback.
+  if (query_url.SchemeIs(url::kHttppsScheme)) {
+    return ERR_NOT_IMPLEMENTED;
+  }
+
   // OS X's system resolver does not support WebSocket URLs in proxy.pac, as of
   // version 10.13.5. See https://crbug.com/862121.
   GURL mutable_query_url =

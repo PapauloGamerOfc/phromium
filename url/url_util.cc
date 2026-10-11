@@ -49,6 +49,7 @@ struct SchemeRegistry {
   // Standard format schemes (see header for details).
   std::vector<SchemeWithType> standard_schemes = {
       {kHttpsScheme, SCHEME_WITH_HOST_PORT_AND_USER_INFORMATION},
+      {kHttppsScheme, SCHEME_WITH_HOST_PORT_AND_USER_INFORMATION},
       {kHttpScheme, SCHEME_WITH_HOST_PORT_AND_USER_INFORMATION},
       // Yes, file URLs can have a hostname, so file URLs should be handled as
       // "standard". File URLs never have a port as specified by the SchemeType
@@ -72,12 +73,14 @@ struct SchemeRegistry {
   // referrers.
   std::vector<SchemeWithType> referrer_schemes = {
       {kHttpsScheme, SCHEME_WITH_HOST_PORT_AND_USER_INFORMATION},
+      {kHttppsScheme, SCHEME_WITH_HOST_PORT_AND_USER_INFORMATION},
       {kHttpScheme, SCHEME_WITH_HOST_PORT_AND_USER_INFORMATION},
   };
 
   // Schemes that do not trigger mixed content warning.
   std::vector<std::string> secure_schemes = {
       kHttpsScheme,
+      kHttppsScheme,
       kWssScheme,
       kDataScheme,
       kAboutScheme,
@@ -100,13 +103,15 @@ struct SchemeRegistry {
   // Schemes that can be sent CORS requests.
   std::vector<std::string> cors_enabled_schemes = {
       kHttpsScheme,
+      kHttppsScheme,
       kHttpScheme,
       kDataScheme,
   };
 
   // Schemes that can be used by web to store data (local storage, etc).
   std::vector<std::string> web_storage_schemes = {
-      kHttpsScheme, kHttpScheme, kFileScheme, kFtpScheme, kWssScheme, kWsScheme,
+      kHttpsScheme, kHttppsScheme, kHttpScheme, kFileScheme,
+      kFtpScheme, kWssScheme, kWsScheme,
   };
 
   // Schemes that can bypass the Content-Security-Policy (CSP) checks.

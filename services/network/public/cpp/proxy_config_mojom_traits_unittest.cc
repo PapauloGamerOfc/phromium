@@ -78,6 +78,9 @@ TEST(ProxyConfigTraitsTest, ProxyRules) {
   const char* kTestCases[] = {
       "myproxy:80",
       "myproxy:80,https://myotherproxy",
+      "httpps://proxy.test",
+      "https=httpps://proxy.test:343",
+      "httpps://first.test,https://second.test,direct://",
       "http=myproxy:80",
       "ftp=ftp-proxy ; https=socks4://foopy",
       "foopy ; ftp=ftp-proxy",

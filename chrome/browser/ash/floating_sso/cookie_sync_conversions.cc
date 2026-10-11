@@ -10,6 +10,7 @@
 #include <tuple>
 #include <utility>
 
+#include "base/notreached.h"
 #include "base/strings/strcat.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/to_string.h"
@@ -104,6 +105,10 @@ sync_pb::CookieSpecifics_CookieSourceScheme ProtoEnumFromCookieSourceScheme(
       return sync_pb::CookieSpecifics_CookieSourceScheme_NON_SECURE;
     case net::CookieSourceScheme::kSecure:
       return sync_pb::CookieSpecifics_CookieSourceScheme_SECURE;
+    case net::CookieSourceScheme::kHttpps:
+      // The existing Sync schema cannot preserve the HTTPPS namespace.
+      // ToSyncProto rejects these cookies before reaching this conversion.
+      NOTREACHED();
   }
 }
 
@@ -209,6 +214,9 @@ std::optional<std::string> SerializedKey(const net::CanonicalCookie& cookie) {
 
 std::optional<sync_pb::CookieSpecifics> ToSyncProto(
     const net::CanonicalCookie& cookie) {
+  if (cookie.SourceScheme() == net::CookieSourceScheme::kHttpps) {
+    return std::nullopt;
+  }
   base::expected<net::CookiePartitionKey::SerializedCookiePartitionKey,
                  std::string>
       serialized_partition_key =

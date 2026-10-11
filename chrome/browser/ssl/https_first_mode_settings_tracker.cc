@@ -321,9 +321,14 @@ void HttpsFirstModeService::AfterStartup() {
 void HttpsFirstModeService::MigrateEnhancedBundleUsersAndMaybeShowToast() {
   PrefService* prefs = profile_->GetPrefs();
 
+  // Migrating a security bundle must respect the same opt-in policy as ESB
+  // pairing. In Phromium that pairing is off by default; otherwise the bundle
+  // migration could silently re-enable HTTPS-First despite those defaults.
   // If the Toast has already been shown or HFM features are not enabled, abort.
   if (prefs->GetBoolean(prefs::kHttpsFirstModeBundleToastQueued) ||
       !IsBalancedModeAvailable() ||
+      !base::FeatureList::IsEnabled(
+          features::kHttpsFirstModeDefaultSettingPairsWithEsb) ||
       !base::FeatureList::IsEnabled(
           safe_browsing::kBundledSecuritySettingsAskBeforeHttp)) {
     return;

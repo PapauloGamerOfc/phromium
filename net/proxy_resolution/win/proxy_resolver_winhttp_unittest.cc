@@ -107,4 +107,23 @@ INSTANTIATE_TEST_SUITE_P(
                         PacFileData::FromURL(GURL("http://pac.test/wpad.dat")),
                         L"http://pac.test/wpad.dat"}));
 
+TEST(ProxyResolverWinHttpTest, HttppsDoesNotCallNativePacOrReturnDirect) {
+  g_call_count = 0;
+  ScopedWinHttpGetProxyForUrlOverride override_hook(
+      &FakeGetProxyForUrlLoginFailure);
+  auto resolver =
+      CreateResolver(PacFileData::FromURL(GURL("http://pac.test/wpad.dat")));
+  ASSERT_TRUE(resolver);
+  ProxyInfo results;
+  std::unique_ptr<ProxyResolver::Request> request;
+  EXPECT_EQ(ERR_NOT_IMPLEMENTED,
+            resolver->GetProxyForURL(GURL("httpps://example.test/"),
+                                     NetworkAnonymizationKey(), &results,
+                                     CompletionOnceCallback(), &request,
+                                     NetLogWithSource()));
+  EXPECT_EQ(0, g_call_count);
+  EXPECT_FALSE(request);
+  EXPECT_TRUE(results.is_empty());
+}
+
 }  // namespace net

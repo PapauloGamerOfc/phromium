@@ -20,6 +20,7 @@
 #include "net/proxy_resolution/proxy_list.h"
 #include "net/proxy_resolution/proxy_resolution_url_sanitizer.h"
 #include "url/gurl.h"
+#include "url/url_constants.h"
 
 namespace net {
 
@@ -73,6 +74,13 @@ int LinuxSystemProxyResolutionService::ResolveProxy(
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK(!callback.is_null());
   DCHECK(request);
+
+  // Native OS resolvers do not know HTTPPS. They can report DIRECT for an
+  // unknown scheme, which would silently bypass the configured proxy policy.
+  // The default Chromium PAC resolver and imported manual settings support it.
+  if (url.SchemeIs(url::kHttppsScheme)) {
+    return ERR_NOT_IMPLEMENTED;
+  }
 
   net_log.BeginEvent(NetLogEventType::PROXY_RESOLUTION_SERVICE);
 

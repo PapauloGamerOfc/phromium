@@ -119,7 +119,7 @@ ResourceResponse& ResourceResponse::operator=(const ResourceResponse&) =
 ResourceResponse::~ResourceResponse() = default;
 
 bool ResourceResponse::IsHTTP() const {
-  return current_request_url_.ProtocolIsInHttpFamily();
+  return current_request_url_.ProtocolIsInHttpFamilyOrHTTPPS();
 }
 
 bool ResourceResponse::ShouldPopulateResourceTiming() const {

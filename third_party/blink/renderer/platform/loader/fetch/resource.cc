@@ -543,7 +543,7 @@ static base::TimeDelta FreshnessLifetime(const ResourceResponse& response,
 #endif
 
   // Cache other non-http / non-filesystem resources liberally.
-  if (!response.CurrentRequestUrl().ProtocolIsInHttpFamily() &&
+  if (!response.CurrentRequestUrl().ProtocolIsInHttpFamilyOrHTTPPS() &&
       !response.CurrentRequestUrl().ProtocolIs("filesystem")) {
     return base::TimeDelta::Max();
   }

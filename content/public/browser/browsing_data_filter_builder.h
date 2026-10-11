@@ -131,6 +131,10 @@ class CONTENT_EXPORT BrowsingDataFilterBuilder {
   // returns true or false.
   virtual bool PartitionedCookiesOnly() const = 0;
 
+  // Limits cookie deletion to HTTPPS (true) or conventional HTTP(S) (false).
+  // Unset by default so explicit user clearing continues to cover both.
+  virtual void SetCookieHttppsNamespace(std::optional<bool> value) = 0;
+
   // When set, only data from the given StoragePartition will be removed.
   // By default, data from non-default StoragePartitions will not be removed.
   // This should not be used when removing Profile-scoped data types.

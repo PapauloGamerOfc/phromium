@@ -121,6 +121,7 @@
 #include "third_party/boringssl/src/include/openssl/ssl.h"
 #include "third_party/re2/src/re2/re2.h"
 #include "url/third_party/mozilla/url_parse.h"
+#include "url/url_constants.h"
 
 namespace content {
 namespace protocol {
@@ -193,6 +194,8 @@ Network::CookieSourceScheme BuildCookieSourceScheme(
       return Network::CookieSourceSchemeEnum::NonSecure;
     case net::CookieSourceScheme::kSecure:
       return Network::CookieSourceSchemeEnum::Secure;
+    case net::CookieSourceScheme::kHttpps:
+      return Network::CookieSourceSchemeEnum::Httpps;
   }
 }
 std::optional<Network::CookieSameSite> BuildCookieSameSite(
@@ -311,7 +314,7 @@ class CookieRetrieverNetworkService
       // Default to true for has_cross_site_ancestor if the partition key is
       // unserializable to avoid false positives.
       std::string key = base::StringPrintf(
-          "%s::%s::%s::%d::%s::%d", cookie.Name().c_str(),
+          "%s::%s::%s::%d::%s::%d::%d", cookie.Name().c_str(),
           cookie.Domain().c_str(), cookie.Path().c_str(),
           cookie.SecureAttribute(),
           serialized_partition_key.has_value()
@@ -319,7 +322,8 @@ class CookieRetrieverNetworkService
               : serialized_partition_key.error().c_str(),
           serialized_partition_key.has_value()
               ? serialized_partition_key->has_cross_site_ancestor()
-              : true);
+              : true,
+          cookie.SourceScheme() == net::CookieSourceScheme::kHttpps);
       all_cookies_.emplace(std::move(key), cookie);
     }
   }
@@ -428,6 +432,8 @@ std::variant<net::CookieSourceScheme, Response> GetSourceSchemeFromProtocol(
     return net::CookieSourceScheme::kNonSecure;
   } else if (source_scheme == Network::CookieSourceSchemeEnum::Secure) {
     return net::CookieSourceScheme::kSecure;
+  } else if (source_scheme == Network::CookieSourceSchemeEnum::Httpps) {
+    return net::CookieSourceScheme::kHttpps;
   }
   return Response::InvalidParams("Invalid cookie source scheme");
 }
@@ -468,8 +474,9 @@ MakeCookieFromProtocolValues(const std::string& name,
   GURL source_url;
   if (!url_spec.empty()) {
     source_url = GURL(url_spec);
-    if (!source_url.SchemeIsHTTPOrHTTPS()) {
-      return Response::InvalidParams("URL must have scheme http or https");
+    if (!source_url.SchemeIsHTTPOrHTTPSOrHTTPPS()) {
+      return Response::InvalidParams(
+          "URL must have scheme http, https or httpps");
     }
 
     secure = secure || source_url.SchemeIsCryptographic();
@@ -493,7 +500,23 @@ MakeCookieFromProtocolValues(const std::string& name,
       normalized_domain = "";
     }
   }
-  GURL url = GURL((secure ? "https://" : "http://") + url_host);
+  const bool httpps = source_url.SchemeIs(url::kHttppsScheme) ||
+                      source_scheme == Network::CookieSourceSchemeEnum::Httpps;
+  if (!url_spec.empty() && source_scheme.has_value() &&
+      (source_url.SchemeIs(url::kHttppsScheme) !=
+       (source_scheme == Network::CookieSourceSchemeEnum::Httpps))) {
+    return Response::InvalidParams(
+        "Cookie source scheme must preserve the HTTPPS namespace");
+  }
+  GURL url = GURL((httpps   ? "httpps://"
+                   : secure ? "https://"
+                            : "http://") +
+                  url_host);
+  if (httpps && source_url.has_port()) {
+    GURL::Replacements replacements;
+    replacements.SetPortStr(source_url.port());
+    url = url.ReplaceComponents(replacements);
+  }
 
   base::Time expiration_date;
   if (expires >= 0) {
@@ -2354,6 +2377,11 @@ bool NetworkHandler::CanAccessCookie(const net::CanonicalCookie& cookie) const {
 bool NetworkHandler::CanAccessCookie(DevToolsAgentHostClient& client,
                                      bool is_webui,
                                      const net::CanonicalCookie& cookie) {
+  if (cookie.SourceScheme() == net::CookieSourceScheme::kHttpps) {
+    return client.MayAttachToURL(net::cookie_util::CookieOriginToURL(
+                                     cookie.Domain(), cookie.SourceScheme()),
+                                 is_webui);
+  }
   return client.MayAttachToURL(GURL(base::StrCat({url::kHttpsScheme,
                                                   url::kStandardSchemeSeparator,
                                                   cookie.DomainWithoutDot()})),
@@ -2577,9 +2605,9 @@ void NetworkHandler::DeleteCookies(
   std::string normalized_domain = domain.value_or("");
   if (normalized_domain.empty()) {
     GURL url(url_spec.value_or(""));
-    if (!url.SchemeIsHTTPOrHTTPS()) {
+    if (!url.SchemeIsHTTPOrHTTPSOrHTTPPS()) {
       callback->sendFailure(Response::InvalidParams(
-          "An http or https url URL must be specified"));
+          "An http, https or httpps URL must be specified"));
       return;
     }
     normalized_domain = url.GetHost();
@@ -2588,19 +2616,25 @@ void NetworkHandler::DeleteCookies(
   auto* cookie_manager =
       storage_partition_->GetCookieManagerForBrowserProcess();
 
-  cookie_manager->GetAllCookies(
-      base::BindOnce(&DeleteFilteredCookies, base::Unretained(cookie_manager),
-                     name, normalized_domain, path.value_or(""),
-                     base::Owned(partition_key.release()),
-                     /*filter_by_partition_key=*/true,
-                     base::BindRepeating(
-                         [](base::WeakPtr<NetworkHandler> handler,
-                            const net::CanonicalCookie& cookie) {
-                           return handler && handler->CanAccessCookie(cookie);
-                         },
-                         weak_factory_.GetWeakPtr()),
-                     base::BindOnce(&DeleteCookiesCallback::sendSuccess,
-                                    std::move(callback))));
+  cookie_manager->GetAllCookies(base::BindOnce(
+      &DeleteFilteredCookies, base::Unretained(cookie_manager), name,
+      normalized_domain, path.value_or(""),
+      base::Owned(partition_key.release()),
+      /*filter_by_partition_key=*/true,
+      base::BindRepeating(
+          [](base::WeakPtr<NetworkHandler> handler, std::optional<bool> httpps,
+             const net::CanonicalCookie& cookie) {
+            return handler && handler->CanAccessCookie(cookie) &&
+                   (!httpps.has_value() ||
+                    *httpps == (cookie.SourceScheme() ==
+                                net::CookieSourceScheme::kHttpps));
+          },
+          weak_factory_.GetWeakPtr(),
+          url_spec.has_value() ? std::optional<bool>(GURL(*url_spec).SchemeIs(
+                                     url::kHttppsScheme))
+                               : std::nullopt),
+      base::BindOnce(&DeleteCookiesCallback::sendSuccess,
+                     std::move(callback))));
 }
 
 Response NetworkHandler::SetExtraHTTPHeaders(

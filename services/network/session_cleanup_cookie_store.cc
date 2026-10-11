@@ -25,12 +25,15 @@ namespace network {
 namespace {
 
 base::DictValue CookieStoreOriginFiltered(const std::string& origin,
-                                          bool is_https,
+                                          net::CookieSourceScheme scheme,
                                           net::NetLogCaptureMode capture_mode) {
   if (!net::NetLogCaptureIncludesSensitive(capture_mode)) {
     return base::DictValue();
   }
-  return base::DictValue().Set("origin", origin).Set("is_https", is_https);
+  return base::DictValue()
+      .Set("origin", origin)
+      .Set("is_https", scheme == net::CookieSourceScheme::kSecure)
+      .Set("is_httpps", scheme == net::CookieSourceScheme::kHttpps);
 }
 
 }  // namespace
@@ -57,13 +60,13 @@ void SessionCleanupCookieStore::DeleteSessionCookies(
       continue;
     }
     const CookieOrigin& cookie = entry.first;
-    const GURL url(
-        net::cookie_util::CookieOriginToURL(cookie.first, cookie.second));
+    const GURL url(net::cookie_util::CookieDomainAndPathToURL(cookie.first, "/",
+                                                              cookie.second));
     if (!url.is_valid() ||
         !delete_cookie_predicate.Run(
-            cookie.first, cookie.second
-                              ? net::CookieSourceScheme::kSecure
-                              : net::CookieSourceScheme::kNonSecure)) {
+            cookie.first, cookie.second == net::CookieSourceScheme::kUnset
+                              ? net::CookieSourceScheme::kNonSecure
+                              : cookie.second)) {
       continue;
     }
     net_log_.AddEvent(
@@ -95,8 +98,8 @@ void SessionCleanupCookieStore::LoadCookiesForKey(
 }
 
 void SessionCleanupCookieStore::AddCookie(const net::CanonicalCookie& cc) {
-  net::SQLitePersistentCookieStore::CookieOrigin origin(
-      cc.Domain(), cc.SourceScheme() == net::CookieSourceScheme::kSecure);
+  net::SQLitePersistentCookieStore::CookieOrigin origin(cc.Domain(),
+                                                        cc.SourceScheme());
   ++cookies_per_origin_[origin];
   persistent_store_->AddCookie(cc);
 }
@@ -107,8 +110,8 @@ void SessionCleanupCookieStore::UpdateCookieAccessTime(
 }
 
 void SessionCleanupCookieStore::DeleteCookie(const net::CanonicalCookie& cc) {
-  net::SQLitePersistentCookieStore::CookieOrigin origin(
-      cc.Domain(), cc.SourceScheme() == net::CookieSourceScheme::kSecure);
+  net::SQLitePersistentCookieStore::CookieOrigin origin(cc.Domain(),
+                                                        cc.SourceScheme());
   DCHECK_GE(cookies_per_origin_[origin], 1U);
   --cookies_per_origin_[origin];
   persistent_store_->DeleteCookie(cc);
@@ -132,8 +135,7 @@ void SessionCleanupCookieStore::OnLoad(
     std::vector<std::unique_ptr<net::CanonicalCookie>> cookies) {
   for (const auto& cookie : cookies) {
     net::SQLitePersistentCookieStore::CookieOrigin origin(
-        cookie->Domain(),
-        cookie->SourceScheme() == net::CookieSourceScheme::kSecure);
+        cookie->Domain(), cookie->SourceScheme());
     ++cookies_per_origin_[origin];
   }
 

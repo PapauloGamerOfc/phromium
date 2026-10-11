@@ -163,22 +163,22 @@ base::DictValue GetNetConstants(NetConstantsRequestMode request_mode) {
   // CertVerifier::VerifyFlags and their symbolic names.
   // LINT.IfChange(CertVerifier.VerifyFlags)
   {
-    static_assert(CertVerifier::VERIFY_FLAGS_LAST == (1 << 1),
+    static_assert(CertVerifier::VERIFY_FLAGS_LAST == (1 << 2),
                   "Update with new flags");
-    constants_dict.Set("certVerifierFlags",
-                       base::DictValue()
-                           .Set("VERIFY_DISABLE_NETWORK_FETCHES",
-                                CertVerifier::VERIFY_DISABLE_NETWORK_FETCHES)
-                           .Set("VERIFY_SXG_CT_REQUIREMENTS",
-                                CertVerifier::VERIFY_SXG_CT_REQUIREMENTS)
-
-    );
+    constants_dict.Set(
+        "certVerifierFlags",
+        base::DictValue()
+            .Set("VERIFY_DISABLE_NETWORK_FETCHES",
+                 CertVerifier::VERIFY_DISABLE_NETWORK_FETCHES)
+            .Set("VERIFY_SXG_CT_REQUIREMENTS",
+                 CertVerifier::VERIFY_SXG_CT_REQUIREMENTS)
+            .Set("VERIFY_HTTPPS_SERVER", CertVerifier::VERIFY_HTTPPS_SERVER));
   }
   // LINT.ThenChange(/net/cert/cert_verifier.h:CertVerifier.VerifyFlags)
 
   // LINT.IfChange(CertVerifyProc.VerifyFlags)
   {
-    static_assert(CertVerifyProc::VERIFY_FLAGS_LAST == (1 << 3),
+    static_assert(CertVerifyProc::VERIFY_FLAGS_LAST == (1 << 4),
                   "Update with new flags");
     constants_dict.Set(
         "certVerifyFlags",
@@ -190,7 +190,8 @@ base::DictValue GetNetConstants(NetConstantsRequestMode request_mode) {
             .Set("VERIFY_DISABLE_NETWORK_FETCHES",
                  CertVerifyProc::VERIFY_DISABLE_NETWORK_FETCHES)
             .Set("VERIFY_SXG_CT_REQUIREMENTS",
-                 CertVerifyProc::VERIFY_SXG_CT_REQUIREMENTS));
+                 CertVerifyProc::VERIFY_SXG_CT_REQUIREMENTS)
+            .Set("VERIFY_HTTPPS_SERVER", CertVerifyProc::VERIFY_HTTPPS_SERVER));
   }
   // LINT.ThenChange(/net/cert/cert_verify_proc.h:CertVerifyProc.VerifyFlags)
 

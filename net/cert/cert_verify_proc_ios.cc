@@ -266,6 +266,10 @@ int CertVerifyProcIOS::VerifyInternal(X509Certificate* cert,
                                       int flags,
                                       CertVerifyResult* verify_result,
                                       const NetLogWithSource& net_log) {
+  if (flags & VERIFY_HTTPPS_SERVER) {
+    verify_result->cert_status |= CERT_STATUS_INVALID;
+    return ERR_CERT_INVALID;
+  }
   ScopedCFTypeRef<SecPolicyRef> trust_policy(
       SecPolicyCreateSSL(/*server=*/true, /*hostname=*/nullptr));
   if (!trust_policy) {

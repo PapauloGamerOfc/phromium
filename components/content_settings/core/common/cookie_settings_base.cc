@@ -36,6 +36,7 @@
 #include "services/network/public/cpp/permissions_policy/permissions_policy.h"
 #include "url/gurl.h"
 #include "url/origin.h"
+#include "url/url_constants.h"
 
 namespace content_settings {
 
@@ -144,8 +145,7 @@ bool CookieSettingsBase::ShouldDeleteCookieOnExit(
     net::CookieSourceScheme scheme) const {
   // Cookies with an unknown (kUnset) scheme will be treated as having a not
   // secure scheme.
-  GURL origin = net::cookie_util::CookieOriginToURL(
-      domain, scheme == net::CookieSourceScheme::kSecure);
+  GURL origin = net::cookie_util::CookieOriginToURL(domain, scheme);
   // Pass GURL() as first_party_url since we don't know the context and
   // don't want to match against (*, exception) pattern.
   SettingInfo setting_info;
@@ -177,9 +177,17 @@ bool CookieSettingsBase::ShouldDeleteCookieOnExit(
     // While we don't know on which top-frame-origin a cookie was set, we still
     // use exceptions that only specify a secondary pattern to handle cookies
     // that match this pattern.
-    std::string_view host = entry.primary_pattern.MatchesAllHosts()
-                                ? entry.secondary_pattern.GetHost()
-                                : entry.primary_pattern.GetHost();
+    const auto& pattern = entry.primary_pattern.MatchesAllHosts()
+                              ? entry.secondary_pattern
+                              : entry.primary_pattern;
+    // Explicit per-protocol exceptions must not leak into the other cookie
+    // namespace. Preserve existing HTTP/HTTPS matching and wildcard rules.
+    if (!pattern.GetScheme().empty() &&
+        ((scheme == net::CookieSourceScheme::kHttpps) !=
+         (pattern.GetScheme() == url::kHttppsScheme))) {
+      continue;
+    }
+    std::string_view host = pattern.GetHost();
     if (net::cookie_util::IsDomainMatch(domain, host)) {
       if (entry.GetContentSetting() == CONTENT_SETTING_ALLOW) {
         return false;

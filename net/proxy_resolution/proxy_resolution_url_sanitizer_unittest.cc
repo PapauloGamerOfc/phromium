@@ -25,9 +25,14 @@ TEST(ProxyResolutionUrlSanitizerTest, SanitizeUrlForProxyResolution) {
       {"https://user:pass@example.test:8080/path?query#ref",
        "https://example.test:8080/"},
       {"wss://user:pass@example.test/path?query#ref", "wss://example.test/"},
+      {"httpps://user:pass@example.test/path?query#ref",
+       "httpps://example.test/"},
+      {"httpps://user:pass@example.test:8443/path?query#ref",
+       "httpps://example.test:8443/"},
       // Already-sanitized URLs are unchanged.
       {"http://example.test/", "http://example.test/"},
       {"https://example.test/", "https://example.test/"},
+      {"httpps://example.test/", "httpps://example.test/"},
   };
 
   for (const auto& test : kTests) {

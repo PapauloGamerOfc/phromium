@@ -21,6 +21,26 @@ TEST(ContentSettingsPatternTest, RealWorldPatterns) {
   EXPECT_STREQ("[*.]ikea.com", Pattern("[*.]ikea.com").ToString().c_str());
 }
 
+TEST(ContentSettingsPatternTest, HttppsHasAnIndependentSchemeAndDefaultPort) {
+  const auto pattern =
+      ContentSettingsPattern::FromURL(GURL("httpps://example.com"));
+  ASSERT_TRUE(pattern.IsValid());
+  EXPECT_EQ("httpps", pattern.GetScheme());
+  EXPECT_TRUE(pattern.Matches(GURL("httpps://example.com:343/path")));
+  EXPECT_TRUE(pattern.Matches(GURL("httpps://sub.example.com/path")));
+  EXPECT_FALSE(pattern.Matches(GURL("httpps://example.com:443/path")));
+  EXPECT_FALSE(pattern.Matches(GURL("https://example.com")));
+  EXPECT_FALSE(pattern.Matches(GURL("http://example.com:343")));
+  EXPECT_EQ(pattern, Pattern(pattern.ToString()));
+  EXPECT_EQ(pattern, Pattern("httpps://[*.]example.com:343"));
+
+  const auto exact =
+      ContentSettingsPattern::FromURLNoWildcard(GURL("httpps://example.com"));
+  ASSERT_TRUE(exact.IsValid());
+  EXPECT_TRUE(exact.Matches(GURL("httpps://example.com:343")));
+  EXPECT_FALSE(exact.Matches(GURL("httpps://sub.example.com")));
+}
+
 TEST(ContentSettingsPatternTest, GURL) {
   // Document and verify GURL behavior.
   GURL url("http://mail.google.com:80");

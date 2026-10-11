@@ -3,571 +3,571 @@
 <translationbundle lang="ja">
 <translation id="1026101648481255140">インストールを再開</translation>
 <translation id="1029669172902658969">再起動して Chromium OS を更新</translation>
-<translation id="1040916596585577953">この拡張機能を確認することをおすすめします</translation>
-<translation id="1042552502243217427">ページのリンクを非公開でプリロードするようサイトから求められた場合、Chromium は Google サーバーを使用します。これによりプリロードしたサイトにユーザーの情報が知られることはありませんが、Google はどのようなサイトがプリロードされたかを学習します。</translation>
+<translation id="7962340570690354348">この拡張機能を確認することをおすすめします</translation>
+<translation id="2702007788032964762">ページのリンクを非公開でプリロードするようサイトから求められた場合、Phromium は Google サーバーを使用します。これによりプリロードしたサイトにユーザーの情報が知られることはありませんが、Google はどのようなサイトがプリロードされたかを学習します。</translation>
 <translation id="1051793555070215510">シークレット モードの改善のため、1 分程度のアンケートにご協力ください。</translation>
 <translation id="1065672644894730302">ユーザー設定ファイルを読み込むことができません。一部の機能が利用できない可能性があります。また、設定への変更は保存されません。</translation>
-<translation id="1083934481477628225">保護者が Chromium の「サイト、アプリ、拡張機能の権限」をオフにしました</translation>
-<translation id="109026165963220603">付近のデバイスを検出して使用するには、Chromium にローカル ネットワークへのアクセスを許可する必要があります</translation>
-<translation id="1090946077924227754">Chromium の特定の機能や拡張機能を検索するには、アドレスバーに該当のショートカットを入力して、選択したキーボードキーを押します</translation>
-<translation id="1098493699368672217">システムトレイに「Chromium で検索」を表示して、キーボード ショートカットをオンにする</translation>
-<translation id="1104942323762546749">Chromium からパスワードをエクスポートするための許可を求められています。許可するには Windows のパスワードを入力してください。</translation>
+<translation id="4964836565882496625">保護者が Phromium の「サイト、アプリ、拡張機能の権限」をオフにしました</translation>
+<translation id="8409497136174302488">付近のデバイスを検出して使用するには、Phromium にローカル ネットワークへのアクセスを許可する必要があります</translation>
+<translation id="4388904545107211948">Phromium の特定の機能や拡張機能を検索するには、アドレスバーに該当のショートカットを入力して、選択したキーボードキーを押します</translation>
+<translation id="7188624550427159072">システムトレイに「Phromium で検索」を表示して、キーボード ショートカットをオンにする</translation>
+<translation id="3689248207461565136">Phromium からパスワードをエクスポートするための許可を求められています。許可するには Windows のパスワードを入力してください。</translation>
 <translation id="112640046208448578">ものや場所を特定したり、テキストをコピーまたは翻訳したりできます。画像検索を使用すると、ページのスクリーンショットがサーバーに送信されます。<ph name="LEARN_MORE" /></translation>
-<translation id="113122355610423240">既定のブラウザは Chromium です</translation>
-<translation id="1131805035311359397">パスワードにデータ侵害などセキュリティに関する問題がないかどうかを確認するには、<ph name="BEGIN_LINK" />Chromium にログイン<ph name="END_LINK" />してください。</translation>
-<translation id="1153368717515616349">Chromium メニューをクリックする</translation>
+<translation id="6114173190076818326">既定のブラウザは Phromium です</translation>
+<translation id="5414044255592121327">パスワードにデータ侵害などセキュリティに関する問題がないかどうかを確認するには、<ph name="BEGIN_LINK" />Phromium にログイン<ph name="END_LINK" />してください。</translation>
+<translation id="1753507755668601921">Phromium メニューをクリックする</translation>
 <translation id="1157985233335035034">最近使用した言語</translation>
 <translation id="1184145431117212167">Windows のバージョンがサポートされていないためインストールできませんでした。</translation>
-<translation id="1185134272377778587">Chromium について</translation>
-<translation id="1186645291482254714">スマートフォンの Chromium で価格トラッキングのアラートを受け取る</translation>
+<translation id="7861581212703831457">Phromium について</translation>
+<translation id="8752630985505435738">スマートフォンの Phromium で価格トラッキングのアラートを受け取る</translation>
 <translation id="1203500561924088507">インストールいただきありがとうございます。<ph name="BUNDLE_NAME" /> を使用するにはブラウザを再起動してください。</translation>
-<translation id="1222365723190436821"><ph name="IMPORTANT_UPDATE" />が保留中です。ブラウジングを保護するため、Chromium はあなたが <ph name="IDLE_DURATION" />間操作しなかったときにアップデートされます。</translation>
+<translation id="4933432676089063712"><ph name="IMPORTANT_UPDATE" />が保留中です。ブラウジングを保護するため、Phromium はあなたが <ph name="IDLE_DURATION" />間操作しなかったときにアップデートされます。</translation>
 <translation id="1232234696885483911">画像検索を開くと、ページのタイトル、URL、コンテンツ（PDF を含む）が自動的にサーバーに送信されます。<ph name="LEARN_MORE" /></translation>
-<translation id="123265588161106468">Chromium にログイン中は、Google アカウントのパスワードやその他の設定を使用できます。この設定を変更するには、[Chromium のアカウント設定] に移動してください。</translation>
-<translation id="1244381985120794049">Mac のメニューバーに Gemini in Chromium を表示する</translation>
-<translation id="1257483544893909270">Gemini in Chromium で画面の一部を選択するときに、キーボード ショートカットを使用します。</translation>
-<translation id="1262876892872089030">Chromium を高速に保つため、このタブがアクティブでないときにメモリを解放しました。このサイトを常にアクティブにするよう選択できます。</translation>
-<translation id="1265577313130862557">危険なファイルであるため、このダウンロードは Chromium でブロックされました</translation>
-<translation id="126567311906253476"><ph name="USER_EMAIL" /> で Gmail や YouTube などの Google サービスにログインするときに、同じアカウントで Chromium に自動的にログインできます</translation>
-<translation id="1287534462498555020">スマートフォンで Chromium を活用</translation>
+<translation id="4874488215922903989">Phromium にログイン中は、Google アカウントのパスワードやその他の設定を使用できます。この設定を変更するには、[Phromium のアカウント設定] に移動してください。</translation>
+<translation id="7402478829083317456">Mac のメニューバーに Gemini in Phromium を表示する</translation>
+<translation id="4902531791098430822">Gemini in Phromium で画面の一部を選択するときに、キーボード ショートカットを使用します。</translation>
+<translation id="9002284132405311162">Phromium を高速に保つため、このタブがアクティブでないときにメモリを解放しました。このサイトを常にアクティブにするよう選択できます。</translation>
+<translation id="5561666811965903444">危険なファイルであるため、このダウンロードは Phromium でブロックされました</translation>
+<translation id="1340271056805240721"><ph name="USER_EMAIL" /> で Gmail や YouTube などの Google サービスにログインするときに、同じアカウントで Phromium に自動的にログインできます</translation>
+<translation id="5048805453292757697">スマートフォンで Phromium を活用</translation>
 <translation id="1290883685122687410">設定エラー: <ph name="METAINSTALLER_EXIT_CODE" />。<ph name="WINDOWS_ERROR" /></translation>
-<translation id="1315551408014407711">新しい Chromium プロファイルの設定</translation>
-<translation id="132092532143527429">Gemini in Chromium を使ってみる</translation>
-<translation id="1324107359134968521">Bluetooth デバイスを検出するには、Chromium に Bluetooth へのアクセスを許可する必要があります。<ph name="IDS_SERIAL_DEVICE_CHOOSER_AUTHORIZE_BLUETOOTH_LINK" /></translation>
-<translation id="1329040302064168406">スマートフォンで Chromium にログイン</translation>
+<translation id="7030239572971981565">新しい Phromium プロファイルの設定</translation>
+<translation id="7871721155662336863">Gemini in Phromium を使ってみる</translation>
+<translation id="6569288432960798043">Bluetooth デバイスを検出するには、Phromium に Bluetooth へのアクセスを許可する必要があります。<ph name="IDS_SERIAL_DEVICE_CHOOSER_AUTHORIZE_BLUETOOTH_LINK" /></translation>
+<translation id="3232647214432653255">スマートフォンで Phromium にログイン</translation>
 <translation id="1330562121671411446">検出言語</translation>
-<translation id="1342274909142618978">Chromium（<ph name="URL" />）からもデータを削除する</translation>
+<translation id="1619655755195586133">Phromium（<ph name="URL" />）からもデータを削除する</translation>
 <translation id="1345251407431278948">固定しました。ツールバーの新しいボタンから、画像検索にアクセスできます</translation>
 <translation id="1383876407941801731">検索</translation>
-<translation id="1388276868779258475">Chromium アプリで、ブラウジングを外出先でも続けられます</translation>
+<translation id="2947996037737257951">Phromium アプリで、ブラウジングを外出先でも続けられます</translation>
 <translation id="141901961143729572">ご意見をお聞かせください</translation>
-<translation id="1465192221147974788">ウィンドウを共有するには、[システム設定] で Chromium に画面の録画を許可してください。</translation>
+<translation id="8355386219605656974">ウィンドウを共有するには、[システム設定] で Phromium に画面の録画を許可してください。</translation>
 <translation id="1478370723027452770">Chrome for Testing のヘルプを見る</translation>
-<translation id="147870194906295621"><ph name="DEVICE" /> で保存した情報などを使用するには、Chromium にログインしてください</translation>
+<translation id="8398257182826094665"><ph name="DEVICE" /> で保存した情報などを使用するには、Phromium にログインしてください</translation>
 <translation id="1497802159252041924">インストール エラー: <ph name="INSTALL_ERROR" /></translation>
 <translation id="1518627427551567882">このページは保護されています</translation>
-<translation id="1524282610922162960">Chromium タブの共有</translation>
-<translation id="154404805518949443">Chromium にログイン</translation>
+<translation id="3484755999946650557">Phromium タブの共有</translation>
+<translation id="3309377459597801353">Phromium にログイン</translation>
 <translation id="1547469039832541117">ハイライト表示されているタスクを終了します。</translation>
-<translation id="1562320819937089394">Chromium を固定</translation>
-<translation id="1574377791422810894">Chromium の安全性ツール</translation>
-<translation id="1594928384848033697">Chromium がパスワード マネージャーのデータの削除をリクエストしています。続行するには、Windows のパスワードを入力してください。</translation>
-<translation id="1607715478322902680">{COUNT,plural, =0{管理者が、アップデートを適用するために Chromium を再起動するよう求めています}=1{管理者が、アップデートを適用するために Chromium を再起動するよう求めています。シークレット ウィンドウは、再起動後は自動的には開きません。}other{管理者が、アップデートを適用するために Chromium を再起動するよう求めています。現在開いている # 個のシークレット ウィンドウは、再起動後は自動的には開きません。}}</translation>
-<translation id="1623563412065267963">スマートフォンの Chromium アプリで Google を最大限に活用できます</translation>
-<translation id="1625909126243026060">Chromium のプライバシーとセキュリティに関する重要な設定を確認します</translation>
+<translation id="2354363290397602683">Phromium を固定</translation>
+<translation id="2244728813494358888">Phromium の安全性ツール</translation>
+<translation id="707582364915018531">Phromium がパスワード マネージャーのデータの削除をリクエストしています。続行するには、Windows のパスワードを入力してください。</translation>
+<translation id="8937776717832679904">{COUNT,plural, =0{管理者が、アップデートを適用するために Phromium を再起動するよう求めています}=1{管理者が、アップデートを適用するために Phromium を再起動するよう求めています。シークレット ウィンドウは、再起動後は自動的には開きません。}other{管理者が、アップデートを適用するために Phromium を再起動するよう求めています。現在開いている # 個のシークレット ウィンドウは、再起動後は自動的には開きません。}}</translation>
+<translation id="5032531544901236587">スマートフォンの Phromium アプリで Google を最大限に活用できます</translation>
+<translation id="7311082384439462587">Phromium のプライバシーとセキュリティに関する重要な設定を確認します</translation>
 <translation id="1640672724030957280">ダウンロードしています...</translation>
 <translation id="1665602916345474427"><ph name="USER_NAME" />、<ph name="USER_EMAIL" />（メンバーシップ）としてログインしています。アカウント メニューを開く</translation>
-<translation id="1708414395296835197">メッセージ、ドキュメント、他のアプリのリンクをクリックしたときに、常に Chromium で開くことができます。タスクバーにも固定されます。</translation>
+<translation id="4535436467771816034">メッセージ、ドキュメント、他のアプリのリンクをクリックしたときに、常に Phromium で開くことができます。タスクバーにも固定されます。</translation>
 <translation id="1709772298389099340"><ph name="BROWSER_NAME" /> に権限昇格を提供します。</translation>
 <translation id="1722488837206509557">これにより、利用可能なデバイスから選択してコンテンツを表示できるようになります。</translation>
-<translation id="1733725117201708356">Chromium でまもなく閲覧データが削除されます</translation>
-<translation id="1736443181683099871">Chromium で移動先の HTTPS へのアップグレードを試行します</translation>
-<translation id="1736662517232558588">Chromium データを削除しました</translation>
-<translation id="1745121272106313518">Chromium は <ph name="REMAINING_TIME" /> 後に再起動します</translation>
-<translation id="1749104137266986751">HTTPS を使用できない場合、Chromium で警告を表示せずに安全でない接続を使用します</translation>
-<translation id="1774152462503052664">Chromium をバックグラウンドで実行する</translation>
-<translation id="1779356040007214683">Chromium をより安全にご利用いただくため、<ph name="IDS_EXTENSION_WEB_STORE_TITLE" />で提供していない一部の拡張機能を無効にしました。これらは知らないうちに追加された可能性があります。</translation>
-<translation id="1793486931176048546">Windows の通知で [<ph name="BEGIN_BOLD" />はい<ph name="END_BOLD" />] をクリックすると、Chromium がタスクバーに固定され、すばやくアクセスできるようになります。</translation>
-<translation id="1808667845054772817">Chromium を再インストール</translation>
-<translation id="1820835682567584003">Chromium が <ph name="AUTHENTICATION_PURPOSE" /></translation>
-<translation id="1828328511398219809"><ph name="EXISTING_USER" /> がすでにログインしています。ブラウジング環境を分ける場合は、<ph name="USER_EMAIL_ADDRESS" /> として自分用のプロフィールで Chromium にログインしてください。<ph name="DEVICE" /> の拡張機能などを使用できます。</translation>
-<translation id="183031085822326697">次回 <ph name="DEVICE_TYPE" /> で Chromium を開いたときに、Google パスワード マネージャーを使用するよう求めるメッセージが表示されます。</translation>
+<translation id="3550860956769006392">Phromium でまもなく閲覧データが削除されます</translation>
+<translation id="2053384509423635834">Phromium で移動先の HTTPS へのアップグレードを試行します</translation>
+<translation id="2516115567501600458">Phromium データを削除しました</translation>
+<translation id="8571959122390670188">Phromium は <ph name="REMAINING_TIME" /> 後に再起動します</translation>
+<translation id="6284080675125981628">HTTPS を使用できない場合、Phromium で警告を表示せずに安全でない接続を使用します</translation>
+<translation id="5872244334553252095">Phromium をバックグラウンドで実行する</translation>
+<translation id="2213761221916953829">Phromium をより安全にご利用いただくため、<ph name="IDS_EXTENSION_WEB_STORE_TITLE" />で提供していない一部の拡張機能を無効にしました。これらは知らないうちに追加された可能性があります。</translation>
+<translation id="8807881428325438878">Windows の通知で [<ph name="BEGIN_BOLD" />はい<ph name="END_BOLD" />] をクリックすると、Phromium がタスクバーに固定され、すばやくアクセスできるようになります。</translation>
+<translation id="6861833596843600606">Phromium を再インストール</translation>
+<translation id="3950056404221550225">Phromium が <ph name="AUTHENTICATION_PURPOSE" /></translation>
+<translation id="2018401790887358950"><ph name="EXISTING_USER" /> がすでにログインしています。ブラウジング環境を分ける場合は、<ph name="USER_EMAIL_ADDRESS" /> として自分用のプロフィールで Phromium にログインしてください。<ph name="DEVICE" /> の拡張機能などを使用できます。</translation>
+<translation id="6114726049187747242">次回 <ph name="DEVICE_TYPE" /> で Phromium を開いたときに、Google パスワード マネージャーを使用するよう求めるメッセージが表示されます。</translation>
 <translation id="1838374766361614909">検索をクリア</translation>
-<translation id="18552579716432081">閲覧履歴データをこのデバイスからのみ削除して、Google アカウントに残すには、<ph name="BEGIN_LINK" />Chromium からログアウト<ph name="END_LINK" />します。</translation>
-<translation id="1857749206890802997">スマートフォンに Chromium をダウンロードして、外出先でタブグループを開いたり、新しいタブグループを作成したりできます。</translation>
-<translation id="185970820835152459">ログインする Google アカウントを管理できます。Google アカウントは、Chromium ブラウザ、Play ストア、Gmail などで使用されます。家族など、あなた以外の人のアカウントを追加する場合は、<ph name="DEVICE_TYPE" /> に新しいユーザーを追加してください。<ph name="LINK_BEGIN" />詳細<ph name="LINK_END" /></translation>
+<translation id="2724678689951174927">閲覧履歴データをこのデバイスからのみ削除して、Google アカウントに残すには、<ph name="BEGIN_LINK" />Phromium からログアウト<ph name="END_LINK" />します。</translation>
+<translation id="402854649782215414">スマートフォンに Phromium をダウンロードして、外出先でタブグループを開いたり、新しいタブグループを作成したりできます。</translation>
+<translation id="3191814926523151519">ログインする Google アカウントを管理できます。Google アカウントは、Phromium ブラウザ、Play ストア、Gmail などで使用されます。家族など、あなた以外の人のアカウントを追加する場合は、<ph name="DEVICE_TYPE" /> に新しいユーザーを追加してください。<ph name="LINK_BEGIN" />詳細<ph name="LINK_END" /></translation>
 <translation id="1862852878885210965">画像検索で検索</translation>
-<translation id="1863837059069884561"><ph name="EXISTING_USER" /> がすでにログインしています。ブラウジング環境を分ける場合は、<ph name="USER_EMAIL_ADDRESS" /> として自分用のプロフィールで Chromium にログインしてください。<ph name="DEVICE" /> のブックマークなどの設定を使用できます。</translation>
+<translation id="5453573140402957471"><ph name="EXISTING_USER" /> がすでにログインしています。ブラウジング環境を分ける場合は、<ph name="USER_EMAIL_ADDRESS" /> として自分用のプロフィールで Phromium にログインしてください。<ph name="DEVICE" /> のブックマークなどの設定を使用できます。</translation>
 <translation id="1880677175115548835">テキストを選択</translation>
-<translation id="1881322772814446296">現在、管理対象アカウントでログインしており、あなたの Chromium プロフィールを管理者が制御できる状態になっています。あなたの Chromium データ（アプリ、ブックマーク、履歴、パスワードなどの設定）は永続的に <ph name="USER_NAME" /> に関連付けられます。このデータは Google アカウントのダッシュボードを介して削除できますが、このデータを別のアカウントに関連付けることはできなくなります。新しいプロフィールを作成して、既存の Chromium データを別に保管することができます。<ph name="LEARN_MORE" /></translation>
-<translation id="1896836275755235458">バックグラウンド アクティビティと視覚効果（スムーズ スクロールや動画フレームレートなど）を制限することで、バッテリーを節約します。<ph name="BEGIN_LINK" />省エネモードの詳細<ph name="END_LINK" /></translation>
-<translation id="1900969832270057921">Chromium Updater サービス</translation>
-<translation id="1911763535808217981">この設定を無効にすると、Chromium にログインすることなく Gmail などの Google サイトにログインできます</translation>
-<translation id="1929939181775079593">Chromium が応答しません。今すぐ再起動しますか？</translation>
-<translation id="1933341829955786215">組織（<ph name="MANAGER" />）が Chromium にログインするよう求めています</translation>
+<translation id="1236934630660512644">現在、管理対象アカウントでログインしており、あなたの Phromium プロフィールを管理者が制御できる状態になっています。あなたの Phromium データ（アプリ、ブックマーク、履歴、パスワードなどの設定）は永続的に <ph name="USER_NAME" /> に関連付けられます。このデータは Google アカウントのダッシュボードを介して削除できますが、このデータを別のアカウントに関連付けることはできなくなります。新しいプロフィールを作成して、既存の Phromium データを別に保管することができます。<ph name="LEARN_MORE" /></translation>
+<translation id="4642320984725757603">バックグラウンド アクティビティと視覚効果（スムーズ スクロールや動画フレームレートなど）を制限することで、バッテリーを節約します。<ph name="BEGIN_LINK" />省エネモードの詳細<ph name="END_LINK" /></translation>
+<translation id="1758647131572761585">Phromium Updater サービス</translation>
+<translation id="5797624919204275541">この設定を無効にすると、Phromium にログインすることなく Gmail などの Google サイトにログインできます</translation>
+<translation id="6850971726764387814">Phromium が応答しません。今すぐ再起動しますか？</translation>
+<translation id="8289779763124483945">組織（<ph name="MANAGER" />）が Phromium にログインするよう求めています</translation>
 <translation id="193439633299369377">更新を適用するには、Chromium OS を再起動する必要があります。</translation>
-<translation id="1951406923938785464">このダウンロードは Chromium でブロックされました。ファイル形式が一般的にダウンロードされるものではなく、危害を及ぼす可能性があります</translation>
+<translation id="3215238748514810076">このダウンロードは Phromium でブロックされました。ファイル形式が一般的にダウンロードされるものではなく、危害を及ぼす可能性があります</translation>
 <translation id="1953553007165777902">ダウンロードしています... 残り <ph name="MINUTE" /> 分です</translation>
-<translation id="1966382378801805537">Chromium では既定のブラウザを判定または設定できません</translation>
+<translation id="8529252122707161160">Phromium では既定のブラウザを判定または設定できません</translation>
 <translation id="197326043290947695">画像検索でスマートにブラウジング</translation>
-<translation id="1990262977744080398">新しいタブを開いて、Chromium で一部のファイルがブロックされる理由を確認します</translation>
-<translation id="1999715455684970349">Chromium ソフトウェアを最新の状態に保ちます。このサービスを無効にしたり停止したりすると、Chromium ソフトウェアが最新の状態に保たれなくなります。その結果、セキュリティ上の脆弱性が見つかっても修正できず、機能が動作しなくなる可能性があります。このサービスを使用する Chromium ソフトウェアがなくなると、このサービスは自動的にアンインストールされます。</translation>
-<translation id="2008474315282236005">このデバイスから 1 件の項目を削除します。後でデータを取得するには、<ph name="USER_EMAIL" /> として Chromium にログインしてください。</translation>
+<translation id="7769772561254542263">新しいタブを開いて、Phromium で一部のファイルがブロックされる理由を確認します</translation>
+<translation id="3713013456746186442">Phromium ソフトウェアを最新の状態に保ちます。このサービスを無効にしたり停止したりすると、Phromium ソフトウェアが最新の状態に保たれなくなります。その結果、セキュリティ上の脆弱性が見つかっても修正できず、機能が動作しなくなる可能性があります。このサービスを使用する Phromium ソフトウェアがなくなると、このサービスは自動的にアンインストールされます。</translation>
+<translation id="5690439379999550641">このデバイスから 1 件の項目を削除します。後でデータを取得するには、<ph name="USER_EMAIL" /> として Phromium にログインしてください。</translation>
 <translation id="2018879682492276940">インストールできませんでした。もう一度お試しください。</translation>
 <translation id="2039417478970545937">設定に移動。</translation>
-<translation id="2049376729098081731">Chromium の履歴を含めて、Google サービスのパーソナライズに使用するかどうかを選択してください</translation>
-<translation id="2050698962207788467">Chromium に組み込まれており、安全なパスワードを作成、保存、自動入力できます。ショートカットを追加すると、簡単にアクセスできます。</translation>
-<translation id="2064856577282482477">新しいタブページで [Chromium をカスタマイズ] ボタンをクリックして、Chromium のレイアウトを変更できます</translation>
-<translation id="2086476982681781442">このダウンロードは Chromium でブロックされました。ファイルが虚偽のもので、デバイスに予期しない変更を加える可能性があります</translation>
-<translation id="208726765006323911">次回 Chromium iOS を開いたときに、<ph name="FEATURE_NAME" /> を試すよう求めるメッセージが表示されます。</translation>
-<translation id="2099452623287920103">Google アカウントに保存したパスワードなどの Chromium データは、このデバイスから削除されます。Chromium でこれらのデータを再度使用するには、もう一度ログインしてください。</translation>
-<translation id="2120965832000301375">{COUNT,plural, =1{1 分間使用しなかった場合、組織は Chromium の閲覧データを自動的に削除します。これには、履歴、自動入力、ダウンロードが含まれます。タブは開いたままになります。}other{# 分間使用しなかった場合、組織は Chromium の閲覧データを自動的に削除します。これには、履歴、自動入力、ダウンロードが含まれます。タブは開いたままになります。}}</translation>
+<translation id="4765042254400173473">Phromium の履歴を含めて、Google サービスのパーソナライズに使用するかどうかを選択してください</translation>
+<translation id="1448229429009113044">Phromium に組み込まれており、安全なパスワードを作成、保存、自動入力できます。ショートカットを追加すると、簡単にアクセスできます。</translation>
+<translation id="2145664943269651168">新しいタブページで [Phromium をカスタマイズ] ボタンをクリックして、Phromium のレイアウトを変更できます</translation>
+<translation id="6052463185672312901">このダウンロードは Phromium でブロックされました。ファイルが虚偽のもので、デバイスに予期しない変更を加える可能性があります</translation>
+<translation id="3825064703718009924">次回 Phromium iOS を開いたときに、<ph name="FEATURE_NAME" /> を試すよう求めるメッセージが表示されます。</translation>
+<translation id="886729435477608858">Google アカウントに保存したパスワードなどの Phromium データは、このデバイスから削除されます。Phromium でこれらのデータを再度使用するには、もう一度ログインしてください。</translation>
+<translation id="8016082769719253694">{COUNT,plural, =1{1 分間使用しなかった場合、組織は Phromium の閲覧データを自動的に削除します。これには、履歴、自動入力、ダウンロードが含まれます。タブは開いたままになります。}other{# 分間使用しなかった場合、組織は Phromium の閲覧データを自動的に削除します。これには、履歴、自動入力、ダウンロードが含まれます。タブは開いたままになります。}}</translation>
 <translation id="2125838419757773031">画面の領域を選択して検索</translation>
 <translation id="2126108037660393668">ダウンロードしたファイルの検証で不合格でした。</translation>
 <translation id="2135919691573380097">このサイトを報告する</translation>
 <translation id="2137162749895930932">翻訳画面を閉じる</translation>
 <translation id="2147218225094845757">サイドパネルを非表示</translation>
-<translation id="215352261310130060">このダウンロードは Chromium でブロックされました。サイトで安全な接続が使用されておらず、ファイルが改ざんされている可能性があります</translation>
+<translation id="1628700182434635922">このダウンロードは Phromium でブロックされました。サイトで安全な接続が使用されておらず、ファイルが改ざんされている可能性があります</translation>
 <translation id="2170098639895543546">ページ上のコンテンツを選択</translation>
-<translation id="2174178932569897599">Chromium をカスタマイズ</translation>
+<translation id="1807571394075492085">Phromium をカスタマイズ</translation>
 <translation id="2174917724755363426">インストールは完了していません。キャンセルしてもよろしいですか？</translation>
-<translation id="2185166961232948079">Chromium - ネットワークにログイン - <ph name="PAGE_TITLE" /></translation>
+<translation id="8332848361915479268">Phromium - ネットワークにログイン - <ph name="PAGE_TITLE" /></translation>
 <translation id="2190166659037789668">更新確認エラー: <ph name="UPDATE_CHECK_ERROR" />。</translation>
-<translation id="2199210295479376551">Chromium からアカウントを削除</translation>
-<translation id="2201788217099588893">Chromium アプリで、便利なショッピング ツールを外出先でも利用できます</translation>
-<translation id="2210502920229141283">iOS 版 Chromium のセーフ ブラウジング保護強化機能により、外出先で安全に使用できます</translation>
-<translation id="2210682093923538346">危険なサイトのため、Chromium で通知の権限を削除しました。</translation>
+<translation id="5023314501391717571">Phromium からアカウントを削除</translation>
+<translation id="6063124961634921864">Phromium アプリで、便利なショッピング ツールを外出先でも利用できます</translation>
+<translation id="8646569091716523420">iOS 版 Phromium のセーフ ブラウジング保護強化機能により、外出先で安全に使用できます</translation>
+<translation id="3084983792533696835">危険なサイトのため、Phromium で通知の権限を削除しました。</translation>
 <translation id="2236949375853147973">マイ アクティビティ</translation>
-<translation id="2238130810669087193">すべてのデバイスでアドレスやその他の設定を使用するには、Chromium にログインしてください。このアドレスは、ログイン後に Google アカウントに保存されます。</translation>
-<translation id="2241627712206172106">パソコンを共有している場合、友だちや家族はそれぞれ Chromium を自分専用のブラウザとして自分用の設定をして使うことができます。</translation>
-<translation id="22571759390241347">Chromium のスキル</translation>
+<translation id="6387327671844988108">すべてのデバイスでアドレスやその他の設定を使用するには、Phromium にログインしてください。このアドレスは、ログイン後に Google アカウントに保存されます。</translation>
+<translation id="722050260205928409">パソコンを共有している場合、友だちや家族はそれぞれ Phromium を自分専用のブラウザとして自分用の設定をして使うことができます。</translation>
+<translation id="703211526866942526">Phromium のスキル</translation>
 <translation id="2283803047247799269">画像検索でこのタブを検索</translation>
-<translation id="2287771843518581140">{NUM_TABS,plural, =1{ブラウザの動作を遅くしているタブを一時停止することをおすすめします}other{ブラウザの動作を遅くしているタブを一時停止することをおすすめします}}</translation>
+<translation id="2729162423501020677">{NUM_TABS,plural, =1{ブラウザの動作を遅くしているタブを一時停止することをおすすめします}other{ブラウザの動作を遅くしているタブを一時停止することをおすすめします}}</translation>
 <translation id="2307973900865360088">Dock に追加</translation>
-<translation id="2313870531055795960">Chromium に保存されている安全でないサイトのリストと URL を照合します。サイトがパスワードを不正に取得しようとしている場合や、ユーザーが安全でないファイルをダウンロードしようとした場合は、URL とページ コンテンツの一部をセーフ ブラウジングに送信することがあります。</translation>
+<translation id="6083276764640161328">Phromium に保存されている安全でないサイトのリストと URL を照合します。サイトがパスワードを不正に取得しようとしている場合や、ユーザーが安全でないファイルをダウンロードしようとした場合は、URL とページ コンテンツの一部をセーフ ブラウジングに送信することがあります。</translation>
 <translation id="2356070529366658676">確認する</translation>
 <translation id="2359808026110333948">続行</translation>
-<translation id="2361918034042471035">拡張機能「<ph name="EXTENSION_NAME" />」が Chromium へのログインを求めています</translation>
-<translation id="236943522426971115">Chromium のアプリ向けのバックグラウンドでの実行を無効にする</translation>
-<translation id="2374216753258219393">この拡張機能を <ph name="USER_EMAIL_ADDRESS" /> として使用するには、Chromium にログインしてください。</translation>
+<translation id="741972887620936671">拡張機能「<ph name="EXTENSION_NAME" />」が Phromium へのログインを求めています</translation>
+<translation id="4709464915929597251">Phromium のアプリ向けのバックグラウンドでの実行を無効にする</translation>
+<translation id="6804933363437420201">この拡張機能を <ph name="USER_EMAIL_ADDRESS" /> として使用するには、Phromium にログインしてください。</translation>
 <translation id="2384373936468275798">アカウントのログイン情報が最新でないため、Chromium OS はデータを同期できませんでした。</translation>
-<translation id="2398377054246527950">{NUM_DEVICES,plural, =0{1 つ以上の Chromium 拡張機能が 1 台の HID デバイスにアクセスしていました}=1{1 つ以上の Chromium 拡張機能が 1 台の HID デバイスにアクセスしています}other{1 つ以上の Chromium 拡張機能が # 台の HID デバイスにアクセスしています}}</translation>
-<translation id="2401032172288869980">このサイトを利用するには、Chromium でカメラとマイクの使用を許可する必要があります</translation>
+<translation id="7885274480693496462">{NUM_DEVICES,plural, =0{1 つ以上の Phromium 拡張機能が 1 台の HID デバイスにアクセスしていました}=1{1 つ以上の Phromium 拡張機能が 1 台の HID デバイスにアクセスしています}other{1 つ以上の Phromium 拡張機能が # 台の HID デバイスにアクセスしています}}</translation>
+<translation id="1394893265611797679">このサイトを利用するには、Phromium でカメラとマイクの使用を許可する必要があります</translation>
 <translation id="2403703063067034158">起動エラー: 現在、別のインスタンスのセットアップが実行中です。しばらくしてからもう一度お試しください。</translation>
-<translation id="2418322681019544463">他のアプリから Chromium でリンクを開いたり、タスクバーから Chromium にアクセスしたりできます</translation>
-<translation id="2425157128016763890">[要約] ボタンをクリックしてこのドキュメントを Gemini in Chromium と共有すると、概要の確認や追加の質問ができます</translation>
-<translation id="2440750600860946460"><ph name="BEGIN_LINK" />Chromium のツール<ph name="END_LINK" />を使って、自分で管理しながら安全にブラウジングできます</translation>
-<translation id="2449487342837813167"><ph name="EXISTING_USER" /> がすでにログインしています。ブラウジング環境を分ける場合は、<ph name="USER_EMAIL_ADDRESS" /> として自分用のプロフィールで Chromium にログインしてください。すべてのデバイスでパスワードなどの設定を使用できます。</translation>
+<translation id="8457868297375575309">他のアプリから Phromium でリンクを開いたり、タスクバーから Phromium にアクセスしたりできます</translation>
+<translation id="5354209517289935579">[要約] ボタンをクリックしてこのドキュメントを Gemini in Phromium と共有すると、概要の確認や追加の質問ができます</translation>
+<translation id="6628402244681586711"><ph name="BEGIN_LINK" />Phromium のツール<ph name="END_LINK" />を使って、自分で管理しながら安全にブラウジングできます</translation>
+<translation id="6454834963905669297"><ph name="EXISTING_USER" /> がすでにログインしています。ブラウジング環境を分ける場合は、<ph name="USER_EMAIL_ADDRESS" /> として自分用のプロフィールで Phromium にログインしてください。すべてのデバイスでパスワードなどの設定を使用できます。</translation>
 <translation id="2451727308784734061">ショートカットを使用してパスワード マネージャーにすばやくアクセスできます。ショートカットはパソコンのホーム画面やアプリ ランチャーに移動できます。</translation>
-<translation id="2478295928299953161">Chromium はまもなく終了します</translation>
-<translation id="2483889755041906834">Chromium 内</translation>
+<translation id="1593547119543498467">Phromium はまもなく終了します</translation>
+<translation id="6814323389195469782">Phromium 内</translation>
 <translation id="2485422356828889247">アンインストール</translation>
 <translation id="2513154137948333830">再起動が必要です: <ph name="INSTALL_SUCCESS" /></translation>
 <translation id="2542968102051442371">画像検索するテキストを選択</translation>
-<translation id="2554739539410784893">Chromium が既存のパスワードを置き換えようとしています。続行するには、Windows のパスワードを入力してください。</translation>
-<translation id="2560420686485554789">ファイルをダウンロードするには、Chromium でストレージへのアクセスを許可する必要があります</translation>
-<translation id="2572494885440352020">Chromium Helper</translation>
+<translation id="2643581100433412871">Phromium が既存のパスワードを置き換えようとしています。続行するには、Windows のパスワードを入力してください。</translation>
+<translation id="4103676945224728292">ファイルをダウンロードするには、Phromium でストレージへのアクセスを許可する必要があります</translation>
+<translation id="8743720024689622265">Phromium Helper</translation>
 <translation id="2575822587468774919">画像検索で検索する範囲を選択</translation>
-<translation id="2576118232315942160">すべてのデバイスでパスワードやその他の設定を使用するには、Chromium にログインしてください</translation>
-<translation id="2587622539943955767">スマートフォンで QR コードをスキャンして Chromium をダウンロードし、Google アカウントにログインします。</translation>
-<translation id="2587885422541096572">Chromium で検索します。</translation>
-<translation id="2592940277904433508">Chromium を引き続き使用</translation>
+<translation id="8692134707551176334">すべてのデバイスでパスワードやその他の設定を使用するには、Phromium にログインしてください</translation>
+<translation id="6035715610127790081">スマートフォンで QR コードをスキャンして Phromium をダウンロードし、Google アカウントにログインします。</translation>
+<translation id="1579158377846894470">Phromium で検索します。</translation>
+<translation id="3626651250874375470">Phromium を引き続き使用</translation>
 <translation id="259935314519650377">ダウンロードしたインストーラのキャッシュに失敗しました。エラー: <ph name="UNPACK_CACHING_ERROR_CODE" />。</translation>
 <translation id="2620436844016719705">システム</translation>
-<translation id="2629740064077610681">あなたの組織は閲覧データ（ブックマーク、履歴、パスワードなど）を確認、管理できます。他の Chromium プロファイルの閲覧データを確認することはできません。</translation>
-<translation id="2635452620547538388">アカウント「<ph name="ACCOUNT_EMAIL" />」で Chromium のデータを使用、保存するには、本人確認を行ってください</translation>
-<translation id="2637732208198500597">{COUNT,plural, =0{高度な保護機能を使用している場合は、アップデートを適用するために Chromium を再起動する必要があります}=1{高度な保護機能を使用している場合は、アップデートを適用するために Chromium を再起動する必要があります。シークレット ウィンドウは、再起動後は自動的には開きません。}other{高度な保護機能を使用している場合は、アップデートを適用するために Chromium を再起動する必要があります。現在開いている # 個のシークレット ウィンドウは、再起動後は自動的には開きません。}}</translation>
-<translation id="263863604136125912">Chromium を起動</translation>
-<translation id="2648074677641340862">インストール中にオペレーティング システム エラーが発生しました。Chromium をダウンロードし直してください。</translation>
-<translation id="2661879430930417727">デバイスを共有している場合でも、友だちや家族はそれぞれ Chromium を自分専用のブラウザとして自分用の設定をして使うことができます</translation>
-<translation id="2676569452213089702">Chromium を最小化している場合でも、デバイスのさまざまな場所から Gemini in Chromium にすばやくアクセスできます。</translation>
-<translation id="2711502716910134313">Chromium タブ</translation>
-<translation id="2718390899429598676">セキュリティ強化のため、Chromium ではデータが暗号化されます。</translation>
-<translation id="2721354645805494590">Chromium から Google アカウントを削除するには、ログアウトしてください</translation>
-<translation id="2722636413143664436">すべてのデバイスで同じパスワード、ブックマーク、その他の設定を使用するには、Chromium にログインしてください</translation>
+<translation id="7634640424937626608">あなたの組織は閲覧データ（ブックマーク、履歴、パスワードなど）を確認、管理できます。他の Phromium プロファイルの閲覧データを確認することはできません。</translation>
+<translation id="2669565213445601962">アカウント「<ph name="ACCOUNT_EMAIL" />」で Phromium のデータを使用、保存するには、本人確認を行ってください</translation>
+<translation id="3048500373778933960">{COUNT,plural, =0{高度な保護機能を使用している場合は、アップデートを適用するために Phromium を再起動する必要があります}=1{高度な保護機能を使用している場合は、アップデートを適用するために Phromium を再起動する必要があります。シークレット ウィンドウは、再起動後は自動的には開きません。}other{高度な保護機能を使用している場合は、アップデートを適用するために Phromium を再起動する必要があります。現在開いている # 個のシークレット ウィンドウは、再起動後は自動的には開きません。}}</translation>
+<translation id="4393202019354077587">Phromium を起動</translation>
+<translation id="3192212313802409327">インストール中にオペレーティング システム エラーが発生しました。Phromium をダウンロードし直してください。</translation>
+<translation id="6648732950668475680">デバイスを共有している場合でも、友だちや家族はそれぞれ Phromium を自分専用のブラウザとして自分用の設定をして使うことができます</translation>
+<translation id="3501804488281766385">Phromium を最小化している場合でも、デバイスのさまざまな場所から Gemini in Phromium にすばやくアクセスできます。</translation>
+<translation id="5655763731487334489">Phromium タブ</translation>
+<translation id="582020748041490207">セキュリティ強化のため、Phromium ではデータが暗号化されます。</translation>
+<translation id="2693283019505702310">Phromium から Google アカウントを削除するには、ログアウトしてください</translation>
+<translation id="2989508583692830513">すべてのデバイスで同じパスワード、ブックマーク、その他の設定を使用するには、Phromium にログインしてください</translation>
 <translation id="2738871930057338499">インターネットに接続できません。HTTP 403 アクセス不可エラーが発生しました。プロキシ設定をご確認ください。</translation>
 <translation id="2753623023919742414">クリックして検索</translation>
-<translation id="2768103863314748511">Chromium をデフォルトの PDF ビューアに設定する</translation>
-<translation id="2785438272836277133">この拡張機能にはマルウェアが含まれており、安全ではありません。アクセスしたサイトでユーザーデータ（個人情報を含む）が参照、変更されないように、Chromium からこの拡張機能を削除してください。</translation>
+<translation id="3391021955306442819">Phromium をデフォルトの PDF ビューアに設定する</translation>
+<translation id="293156805028931571">この拡張機能にはマルウェアが含まれており、安全ではありません。アクセスしたサイトでユーザーデータ（個人情報を含む）が参照、変更されないように、Phromium からこの拡張機能を削除してください。</translation>
 <translation id="2799223571221894425">再起動</translation>
-<translation id="2803971713792056305">あなたの Chromium</translation>
+<translation id="4742633141454352374">あなたの Phromium</translation>
 <translation id="2816462166102338036">画像検索でこの動画を検索する</translation>
-<translation id="282591729717417030">iOS 版 Chromium で、外出先でもカメラで商品を検索したり、値下げをトラッキングしたりできます。</translation>
+<translation id="2191308357458164968">iOS 版 Phromium で、外出先でもカメラで商品を検索したり、値下げをトラッキングしたりできます。</translation>
 <translation id="2841525013647267359">原文の言語</translation>
 <translation id="2846251086934905009">インストール エラー: インストーラが完了しませんでした。インストールは中止されました。</translation>
-<translation id="2847479871509788944">Chromium から削除...</translation>
-<translation id="2850691299438350830">ログイン時に、Chromium を安全に利用できるようにするほか、他の Google アプリのセキュリティ強化に使用されることがあります。</translation>
+<translation id="4498037716339180906">Phromium から削除...</translation>
+<translation id="4049188396834160957">ログイン時に、Phromium を安全に利用できるようにするほか、他の Google アプリのセキュリティ強化に使用されることがあります。</translation>
 <translation id="2885378588091291677">タスク マネージャ</translation>
-<translation id="2910007522516064972">Chromium について(&amp;C)</translation>
+<translation id="4119302609687132178">Phromium について(&amp;C)</translation>
 <translation id="2915996080311180594">後で再起動</translation>
-<translation id="2933336679234709858">データはパスフレーズで暗号化されます。Google アカウントで Chromium のデータを使用、保存するには、パスフレーズを入力してください。</translation>
+<translation id="8232968781653330429">データはパスフレーズで暗号化されます。Google アカウントで Phromium のデータを使用、保存するには、パスフレーズを入力してください。</translation>
 <translation id="2945997411976714835">インストール エラー: インストーラのプロセスを開始できませんでした。</translation>
-<translation id="2948852018303413228">iOS 版 Chromium で保存したパスワードを使用して、サイトにすばやくログインできます</translation>
-<translation id="2970426615109535079">Chromium は組織によって管理されています</translation>
-<translation id="2977470724722393594">Chromium は最新版です</translation>
-<translation id="2977506796191543575">サイトがパスワードを不正に取得しようとしている場合や、ユーザーが安全でないファイルをダウンロードしようとした場合は、URL とページ コンテンツの一部をセーフ ブラウジングに送信することがあります</translation>
-<translation id="2981563588585023386">保護者の方が指定した設定でインターネットをより安全に利用するには、Chromium にログインしてください</translation>
+<translation id="5624652745932625503">iOS 版 Phromium で保存したパスワードを使用して、サイトにすばやくログインできます</translation>
+<translation id="8821179372057577828">Phromium は組織によって管理されています</translation>
+<translation id="741172935898285572">Phromium は最新版です</translation>
+<translation id="8798708493876822519">サイトがパスワードを不正に取得しようとしている場合や、ユーザーが安全でないファイルをダウンロードしようとした場合は、URL とページ コンテンツの一部をセーフ ブラウジングに送信することがあります</translation>
+<translation id="6896740867011823632">保護者の方が指定した設定でインターネットをより安全に利用するには、Phromium にログインしてください</translation>
 <translation id="3003694935412297923">すべてのタスク</translation>
-<translation id="3012615494352020668">{count,plural, =1{Google アカウントに一部のデータを保存して、すべてのデバイスで使用できるようにするには、Chromium で本人確認を行う必要があります。今すぐログアウトすると、このデータ（1 個のアイテム）は削除されます。}other{Google アカウントに一部のデータを保存して、すべてのデバイスで使用できるようにするには、Chromium で本人確認を行う必要があります。今すぐログアウトすると、このデータ（{count} 個のアイテム）は削除されます。}}</translation>
-<translation id="3013473503895162900">Chromium の新しいタブで <ph name="URL" /> を開きます。</translation>
-<translation id="302551344979399011">スキルなどの AI イノベーションは Google アカウントに保存され、Chromium 同期とは別に管理されます</translation>
-<translation id="3032219013429286568">すべてのデバイスで同じ拡張機能などを使用するには、Chromium にログインしてください</translation>
-<translation id="3032787606318309379">Chromium に追加...</translation>
+<translation id="3580865868015023718">{count,plural, =1{Google アカウントに一部のデータを保存して、すべてのデバイスで使用できるようにするには、Phromium で本人確認を行う必要があります。今すぐログアウトすると、このデータ（1 個のアイテム）は削除されます。}other{Google アカウントに一部のデータを保存して、すべてのデバイスで使用できるようにするには、Phromium で本人確認を行う必要があります。今すぐログアウトすると、このデータ（{count} 個のアイテム）は削除されます。}}</translation>
+<translation id="1211179250505223767">Phromium の新しいタブで <ph name="URL" /> を開きます。</translation>
+<translation id="4742400838355945730">スキルなどの AI イノベーションは Google アカウントに保存され、Phromium 同期とは別に管理されます</translation>
+<translation id="8070050512429584052">すべてのデバイスで同じ拡張機能などを使用するには、Phromium にログインしてください</translation>
+<translation id="666691655897541311">Phromium に追加...</translation>
 <translation id="3038232873781883849">インストールの待機中...</translation>
 <translation id="3045032126857188731">翻訳先の言語: <ph name="LANGUAGE" /></translation>
 <translation id="3047590466164881923">フィードバック ダイアログを閉じる</translation>
-<translation id="3064717200427679322"><ph name="EXISTING_USER" /> がすでにログインしています。ブラウジング環境を分ける場合は、<ph name="USER_EMAIL_ADDRESS" /> として自分用のプロフィールで Chromium にログインしてください。<ph name="DEVICE" /> のリーディング リストなどを使用できます。</translation>
-<translation id="3068187312562070417">その他の Chromium プロフィール</translation>
-<translation id="3068290154869370196">拡張機能は、Chromium をカスタマイズできるアドオンです。情報整理や日々のタスクの効率化など、拡張機能を使って Chromium を自分仕様にすることができます。</translation>
-<translation id="3068515742935458733">障害レポートと<ph name="UMA_LINK" />を Google に自動送信して Chromium の機能向上に役立てる</translation>
-<translation id="3071024987058544609">Chromium アプリで、Google の安全機能を外出先でも利用できます</translation>
-<translation id="3079753320517721795">{NUM_DEVICES,plural, =0{1 つ以上の Chromium 拡張機能が 1 台の USB デバイスにアクセスしていました}=1{1 つ以上の Chromium 拡張機能が 1 台の USB デバイスにアクセスしています}other{1 つ以上の Chromium 拡張機能が # 台の USB デバイスにアクセスしています}}</translation>
-<translation id="3090734884397229414"><ph name="DEVICE" /> のリーディング リストなどを使用するには、Chromium にログインしてください</translation>
-<translation id="3095811995836568724">Chromium の履歴</translation>
-<translation id="3103660991484857065">インストーラ アーカイブを解凍できませんでした。Chromium をダウンロードし直してください。</translation>
+<translation id="919456815618829047"><ph name="EXISTING_USER" /> がすでにログインしています。ブラウジング環境を分ける場合は、<ph name="USER_EMAIL_ADDRESS" /> として自分用のプロフィールで Phromium にログインしてください。<ph name="DEVICE" /> のリーディング リストなどを使用できます。</translation>
+<translation id="6141754610526066487">その他の Phromium プロフィール</translation>
+<translation id="2380720899384114679">拡張機能は、Phromium をカスタマイズできるアドオンです。情報整理や日々のタスクの効率化など、拡張機能を使って Phromium を自分仕様にすることができます。</translation>
+<translation id="2507281899032275020">障害レポートと<ph name="UMA_LINK" />を Google に自動送信して Phromium の機能向上に役立てる</translation>
+<translation id="1514966729948178660">Phromium アプリで、Google の安全機能を外出先でも利用できます</translation>
+<translation id="4158795507995981959">{NUM_DEVICES,plural, =0{1 つ以上の Phromium 拡張機能が 1 台の USB デバイスにアクセスしていました}=1{1 つ以上の Phromium 拡張機能が 1 台の USB デバイスにアクセスしています}other{1 つ以上の Phromium 拡張機能が # 台の USB デバイスにアクセスしています}}</translation>
+<translation id="78720743239019396"><ph name="DEVICE" /> のリーディング リストなどを使用するには、Phromium にログインしてください</translation>
+<translation id="7000206277447032115">Phromium の履歴</translation>
+<translation id="4555002192651219296">インストーラ アーカイブを解凍できませんでした。Phromium をダウンロードし直してください。</translation>
 <translation id="310459126943037700">タスクを終了できませんでした。</translation>
 <translation id="3104828284009500087">ページ上のコンテンツを検索</translation>
-<translation id="3126784891977756556">パスワード、ブックマーク、履歴をデバイス間で完全に同期できます。既定のブラウザを Chromium に変更すると、お馴染みの機能を簡単に利用できるようになります。</translation>
-<translation id="3130323860337406239">Chromium がマイクを使用しています。</translation>
+<translation id="4867557516756736957">パスワード、ブックマーク、履歴をデバイス間で完全に同期できます。既定のブラウザを Phromium に変更すると、お馴染みの機能を簡単に利用できるようになります。</translation>
+<translation id="8632308594821621017">Phromium がマイクを使用しています。</translation>
 <translation id="3130333203120345554">新しい検索</translation>
 <translation id="3137969841538672700">ドラッグして検索</translation>
-<translation id="3144188012276422546">このタブでは追加のリソースが使用されています。パフォーマンスを改善するには、このタブを非アクティブにしてください。</translation>
-<translation id="3149163023759831301">画面を共有するには、[システム設定] で Chromium に画面の録画を許可してください。</translation>
-<translation id="3155163173539279776">Chromium を再起動します</translation>
+<translation id="9173792796158381383">このタブでは追加のリソースが使用されています。パフォーマンスを改善するには、このタブを非アクティブにしてください。</translation>
+<translation id="8874679893080632357">画面を共有するには、[システム設定] で Phromium に画面の録画を許可してください。</translation>
+<translation id="101045618220347251">Phromium を再起動します</translation>
 <translation id="3161522574479303604">すべての言語</translation>
-<translation id="3179665906251668410">Chromium のシークレット ウインドウでリンクを開く(&amp;G)</translation>
-<translation id="3185330573522821672">新しい Chromium プロフィールをカスタマイズ</translation>
-<translation id="3189205223539394158">タブを切り替えることなく、AI モードでチャットを続けることができます。開始するには、Chromium にログインしてください。これにより、すべてのデバイスでパスワードなどの設定も使用できるようになります。</translation>
-<translation id="3224847870593914902">Chromium から Google アカウントを削除するには、[設定] ページで Chromium からログアウトしてください</translation>
-<translation id="3234316605225071811">今後、Chromium で保存した情報を使用してフォームに自動入力するかどうかを確認するメッセージが表示されます</translation>
-<translation id="3258596308407688501">Chromium はこのデータ ディレクトリへの読み書きを実行できません:
+<translation id="5940989267583033306">Phromium のシークレット ウインドウでリンクを開く(&amp;G)</translation>
+<translation id="2045477525210426976">新しい Phromium プロフィールをカスタマイズ</translation>
+<translation id="3540518135502114323">タブを切り替えることなく、AI モードでチャットを続けることができます。開始するには、Phromium にログインしてください。これにより、すべてのデバイスでパスワードなどの設定も使用できるようになります。</translation>
+<translation id="1496180326063744749">Phromium から Google アカウントを削除するには、[設定] ページで Phromium からログアウトしてください</translation>
+<translation id="7792783034323745412">今後、Phromium で保存した情報を使用してフォームに自動入力するかどうかを確認するメッセージが表示されます</translation>
+<translation id="5240091371721695404">Phromium はこのデータ ディレクトリへの読み書きを実行できません:
 
 <ph name="USER_DATA_DIRECTORY" /></translation>
-<translation id="3263249950597659484">iOS 版 Chromium で、お気に入りの Google AI ツールを外出先でも利用できます。</translation>
-<translation id="3264761466044851269"><ph name="DEVICE" /> の拡張機能などを使用するには、Chromium にログインしてください</translation>
+<translation id="2746489948338052955">iOS 版 Phromium で、お気に入りの Google AI ツールを外出先でも利用できます。</translation>
+<translation id="4848363951707149242"><ph name="DEVICE" /> の拡張機能などを使用するには、Phromium にログインしてください</translation>
 <translation id="3286538390144397061">今すぐ再起動</translation>
-<translation id="328888136576916638">Google API キーが欠落しています。Chromium の一部の機能は無効になります。</translation>
-<translation id="3296368748942286671">Chromium を閉じた際にバックグラウンド アプリの処理を続行する</translation>
-<translation id="3300632735252839402">Chromium は、あなたが操作していないときにアップデートされます</translation>
-<translation id="3313189106987092621">Chromium で安全でない接続を使用してサイトを読み込む前に警告を表示します</translation>
-<translation id="3316771292331273802">Chromium のウィンドウをすべて閉じると、ほとんどのサイトからログアウトします。ただし Chromium にログインしている場合、Google アカウントからはログアウトしません。サイトにあなたの情報を記憶させるには、<ph name="SETTINGS_LINK" />します。</translation>
+<translation id="8613877111531019527">Google API キーが欠落しています。Phromium の一部の機能は無効になります。</translation>
+<translation id="2784090498377460662">Phromium を閉じた際にバックグラウンド アプリの処理を続行する</translation>
+<translation id="3905054486991167751">Phromium は、あなたが操作していないときにアップデートされます</translation>
+<translation id="4502950976754616266">Phromium で安全でない接続を使用してサイトを読み込む前に警告を表示します</translation>
+<translation id="6107453188231652861">Phromium のウィンドウをすべて閉じると、ほとんどのサイトからログアウトします。ただし Phromium にログインしている場合、Google アカウントからはログアウトしません。サイトにあなたの情報を記憶させるには、<ph name="SETTINGS_LINK" />します。</translation>
 <translation id="3352986031709923790">検索範囲の右上隅: 右 <ph name="RIGHT" />%、上 <ph name="TOP" />%</translation>
-<translation id="3366305173356742781">アカウントの Chromium データ</translation>
-<translation id="3375770072980084583">スマートフォンの Chromium でパスワードを使用する</translation>
+<translation id="5896635343289575401">アカウントの Phromium データ</translation>
+<translation id="5662253013097242821">スマートフォンの Phromium でパスワードを使用する</translation>
 <translation id="3387527074123400161">Chromium OS</translation>
-<translation id="3406848076815591792">既存の Chromium プロフィールに切り替えますか？</translation>
+<translation id="5326080492429181135">既存の Phromium プロフィールに切り替えますか？</translation>
 <translation id="3412460710772753638">このデバイスのパスワード マネージャーで更新</translation>
-<translation id="3425452599984451640">Chromium のアップデートが予定されています</translation>
-<translation id="3427159664004296878"><ph name="DEVICE" /> のブックマークなどを使用するには、Chromium にログインしてください</translation>
+<translation id="657700335789940813">Phromium のアップデートが予定されています</translation>
+<translation id="3487742274367151379"><ph name="DEVICE" /> のブックマークなどを使用するには、Phromium にログインしてください</translation>
 <translation id="3438772217992559640">画像検索でこのタブを検索</translation>
-<translation id="3455907671758333080">スマートフォンの Chromium でセーフ ブラウジング保護強化機能を有効にする</translation>
-<translation id="3461644266919055473">Chromium をカスタマイズしています...</translation>
-<translation id="3474745554856756813">このデバイスから <ph name="ITEMS_COUNT" /> 件の項目を削除します。後でデータを取得するには、<ph name="USER_EMAIL" /> として Chromium にログインしてください。</translation>
-<translation id="3497319089134299931">Chromium プロフィールを切り替えるには、<ph name="SHORTCUT" /> を使用します</translation>
-<translation id="3509308970982693815">すべての Chromium ウィンドウを閉じてからもう一度お試しください。</translation>
-<translation id="3522404737534491619">ウィンドウを共有するには、[システム設定] で Chromium に画面の録画を許可してください。</translation>
-<translation id="3530103706039034513"><ph name="EXISTING_USER" />さんがすでにログインしています。ブラウジング環境を分ける場合は、自分用のプロファイルで <ph name="USER_EMAIL_ADDRESS" /> として Chromium にログインしてください。</translation>
-<translation id="3531741627422851418">モバイル デバイスに Chromium ブラウザをダウンロードするための QR コード</translation>
+<translation id="8062355070850891600">スマートフォンの Phromium でセーフ ブラウジング保護強化機能を有効にする</translation>
+<translation id="5419337472918920970">Phromium をカスタマイズしています...</translation>
+<translation id="6573105037542661278">このデバイスから <ph name="ITEMS_COUNT" /> 件の項目を削除します。後でデータを取得するには、<ph name="USER_EMAIL" /> として Phromium にログインしてください。</translation>
+<translation id="4600986251755456192">Phromium プロフィールを切り替えるには、<ph name="SHORTCUT" /> を使用します</translation>
+<translation id="8118189978246431067">すべての Phromium ウィンドウを閉じてからもう一度お試しください。</translation>
+<translation id="7430418346833889620">ウィンドウを共有するには、[システム設定] で Phromium に画面の録画を許可してください。</translation>
+<translation id="2943929290955142701"><ph name="EXISTING_USER" />さんがすでにログインしています。ブラウジング環境を分ける場合は、自分用のプロファイルで <ph name="USER_EMAIL_ADDRESS" /> として Phromium にログインしてください。</translation>
+<translation id="5896697187441340113">モバイル デバイスに Phromium ブラウザをダウンロードするための QR コード</translation>
 <translation id="354621070532799440">リマインダー: Google の優れた安全機能をポケットに</translation>
-<translation id="3561853857681580870">画面を共有するには、[システム設定] で Chromium に画面の録画を許可してください。</translation>
-<translation id="3588112919289558122">保護強化機能により、Chromium で認識できないサイトでは JavaScript の最適化が無効になります</translation>
+<translation id="6718500626359284607">画面を共有するには、[システム設定] で Phromium に画面の録画を許可してください。</translation>
+<translation id="6511372913460632136">保護強化機能により、Phromium で認識できないサイトでは JavaScript の最適化が無効になります</translation>
 <translation id="3597003331831379823">昇格された権限で設定を実行できませんでした。<ph name="METAINSTALLER_ERROR" /></translation>
-<translation id="3600428265489994557">Chromium にログイン</translation>
-<translation id="3639635944603682591">この操作を行うと、このユーザーの閲覧データがこのデバイスから削除されます。データを復元するには、<ph name="USER_EMAIL" /> として Chromium にログインしてください。</translation>
-<translation id="364817392622123556">{COUNT,plural, =0{Chromium の新しいアップデートを利用できます。再起動するとすぐにアップデートが適用されます。}=1{Chromium の新しいアップデートを利用できます。再起動するとすぐにアップデートが適用されます。シークレット ウィンドウは、再起動後は自動的には開きません。}other{Chromium の新しいアップデートを利用できます。再起動するとすぐにアップデートが適用されます。現在開いている # 個のシークレット ウィンドウは、再起動後は自動的には開きません。}}</translation>
+<translation id="6755400919568846467">Phromium にログイン</translation>
+<translation id="8702816719621016911">この操作を行うと、このユーザーの閲覧データがこのデバイスから削除されます。データを復元するには、<ph name="USER_EMAIL" /> として Phromium にログインしてください。</translation>
+<translation id="64780623876080332">{COUNT,plural, =0{Phromium の新しいアップデートを利用できます。再起動するとすぐにアップデートが適用されます。}=1{Phromium の新しいアップデートを利用できます。再起動するとすぐにアップデートが適用されます。シークレット ウィンドウは、再起動後は自動的には開きません。}other{Phromium の新しいアップデートを利用できます。再起動するとすぐにアップデートが適用されます。現在開いている # 個のシークレット ウィンドウは、再起動後は自動的には開きません。}}</translation>
 <translation id="3667616615096815454">インストールできません。このアプリはサーバーに認識されていません。</translation>
-<translation id="3675854891107786059"><ph name="BEGIN_LINK" />独自のパスフレーズ<ph name="END_LINK" />を使用して Google アカウントの Chromium データをすべて暗号化する。暗号化の対象に Google Pay のお支払い方法と住所は含まれません。また、Chromium の閲覧履歴は同期されません。</translation>
-<translation id="370962675267501463">{COUNT,plural, =0{管理者が、このアップデートを適用するために Chromium を再起動するよう求めています}=1{管理者が、このアップデートを適用するために Chromium を再起動するよう求めています。シークレット ウィンドウは、再起動後は自動的には開きません。}other{管理者が、このアップデートを適用するために Chromium を再起動するよう求めています。現在開いている # 個のシークレット ウィンドウは、再起動後は自動的には開きません。}}</translation>
-<translation id="3713809861844741608">新しい Chromium タブでリンクを開く(&amp;T)</translation>
-<translation id="3728124580182886854">パーソナライズなどの目的で、Chromium と他の Google サービスをリンクします</translation>
+<translation id="678730369472836428"><ph name="BEGIN_LINK" />独自のパスフレーズ<ph name="END_LINK" />を使用して Google アカウントの Phromium データをすべて暗号化する。暗号化の対象に Google Pay のお支払い方法と住所は含まれません。また、Phromium の閲覧履歴は同期されません。</translation>
+<translation id="2393631353645378988">{COUNT,plural, =0{管理者が、このアップデートを適用するために Phromium を再起動するよう求めています}=1{管理者が、このアップデートを適用するために Phromium を再起動するよう求めています。シークレット ウィンドウは、再起動後は自動的には開きません。}other{管理者が、このアップデートを適用するために Phromium を再起動するよう求めています。現在開いている # 個のシークレット ウィンドウは、再起動後は自動的には開きません。}}</translation>
+<translation id="2203303261468330007">新しい Phromium タブでリンクを開く(&amp;T)</translation>
+<translation id="686463893976008238">パーソナライズなどの目的で、Phromium と他の Google サービスをリンクします</translation>
 <translation id="3729187154190517324">[タブなどを追加] ボタンを使用して複数のタブ、ファイル、ツールを追加すると、対象を掘り下げて検索できます。</translation>
-<translation id="3788675262216168505">Chromium プロファイルを管理</translation>
-<translation id="3790262771324122253">Chromium で一部のダウンロードがブロックされる理由</translation>
-<translation id="379589255253486813">確認の必要な項目がありましたらお知らせします</translation>
-<translation id="3802055581630249637">アクセスする可能性の高いページがプリロードされ、該当のページにアクセスしたときにページの読み込み速度が向上します。</translation>
+<translation id="5596264049590907430">Phromium プロファイルを管理</translation>
+<translation id="5594723037153142396">Phromium で一部のダウンロードがブロックされる理由</translation>
+<translation id="3425307214497790458">確認の必要な項目がありましたらお知らせします</translation>
+<translation id="4247980944121268675">アクセスする可能性の高いページがプリロードされ、該当のページにアクセスしたときにページの読み込み速度が向上します。</translation>
 <translation id="3810973564298564668">管理</translation>
-<translation id="3823384748599722168">保存したパスワードを使用するには、QR コードのサイトから iOS 版 Chromium をダウンロードして Google アカウントにログインします</translation>
+<translation id="1058395779823101457">保存したパスワードを使用するには、QR コードのサイトから iOS 版 Phromium をダウンロードして Google アカウントにログインします</translation>
 <translation id="3846683726093018685">**要約:** スクリーンショットのコンテンツの主なテーマと目的を 30 語以内の 1 文で説明します。
 
           **質問の提案:** スクリーンショットの理解を深めるためにユーザーが質問しそうな項目を箇条書きで 3～5 つ生成します。視覚的なオブジェクトやそのデザイン、または配置に関する具体的な質問が 1 つ以上含まれます。</translation>
-<translation id="3848258323044014972"><ph name="PAGE_TITLE" /> - Chromium</translation>
-<translation id="386243222263310720">すべてのデバイスで同じブックマークやその他の設定を使用するには、Chromium にログインしてください</translation>
+<translation id="1339028735921640597"><ph name="PAGE_TITLE" /> - Phromium</translation>
+<translation id="430953676539987275">すべてのデバイスで同じブックマークやその他の設定を使用するには、Phromium にログインしてください</translation>
 <translation id="3885770153807205175">言語選択ツール</translation>
-<translation id="388648406173476553">Chromium をカスタマイズ、制御します。確認の必要な項目があります。クリックして詳細をご覧ください。</translation>
-<translation id="3889543394854987837">Chromium を開いてブラウジングを始めるには、名前をクリックしてください。</translation>
+<translation id="5947409614720749543">Phromium をカスタマイズ、制御します。確認の必要な項目があります。クリックして詳細をご覧ください。</translation>
+<translation id="2176348074240183776">Phromium を開いてブラウジングを始めるには、名前をクリックしてください。</translation>
 <translation id="3892148308691398805">テキストをコピー</translation>
-<translation id="390528597099634151"><ph name="EXISTING_USER" />さんはこの Chromium プロファイルにすでにログインしています。ブラウジング環境を分ける場合は、Chromium で自分用のプロファイルを作成できます。</translation>
-<translation id="3909353120217047026">この拡張機能は Chrome ウェブストアのポリシーに違反しており、安全でない可能性があります。アクセスしたサイトでユーザーデータ（個人情報を含む）が参照、変更されないように、Chromium からこの拡張機能を削除してください。</translation>
+<translation id="3679766722656346339"><ph name="EXISTING_USER" />さんはこの Phromium プロファイルにすでにログインしています。ブラウジング環境を分ける場合は、Phromium で自分用のプロファイルを作成できます。</translation>
+<translation id="6085953975934135790">この拡張機能は Chrome ウェブストアのポリシーに違反しており、安全でない可能性があります。アクセスしたサイトでユーザーデータ（個人情報を含む）が参照、変更されないように、Phromium からこの拡張機能を削除してください。</translation>
 <translation id="3941890832296813527">インストール エラー: インストーラのファイル名が無効またはサポートされていません。</translation>
-<translation id="3945058413678539331">Chromium がパスワードをコピーしようとしています。続行するには、Windows のパスワードを入力してください。</translation>
-<translation id="3950481960271781644">すべてのデバイスで保存した情報などを使用するには、Chromium にログインしてください</translation>
-<translation id="3954172517175569325">Google アカウントに保存したパスワード、お支払い方法、住所は、このデバイスから削除されます。Chromium でこれらのデータを再度使用するには、もう一度ログインしてください。</translation>
+<translation id="608187946760434925">Phromium がパスワードをコピーしようとしています。続行するには、Windows のパスワードを入力してください。</translation>
+<translation id="3054592240125889472">すべてのデバイスで保存した情報などを使用するには、Phromium にログインしてください</translation>
+<translation id="3140795250676341027">Google アカウントに保存したパスワード、お支払い方法、住所は、このデバイスから削除されます。Phromium でこれらのデータを再度使用するには、もう一度ログインしてください。</translation>
 <translation id="395904275706073188">保護されたページは読み込めません。別のページをお試しください。</translation>
-<translation id="3962647064319009959">Chromium のユーザー保護の仕組みについて</translation>
+<translation id="4227910144250222665">Phromium のユーザー保護の仕組みについて</translation>
 <translation id="3967822245660637423">ダウンロード完了</translation>
-<translation id="3971865010372729242">Chromium でアドレスバーや検索ボックスに入力を始めると、入力内容が組織の検索ツール、AI ツール、エージェント ツールに送信され、検索候補が表示されます。</translation>
+<translation id="4150430234581811723">Phromium でアドレスバーや検索ボックスに入力を始めると、入力内容が組織の検索ツール、AI ツール、エージェント ツールに送信され、検索候補が表示されます。</translation>
 <translation id="3975724895399328945">Google Chrome for Testing について(&amp;G)</translation>
 <translation id="3997429360543082038">Chromium OS について</translation>
-<translation id="4010059961270896984">ユーザーがサイトにアクセスすると、Chromium はユーザーの IP アドレスを隠すプライバシー サーバーを経由して、URL の一部を難読化してから <ph name="BEGIN_LINK" />Google セーフ ブラウジング<ph name="END_LINK" />に送信します。サイトで不審な動作が検出された場合は、URL 全体とページ コンテンツの一部も送信されます。</translation>
+<translation id="4847805566397342820">ユーザーがサイトにアクセスすると、Phromium はユーザーの IP アドレスを隠すプライバシー サーバーを経由して、URL の一部を難読化してから <ph name="BEGIN_LINK" />Google セーフ ブラウジング<ph name="END_LINK" />に送信します。サイトで不審な動作が検出された場合は、URL 全体とページ コンテンツの一部も送信されます。</translation>
 <translation id="4016217212818346953">パスワード マネージャーで安全に</translation>
 <translation id="4019629340646866719">Chromium OS は、<ph name="BEGIN_LINK_LINUX_OSS" />Linux 開発環境<ph name="END_LINK_LINUX_OSS" />と同様に、追加の<ph name="BEGIN_LINK_CROS_OSS" />オープンソース ソフトウェア<ph name="END_LINK_CROS_OSS" />によって実現しました。</translation>
 <translation id="4022972681110646219">画面を翻訳</translation>
 <translation id="4023601594785368013">元の言語: <ph name="LANGUAGE" /></translation>
-<translation id="4023845192681161785">他のアプリから Chromium でリンクを開くことができます。Chromium はタスクバーに固定され、簡単にアクセスできます。</translation>
-<translation id="4036079820698952681"><ph name="BEGIN_LINK" />現在の設定<ph name="END_LINK" />を送信して Chromium の品質向上にご協力ください</translation>
+<translation id="7037690020492895588">他のアプリから Phromium でリンクを開くことができます。Phromium はタスクバーに固定され、簡単にアクセスできます。</translation>
+<translation id="6916567874038032700"><ph name="BEGIN_LINK" />現在の設定<ph name="END_LINK" />を送信して Phromium の品質向上にご協力ください</translation>
 <translation id="4050175100176540509">最新バージョンに更新すると、重要なセキュリティ更新と新機能が適用されます。</translation>
 <translation id="4055805654398742145">パスワード マネージャー(&amp;A)</translation>
-<translation id="4095980151185649725">{COUNT,plural, =1{1 分間使用しなかった場合、組織は Chromium を自動的に終了します。閲覧データは削除されます。これには、履歴、自動入力、ダウンロードが含まれます。}other{# 分間使用しなかった場合、組織は Chromium を自動的に終了します。閲覧データは削除されます。これには、履歴、自動入力、ダウンロードが含まれます。}}</translation>
-<translation id="4118474109249235144">Chromium のシークレット モード</translation>
-<translation id="4122186850977583290">Chromium についてのページに移動</translation>
-<translation id="4135244987012252068">Chromium をカスタマイズして、ブラウザのデザインを一新</translation>
-<translation id="4147856324248078748">Chromium をカスタマイズ(&amp;U)</translation>
+<translation id="4327384240042572707">{COUNT,plural, =1{1 分間使用しなかった場合、組織は Phromium を自動的に終了します。閲覧データは削除されます。これには、履歴、自動入力、ダウンロードが含まれます。}other{# 分間使用しなかった場合、組織は Phromium を自動的に終了します。閲覧データは削除されます。これには、履歴、自動入力、ダウンロードが含まれます。}}</translation>
+<translation id="2498876341137940584">Phromium のシークレット モード</translation>
+<translation id="1371775705240141332">Phromium についてのページに移動</translation>
+<translation id="1983555117242858621">Phromium をカスタマイズして、ブラウザのデザインを一新</translation>
+<translation id="3730928612696305544">Phromium をカスタマイズ(&amp;U)</translation>
 <translation id="4148957013307229264">インストール中...</translation>
-<translation id="419998258129752635"><ph name="PAGE_TITLE" /> - ネットワークにログイン - Chromium</translation>
-<translation id="4208652172235621272"><ph name="EXISTING_USER" /> がすでにログインしています。ブラウジング環境を分ける場合は、<ph name="USER_EMAIL_ADDRESS" /> として自分用のプロフィールで Chromium にログインしてください。すべてのデバイスで同じリーディング リストなどを使用できます。</translation>
-<translation id="421369550622382712">Chromium の優れたアプリ、ゲーム、拡張機能、テーマをぜひご利用ください。</translation>
-<translation id="4217080900579554343">すべてのパソコンでこの拡張機能などを使用するには、Chromium にログインしてください</translation>
-<translation id="4217972271355023382">保護者の方が指定した設定でインターネットをより安全に利用するには、すでに <ph name="USER_EMAIL_ADDRESS" /> としてログインしている Chromium プロフィールに切り替えてください</translation>
+<translation id="5030279289462254554"><ph name="PAGE_TITLE" /> - ネットワークにログイン - Phromium</translation>
+<translation id="8940475598678719246"><ph name="EXISTING_USER" /> がすでにログインしています。ブラウジング環境を分ける場合は、<ph name="USER_EMAIL_ADDRESS" /> として自分用のプロフィールで Phromium にログインしてください。すべてのデバイスで同じリーディング リストなどを使用できます。</translation>
+<translation id="3361801572720154185">Phromium の優れたアプリ、ゲーム、拡張機能、テーマをぜひご利用ください。</translation>
+<translation id="5104340040322658377">すべてのパソコンでこの拡張機能などを使用するには、Phromium にログインしてください</translation>
+<translation id="6533832886058295845">保護者の方が指定した設定でインターネットをより安全に利用するには、すでに <ph name="USER_EMAIL_ADDRESS" /> としてログインしている Phromium プロフィールに切り替えてください</translation>
 <translation id="4222932583846282852">キャンセルしています...</translation>
 <translation id="4224210481850767180">インストールをキャンセルしました。</translation>
-<translation id="4230135487732243613">Chromium データをこのアカウントにリンクしますか？</translation>
-<translation id="4251772536351901305">標準保護機能より多くのサイトデータを分析して、危険なサイト（Google が認識していなかったサイトも含む）について警告します。Chromium の警告をスキップすることもできます。</translation>
-<translation id="4269093074552541569">Chromium からログアウト</translation>
-<translation id="4271805377592243930">Chromium のヘルプを見る</translation>
+<translation id="6904238369362879351">Phromium データをこのアカウントにリンクしますか？</translation>
+<translation id="357744319784654404">標準保護機能より多くのサイトデータを分析して、危険なサイト（Google が認識していなかったサイトも含む）について警告します。Phromium の警告をスキップすることもできます。</translation>
+<translation id="7228779501660520489">Phromium からログアウト</translation>
+<translation id="2782053121162821">Phromium のヘルプを見る</translation>
 <translation id="4281844954008187215">利用規約</translation>
-<translation id="4285930937574705105">原因不明のエラーによりインストールが失敗しました。実行中の Chromium を終了してからもう一度お試しください。</translation>
-<translation id="4298125729853015961">Chromium からパスワードをエクスポート</translation>
+<translation id="5084022108026911204">原因不明のエラーによりインストールが失敗しました。実行中の Phromium を終了してからもう一度お試しください。</translation>
+<translation id="5139026954638666406">Phromium からパスワードをエクスポート</translation>
 <translation id="4304713468139749426">パスワード マネージャー</translation>
 <translation id="4334241893986177674">このスクリーンショットを検索</translation>
-<translation id="4384331407722351213">Windows の起動時に Chromium を自動で起動する</translation>
+<translation id="8324735155671556570">Windows の起動時に Phromium を自動で起動する</translation>
 <translation id="4400772909124543403">利用できるアップデートはありません</translation>
-<translation id="4407044323746248786">今すぐ Chromium を終了しますか？</translation>
+<translation id="2185735215611818026">今すぐ Phromium を終了しますか？</translation>
 <translation id="4413205837991854510">画像検索のショートカットを常に表示する</translation>
-<translation id="4415566066719264597">Chromium をバックグラウンドで実行する</translation>
-<translation id="4419831163359812184">{NUM_EXTENSIONS,plural, =1{削除することをおすすめします。<ph name="BEGIN_LINK" />サポートされている拡張機能の詳細<ph name="END_LINK" />}other{削除することをおすすめします。<ph name="BEGIN_LINK" />サポートされている拡張機能の詳細<ph name="END_LINK" />}}</translation>
-<translation id="4423735387467980091">Chromium の設定</translation>
+<translation id="1338297030721125711">Phromium をバックグラウンドで実行する</translation>
+<translation id="3764462296589283740">{NUM_EXTENSIONS,plural, =1{削除することをおすすめします。<ph name="BEGIN_LINK" />サポートされている拡張機能の詳細<ph name="END_LINK" />}other{削除することをおすすめします。<ph name="BEGIN_LINK" />サポートされている拡張機能の詳細<ph name="END_LINK" />}}</translation>
+<translation id="1011403527148313450">Phromium の設定</translation>
 <translation id="4427306783828095590">保護強化機能により、フィッシングを防ぎ、不正なソフトウェアをより強力にブロックします</translation>
 <translation id="4434353761996769206">インストーラー エラー: <ph name="INSTALLER_ERROR" /></translation>
-<translation id="4438870983368648614">Chromium は <ph name="MANAGER" /> によって管理されています</translation>
-<translation id="444069871276811466">Chromium プロフィールを追加</translation>
+<translation id="5736318769022575415">Phromium は <ph name="MANAGER" /> によって管理されています</translation>
+<translation id="2477616462388290618">Phromium プロフィールを追加</translation>
 <translation id="4447409407328223819">Chrome for Testing について</translation>
-<translation id="4470974262661801543">Google アカウントで Chromium データを使用、保存するには、パスフレーズを入力してください</translation>
+<translation id="972523218852576493">Google アカウントで Phromium データを使用、保存するには、パスフレーズを入力してください</translation>
 <translation id="4493028449971051158">起動エラー: 管理者としてインストーラを実行してください。</translation>
 <translation id="4501471624619070934">お住まいの国ではアクセスが制限されているため、インストールに失敗しました。</translation>
-<translation id="4510853178268397146">この拡張機能は、データの収集方法や使用方法などのプライバシー保護の取り組みを公開していません。削除することをおすすめします。</translation>
-<translation id="452711251841752011">Chromium へようこそ。新しいブラウザ ウィンドウが開いています</translation>
-<translation id="4531137820806573936">Chromium にシーン認識とハンド トラッキングを許可する必要があります</translation>
-<translation id="4536805923587466102">別の Chromium プロフィールに <ph name="USER_EMAIL_ADDRESS" /> としてすでにログインしています</translation>
-<translation id="4548534452171747496">ページがプリロードされ、閲覧と検索をすばやく行えるようになります。<ph name="BEGIN_LINK" />ページのプリロードの詳細<ph name="END_LINK" /></translation>
+<translation id="8839763675940122379">この拡張機能は、データの収集方法や使用方法などのプライバシー保護の取り組みを公開していません。削除することをおすすめします。</translation>
+<translation id="2339640488105852505">Phromium へようこそ。新しいブラウザ ウィンドウが開いています</translation>
+<translation id="8536959233160434213">Phromium にシーン認識とハンド トラッキングを許可する必要があります</translation>
+<translation id="1077734277628859167">別の Phromium プロフィールに <ph name="USER_EMAIL_ADDRESS" /> としてすでにログインしています</translation>
+<translation id="5512897665247593318">ページがプリロードされ、閲覧と検索をすばやく行えるようになります。<ph name="BEGIN_LINK" />ページのプリロードの詳細<ph name="END_LINK" /></translation>
 <translation id="4549180975214802957">有害と思われるサイトを報告すると、他のユーザーのオンライン セキュリティの向上に役立てられます。</translation>
-<translation id="4570813286784708942">このダウンロードは Chromium でブロックされました。セーフ ブラウジングがオフになっており、ファイルを確認できません</translation>
-<translation id="4583692638088316420">スマートフォンの Chromium で Google レンズを試す</translation>
+<translation id="6624033199018630177">このダウンロードは Phromium でブロックされました。セーフ ブラウジングがオフになっており、ファイルを確認できません</translation>
+<translation id="3039804643080655517">スマートフォンの Phromium で Google レンズを試す</translation>
 <translation id="4594305310729380060">このデバイスのパスワード マネージャーに保存</translation>
-<translation id="459535195905078186">Chromium アプリ</translation>
+<translation id="8064263528617889755">Phromium アプリ</translation>
 <translation id="4598116752460667024">リストからプロセスを検索します。</translation>
 <translation id="4613863813562375431">Chromium OS のバージョン</translation>
-<translation id="4621240073146040695">Chromium を再起動して更新を完了してください。</translation>
-<translation id="4625064703209785397">Chromium の V8 エンジンでサイトを高速化する（攻撃に対する Chromium の耐性は若干低下します）</translation>
-<translation id="4626321472657185181">「Chromium で検索」を開く</translation>
-<translation id="4654639495249754755">Chromium プロファイル</translation>
-<translation id="4665829708273112819">警告: 拡張機能による閲覧履歴の記録を Chromium で停止することはできません。シークレット モードでこの拡張機能を無効にするには、このオプションの選択を解除してください。</translation>
-<translation id="4673151026126227699">Chromium の使用状況レポートを送信する場合は、アクセスした URL がこのレポートに含められます</translation>
+<translation id="7245201002247176127">Phromium を再起動して更新を完了してください。</translation>
+<translation id="8846891938874485868">Phromium の V8 エンジンでサイトを高速化する（攻撃に対する Phromium の耐性は若干低下します）</translation>
+<translation id="7525500996671436081">「Phromium で検索」を開く</translation>
+<translation id="1224842000407297331">Phromium プロファイル</translation>
+<translation id="4956303519269880412">警告: 拡張機能による閲覧履歴の記録を Phromium で停止することはできません。シークレット モードでこの拡張機能を無効にするには、このオプションの選択を解除してください。</translation>
+<translation id="2708255035805733225">Phromium の使用状況レポートを送信する場合は、アクセスした URL がこのレポートに含められます</translation>
 <translation id="4673710618874938871"><ph name="USER_NAME" />（メンバーシップ）としてログインしています。アカウント メニューを開く</translation>
-<translation id="4677944499843243528">プロフィールは、別のコンピュータ（<ph name="HOST_NAME" />）の別の Chromium プロセス（<ph name="PROCESS_ID" />）で使用されているようです。Chromium はプロフィールが破損しないようにプロフィールをロックしています。他のプロセスがこのプロフィールを使用していないことが確実であれば、プロフィールのロックを解除して Chromium を再起動できます。</translation>
+<translation id="1883292567514549610">プロフィールは、別のコンピュータ（<ph name="HOST_NAME" />）の別の Phromium プロセス（<ph name="PROCESS_ID" />）で使用されているようです。Phromium はプロフィールが破損しないようにプロフィールをロックしています。他のプロセスがこのプロフィールを使用していないことが確実であれば、プロフィールのロックを解除して Phromium を再起動できます。</translation>
 <translation id="4680828127924988555">インストールをキャンセル</translation>
-<translation id="469259825538636168">Chromium データの一部が Google アカウントにまだ保存されていません。数分待ってからログアウトしてください。今すぐログアウトすると、このデータは削除されます。</translation>
-<translation id="4708193446201257833">Chromium にログイン中は、Google アカウントのパスワードやその他の設定を使用できます。<ph name="SHORTCUT" /> キーを押すと Google サービスの設定を変更できます。</translation>
-<translation id="4708774505295300557">前回このパソコンで別のユーザー（<ph name="ACCOUNT_EMAIL_LAST" />）が Chromium にログインしました。情報を個別に保持するには、新しい Chromium ユーザーを作成してください。</translation>
+<translation id="1889305042180577023">Phromium データの一部が Google アカウントにまだ保存されていません。数分待ってからログアウトしてください。今すぐログアウトすると、このデータは削除されます。</translation>
+<translation id="8079525505870459051">Phromium にログイン中は、Google アカウントのパスワードやその他の設定を使用できます。<ph name="SHORTCUT" /> キーを押すと Google サービスの設定を変更できます。</translation>
+<translation id="2171507067211697961">前回このパソコンで別のユーザー（<ph name="ACCOUNT_EMAIL_LAST" />）が Phromium にログインしました。情報を個別に保持するには、新しい Phromium ユーザーを作成してください。</translation>
 <translation id="4724676981607797757">サポートされていないプロトコル エラーが発生したため、インストールできませんでした。</translation>
-<translation id="4746050847053251315">今すぐ Chromium を終了しますか？</translation>
-<translation id="4748217263233248895">Chromium の特別なセキュリティ アップデートが適用されました。今すぐ再起動してください。タブは復元されます。</translation>
-<translation id="4771701986670315895">最近アクセスしていないため、Chromium で <ph name="PERMISSION_1" />、<ph name="PERMISSION_2" />、他 <ph name="COUNT" /> 件の権限を削除しました。</translation>
-<translation id="4786083865378785874">Gemini in Chromium が開いている場合、新しく開いたタブでもサイドパネルが表示されます。</translation>
+<translation id="6925701206088903005">今すぐ Phromium を終了しますか？</translation>
+<translation id="4514755609496543621">Phromium の特別なセキュリティ アップデートが適用されました。今すぐ再起動してください。タブは復元されます。</translation>
+<translation id="8673673368917636496">最近アクセスしていないため、Phromium で <ph name="PERMISSION_1" />、<ph name="PERMISSION_2" />、他 <ph name="COUNT" /> 件の権限を削除しました。</translation>
+<translation id="3638319732826965647">Gemini in Phromium が開いている場合、新しく開いたタブでもサイドパネルが表示されます。</translation>
 <translation id="479167709087336770">Google 検索と同じスペルチェックが使用されます。ブラウザに入力したテキストは Google に送信されます。この動作はいつでも設定で変更できます。</translation>
-<translation id="4814736265800133385">アカウントなしで Chromium を使用する</translation>
-<translation id="4888717733111232871">mDNS トラフィックを許可する Chromium のインバウンド ルールです。</translation>
-<translation id="4893347770495441059">再起動して Chromium を更新(&amp;C)</translation>
+<translation id="2659245507243672392">アカウントなしで Phromium を使用する</translation>
+<translation id="166411027652942990">mDNS トラフィックを許可する Phromium のインバウンド ルールです。</translation>
+<translation id="6031862420354068813">再起動して Phromium を更新(&amp;C)</translation>
 <translation id="4918086044614829423">同意する</translation>
 <translation id="4918844574251943176">画像をコピーしました</translation>
-<translation id="4919431996536326528">すべてのデバイスで同じリーディング リストなどを使用するには、Chromium にログインしてください</translation>
-<translation id="4943838377383847465">Chromium はバックグラウンド モードです。</translation>
-<translation id="494490797786467921">クリックすると、Chromium のログイン ダイアログを閉じます</translation>
-<translation id="4950660488495335294">Chromium プロフィールを使うと、Chromium のあらゆる項目や設定を個別に管理できます。友達や家族のプロフィールを作成したり、仕事とプライベートでプロフィールを使い分けたりできます。</translation>
-<translation id="4987820182225656817">ゲスト ユーザーは、記録を残さずに Chromium を使用できます。</translation>
-<translation id="4992938037305302429">Chromium のアカウント設定</translation>
-<translation id="4994636714258228724">Chromium に自分を追加</translation>
+<translation id="1531905832227009774">すべてのデバイスで同じリーディング リストなどを使用するには、Phromium にログインしてください</translation>
+<translation id="4319892378006430019">Phromium はバックグラウンド モードです。</translation>
+<translation id="8972359100025490790">クリックすると、Phromium のログイン ダイアログを閉じます</translation>
+<translation id="3639078149590125530">Phromium プロフィールを使うと、Phromium のあらゆる項目や設定を個別に管理できます。友達や家族のプロフィールを作成したり、仕事とプライベートでプロフィールを使い分けたりできます。</translation>
+<translation id="7141327976224964788">ゲスト ユーザーは、記録を残さずに Phromium を使用できます。</translation>
+<translation id="7007327521155149139">Phromium のアカウント設定</translation>
+<translation id="5973804420920585431">Phromium に自分を追加</translation>
 <translation id="504699503110800016">オーバーフロー メニューを開きます</translation>
-<translation id="5074496654342756568"><ph name="DEVICE_TYPE" /> の Chromium で、Google のお気に入りすべてにアクセスできます</translation>
-<translation id="5123973130450702873">Chromium がハンド トラッキングの許可を求めています</translation>
-<translation id="5141988424377517949">最近アクセスしていないため、Chromium で <ph name="PERMISSION_1" />、<ph name="PERMISSION_2" />、<ph name="PERMISSION_3" /> の権限を削除しました。</translation>
-<translation id="5171868502429358653">Chromium にログイン</translation>
+<translation id="2497925691306722252"><ph name="DEVICE_TYPE" /> の Phromium で、Google のお気に入りすべてにアクセスできます</translation>
+<translation id="8678196879882043620">Phromium がハンド トラッキングの許可を求めています</translation>
+<translation id="3397880081430454820">最近アクセスしていないため、Phromium で <ph name="PERMISSION_1" />、<ph name="PERMISSION_2" />、<ph name="PERMISSION_3" /> の権限を削除しました。</translation>
+<translation id="9114243566897924763">Phromium にログイン</translation>
 <translation id="5174969993834422967">通知はデフォルトでブロックされています。このサイトの通知を表示するには、ロケーション バーの右上にある通知アイコンをクリックしてください。</translation>
 <translation id="5174983315706567306">ディスクの空き容量が不足しています。</translation>
-<translation id="5187123684706427865">Chromium アカウントの再認証が必要です</translation>
-<translation id="5223510345050543907">iOS 版 Chromium で、中断したところから再開できます。</translation>
-<translation id="5231355151045086930">Chromium からのログアウト</translation>
+<translation id="7698884672439844280">Phromium アカウントの再認証が必要です</translation>
+<translation id="5629965056131882780">iOS 版 Phromium で、中断したところから再開できます。</translation>
+<translation id="874294566462998787">Phromium からのログアウト</translation>
 <translation id="5234764350956374838">閉じる</translation>
-<translation id="5249261924633168472">Chromium のシークレット ウインドウでリンクを開く(&amp;G)</translation>
-<translation id="5276305953263010518">Chromium アプリを入手して、外出先でパスワードを保存</translation>
-<translation id="5277894862589591112">変更を適用するには Chromium を再起動してください</translation>
-<translation id="5278909220224474621">このタブを別のデバイスに送信するには、両方のデバイスで Chromium にログインしてください</translation>
+<translation id="8605581794204249702">Phromium のシークレット ウインドウでリンクを開く(&amp;G)</translation>
+<translation id="8722804301463582643">Phromium アプリを入手して、外出先でパスワードを保存</translation>
+<translation id="6253936671561887082">変更を適用するには Phromium を再起動してください</translation>
+<translation id="7405713141437293142">このタブを別のデバイスに送信するには、両方のデバイスで Phromium にログインしてください</translation>
 <translation id="5286907366254680517">検出しました</translation>
-<translation id="5289287148052354622">Chromium アプリを入手</translation>
-<translation id="5294316920224716406">シークレット モードでブラウジングする際、Chromium で安全でない接続を使用してサイトを読み込む前に警告を表示します</translation>
-<translation id="5296581118566748922">Chromium で検索</translation>
-<translation id="5313228254328109263">Chromium Updater 内部サービス</translation>
-<translation id="5324450571874973775">Chromium の他の Gemini 機能と組み合わせて使用できます</translation>
+<translation id="2224284460884535818">Phromium アプリを入手</translation>
+<translation id="1426207087952749578">シークレット モードでブラウジングする際、Phromium で安全でない接続を使用してサイトを読み込む前に警告を表示します</translation>
+<translation id="8108751453879231987">Phromium で検索</translation>
+<translation id="7780358745459835678">Phromium Updater 内部サービス</translation>
+<translation id="6956753580765202069">Phromium の他の Gemini 機能と組み合わせて使用できます</translation>
 <translation id="5346389065299425353">複数のタブ、ファイル、ツールを追加し、対象を掘り下げて検索します</translation>
-<translation id="5348677704241861105">Gemini in Chromium でこのドキュメントの概要をすばやく把握し、質問することができます</translation>
-<translation id="5352264705793813212">安全に関する推奨事項をご確認ください</translation>
-<translation id="5352361688875342522">その他の Chromium プロフィール</translation>
-<translation id="535243042947607642">アカウントのログイン情報が最新でないため、ChromiumOS は Google アカウントに Chromium データを保存できませんでした</translation>
-<translation id="5358375970380395591">現在、管理対象アカウントでログインしており、あなたの Chromium プロフィールを管理者が制御できる状態になっています。あなたの Chromium データ（アプリ、ブックマーク、履歴、パスワードなどの設定）は永続的に <ph name="USER_NAME" /> に関連付けられます。このデータは Google アカウントのダッシュボードを介して削除できますが、このデータを別のアカウントに関連付けることはできなくなります。<ph name="LEARN_MORE" /></translation>
+<translation id="8684266995248242891">Gemini in Phromium でこのドキュメントの概要をすばやく把握し、質問することができます</translation>
+<translation id="586104673506947714">安全に関する推奨事項をご確認ください</translation>
+<translation id="4657908558997566735">その他の Phromium プロフィール</translation>
+<translation id="6097378010983112326">アカウントのログイン情報が最新でないため、ChromiumOS は Google アカウントに Phromium データを保存できませんでした</translation>
+<translation id="385020720581757591">現在、管理対象アカウントでログインしており、あなたの Phromium プロフィールを管理者が制御できる状態になっています。あなたの Phromium データ（アプリ、ブックマーク、履歴、パスワードなどの設定）は永続的に <ph name="USER_NAME" /> に関連付けられます。このデータは Google アカウントのダッシュボードを介して削除できますが、このデータを別のアカウントに関連付けることはできなくなります。<ph name="LEARN_MORE" /></translation>
 <translation id="5368118228313795342">他のコード: <ph name="EXTRA_CODE" />。</translation>
-<translation id="5377622451696208284">パーソナライズするには、Chromium をウェブとアプリのアクティビティに追加します</translation>
-<translation id="5382964351116519680">「Chromium で検索」を開く</translation>
-<translation id="5383439451358640070">Chromium で一部のファイルがブロックされる理由</translation>
-<translation id="5386450000063123300">Chromium を更新しています（<ph name="PROGRESS_PERCENT" />）</translation>
-<translation id="5387586787134731891"><ph name="EXISTING_USER" /> がすでにログインしています。ブラウジング環境を分ける場合は、<ph name="USER_EMAIL_ADDRESS" /> として自分用のプロフィールで Chromium にログインしてください。すべてのデバイスで同じ拡張機能などを使用できます。</translation>
-<translation id="538767207339317086">Chromium へのログインを許可する</translation>
-<translation id="5405650547142096840">Chromium から削除</translation>
-<translation id="5424544524441439284">パフォーマンスは低下しますが、攻撃に対する Chromium の耐性が強化されます</translation>
-<translation id="5427571867875391349">Chromium をデフォルト ブラウザに設定する</translation>
-<translation id="5438241569118040789"><ph name="PAGE_TITLE" /> - Chromium Beta</translation>
-<translation id="5460618461609401056">{NUM_TABS,plural, =1{ブラウザの動作を遅くしているタブを一時停止することをおすすめします}other{ブラウザの動作を遅くしているタブを一時停止することをおすすめします}}</translation>
-<translation id="5473971139929175403">この Linux ディストリビューションはサポートされなくなったため、Chromium は正常に機能しない可能性があります</translation>
-<translation id="5475924890392386523">このダウンロードは Chromium でブロックされました。ファイルが個人アカウントやソーシャル ネットワークのアカウントに危害を及ぼす可能性があります</translation>
-<translation id="549669000822060376">Chromium は最新のシステム アップデートをインストールしています。しばらくお待ちください。</translation>
-<translation id="5496810170689441661">Chromium でパスワードを編集しようとしています。続行するには、Windows のパスワードを入力してください。</translation>
-<translation id="549975168243349205">Chromium で、Google ドライブや YouTube などのお気に入りのアプリを外出先でもシームレスに利用できます。</translation>
+<translation id="3729704134418183937">パーソナライズするには、Phromium をウェブとアプリのアクティビティに追加します</translation>
+<translation id="2756028035855809142">「Phromium で検索」を開く</translation>
+<translation id="4375021373215585423">Phromium で一部のファイルがブロックされる理由</translation>
+<translation id="4688227912949761884">Phromium を更新しています（<ph name="PROGRESS_PERCENT" />）</translation>
+<translation id="1581580071694756035"><ph name="EXISTING_USER" /> がすでにログインしています。ブラウジング環境を分ける場合は、<ph name="USER_EMAIL_ADDRESS" /> として自分用のプロフィールで Phromium にログインしてください。すべてのデバイスで同じ拡張機能などを使用できます。</translation>
+<translation id="4945147853702701048">Phromium へのログインを許可する</translation>
+<translation id="7813879193794658604">Phromium から削除</translation>
+<translation id="2908302339618007937">パフォーマンスは低下しますが、攻撃に対する Phromium の耐性が強化されます</translation>
+<translation id="8760365573983490520">Phromium をデフォルト ブラウザに設定する</translation>
+<translation id="6395910175148753946"><ph name="PAGE_TITLE" /> - Phromium Beta</translation>
+<translation id="3685567744344529931">{NUM_TABS,plural, =1{ブラウザの動作を遅くしているタブを一時停止することをおすすめします}other{ブラウザの動作を遅くしているタブを一時停止することをおすすめします}}</translation>
+<translation id="975923236500175446">この Linux ディストリビューションはサポートされなくなったため、Phromium は正常に機能しない可能性があります</translation>
+<translation id="7595270580374414215">このダウンロードは Phromium でブロックされました。ファイルが個人アカウントやソーシャル ネットワークのアカウントに危害を及ぼす可能性があります</translation>
+<translation id="5644162187312430027">Phromium は最新のシステム アップデートをインストールしています。しばらくお待ちください。</translation>
+<translation id="2476033563817685908">Phromium でパスワードを編集しようとしています。続行するには、Windows のパスワードを入力してください。</translation>
+<translation id="1626952238284562558">Phromium で、Google ドライブや YouTube などのお気に入りのアプリを外出先でもシームレスに利用できます。</translation>
 <translation id="5524890928877629608">検索範囲の左上隅: 左 <ph name="LEFT" />%、上 <ph name="TOP" />%</translation>
-<translation id="5527463683072221100">Chromium で PDF を開く</translation>
+<translation id="2860766395826060492">Phromium で PDF を開く</translation>
 <translation id="5536164441519929134">このタブについて<ph name="LINE_BREAK" />質問する</translation>
-<translation id="555970465369471303">セキュリティ上の理由から、Chromium では、サイトに初めてアクセスしたときに JavaScript の最適化がオフになります。このページが想定どおりに動作しない場合は、最適化を許可してみてください。</translation>
-<translation id="5575874067957905201">Gemini in Chromium を Mac のメニューバーに表示して、キーボード ショートカットをオンにする</translation>
-<translation id="5576587363991567745"><ph name="EXISTING_USER" /> がすでにログインしています。ブラウジング環境を分ける場合は、<ph name="USER_EMAIL_ADDRESS" /> として自分用のプロフィールで Chromium にログインしてください。<ph name="DEVICE" /> で保存した情報などを使用できます。</translation>
+<translation id="3915500272078806319">セキュリティ上の理由から、Phromium では、サイトに初めてアクセスしたときに JavaScript の最適化がオフになります。このページが想定どおりに動作しない場合は、最適化を許可してみてください。</translation>
+<translation id="6778733300408894918">Gemini in Phromium を Mac のメニューバーに表示して、キーボード ショートカットをオンにする</translation>
+<translation id="8411908790152555435"><ph name="EXISTING_USER" /> がすでにログインしています。ブラウジング環境を分ける場合は、<ph name="USER_EMAIL_ADDRESS" /> として自分用のプロフィールで Phromium にログインしてください。<ph name="DEVICE" /> で保存した情報などを使用できます。</translation>
 <translation id="5579324208890605088">起動エラー: 管理者ではなく標準ユーザーとしてインストーラを実行してください。</translation>
-<translation id="5580770360767802657">Chromium を既定に設定してタスクバーに固定する</translation>
+<translation id="6578510724610627339">Phromium を既定に設定してタスクバーに固定する</translation>
 <translation id="5596627076506792578">その他のオプション</translation>
 <translation id="5605834417512968703">画像検索で検索する範囲を選択してください。Esc キーを押すと画像検索を終了します</translation>
 <translation id="5618818588972826921">画像検索で検索するテキストまたは画像を選択してください。Esc キーを押すと画像検索を終了します。</translation>
-<translation id="5623402015214259806">{0,plural, =0{Chromium のアップデートが利用可能です}=1{Chromium のアップデートが利用可能です}other{Chromium のアップデートが利用可能になってから # 日経過しています}}</translation>
-<translation id="5643865575100044307">Chromium を閉じるとき、常にデバイスからサイトデータを削除する</translation>
-<translation id="5653831366781983928">今すぐ Chromium を再起動してください</translation>
+<translation id="4431270188253419020">{0,plural, =0{Phromium のアップデートが利用可能です}=1{Phromium のアップデートが利用可能です}other{Phromium のアップデートが利用可能になってから # 日経過しています}}</translation>
+<translation id="6903143702905157196">Phromium を閉じるとき、常にデバイスからサイトデータを削除する</translation>
+<translation id="5354366475527026551">今すぐ Phromium を再起動してください</translation>
 <translation id="5690427481109656848">Google LLC</translation>
-<translation id="5698481217667032250">Chromium をこの言語で表示</translation>
+<translation id="7813917140072793410">Phromium をこの言語で表示</translation>
 <translation id="569897634095159764">インターネットに接続できません。プロキシ サーバーにより認証を求められています。</translation>
-<translation id="5768371961535086509">アクティブでないタブのメモリを解放します。これにより、アクティブなタブや他のアプリで利用できるコンピュータ リソースが増え、Chromium の速度低下を抑えられます。アクティブでないタブは、再度アクセスすると自動的にアクティブになります。<ph name="BEGIN_LINK" />メモリセーバーの詳細<ph name="END_LINK" /></translation>
-<translation id="5775198138441669627">パスフレーズを忘れた場合や、この設定を変更する場合は、アカウントの Chromium データを<ph name="SETTINGS_LINK" />してください</translation>
-<translation id="5800158606660203929">Chromium をカスタマイズ、管理します。Chromium をデフォルトに設定します。</translation>
-<translation id="5802618941556161431">Chromium を既定のブラウザに設定すると、パスワード、ブックマーク、履歴をデバイス間で完全に同期できます。</translation>
+<translation id="5724138350057003647">アクティブでないタブのメモリを解放します。これにより、アクティブなタブや他のアプリで利用できるコンピュータ リソースが増え、Phromium の速度低下を抑えられます。アクティブでないタブは、再度アクセスすると自動的にアクティブになります。<ph name="BEGIN_LINK" />メモリセーバーの詳細<ph name="END_LINK" /></translation>
+<translation id="3730992449058237228">パスフレーズを忘れた場合や、この設定を変更する場合は、アカウントの Phromium データを<ph name="SETTINGS_LINK" />してください</translation>
+<translation id="1983042639279920602">Phromium をカスタマイズ、管理します。Phromium をデフォルトに設定します。</translation>
+<translation id="7136978005010973283">Phromium を既定のブラウザに設定すると、パスワード、ブックマーク、履歴をデバイス間で完全に同期できます。</translation>
 <translation id="5809516625706423866">インターネットに接続できません。HTTP 401 認証エラーが発生しました。プロキシ設定をご確認ください。</translation>
-<translation id="5817952762723416573">Chromium の V8 エンジンでサイトを高速化する（攻撃に対する Chromium の耐性は若干低下します）。この設定はオフになっています。</translation>
-<translation id="5821520528363214608">Google アカウントで Chromium のデータを使用、保存するには、Chromium を更新してください</translation>
+<translation id="3059302031765226748">Phromium の V8 エンジンでサイトを高速化する（攻撃に対する Phromium の耐性は若干低下します）。この設定はオフになっています。</translation>
+<translation id="4904710047654714935">Google アカウントで Phromium のデータを使用、保存するには、Phromium を更新してください</translation>
 <translation id="5824893331272123205">このパネルを読み込めませんでした。もう一度お試しください</translation>
-<translation id="5862307444128926510">Chromium へようこそ</translation>
-<translation id="5867606647614813312">追加の機能を有効にして、Chromium の最高水準のセキュリティで保護します</translation>
+<translation id="2582896742857095190">Phromium へようこそ</translation>
+<translation id="5004643502851105876">追加の機能を有効にして、Phromium の最高水準のセキュリティで保護します</translation>
 <translation id="5871205389137001634">クリックすると画像検索を終了します</translation>
-<translation id="5883558403894052917">Chromium で次のアイテムに不正なソフトウェアが含まれていることが検出されました。</translation>
-<translation id="5889361821821684993">Chromium では、ブラウザが安全な設定になっているかどうかを定期的に確認しています。お客様による確認が必要な項目がありましたらお知らせします。</translation>
+<translation id="7409018434452575206">Phromium で次のアイテムに不正なソフトウェアが含まれていることが検出されました。</translation>
+<translation id="3191822983646594827">Phromium では、ブラウザが安全な設定になっているかどうかを定期的に確認しています。お客様による確認が必要な項目がありましたらお知らせします。</translation>
 <translation id="5895138241574237353">再起動</translation>
-<translation id="5896077214220653386">Gemini Enterprise in Chromium</translation>
+<translation id="625373791981566594">Gemini Enterprise in Phromium</translation>
 <translation id="5903106910045431592"><ph name="PAGE_TITLE" /> - ネットワークにログイン</translation>
 <translation id="5924017743176219022">インターネットに接続しています…</translation>
 <translation id="5941711191222866238">最小化</translation>
-<translation id="5949225980829865667">すべてのデバイスでこのブックマークなどを使用するには、Chromium にログインしてください</translation>
-<translation id="5953657885167112863">Chromium を自分好みに</translation>
+<translation id="8650638130234822147">すべてのデバイスでこのブックマークなどを使用するには、Phromium にログインしてください</translation>
+<translation id="5010592102321399468">Phromium を自分好みに</translation>
 <translation id="5960071705175224773">不明なアプリによって設定が変更されました</translation>
 <translation id="5977420883993828287">固定しました。ツールバーからコンテキスト タスクを使用できます</translation>
-<translation id="5986585015444752010">{COUNT,plural, =1{1 分間使用しなかった場合、組織は Chromium を自動的に終了します。}other{# 分間使用しなかった場合、組織は Chromium を自動的に終了します。}}</translation>
-<translation id="5987687638152509985">同期を開始するには、Chromium を更新します</translation>
+<translation id="3936815319391045961">{COUNT,plural, =1{1 分間使用しなかった場合、組織は Phromium を自動的に終了します。}other{# 分間使用しなかった場合、組織は Phromium を自動的に終了します。}}</translation>
+<translation id="3160371268592376569">同期を開始するには、Phromium を更新します</translation>
 <translation id="5990360079535151574">ツールバーの [コンテキスト タスク] ボタンからコンテキスト タスクを再度開いて、ブラウジング中に質問できます</translation>
 <translation id="6003112304606738118">ダウンロードしています... 残り <ph name="HOURS" /> 時間です</translation>
 <translation id="6009821354356307391">もっと聞く</translation>
 <translation id="6040143037577758943">閉じる</translation>
-<translation id="6044357424127037044"><ph name="DEVICE_TYPE" /> の Chromium アプリで、オンライン ショッピングをさらに便利に利用できます</translation>
-<translation id="6058380562449900225">データを保護するため、最近アクセスしていないサイトから権限を自動で削除します。通知は停止されません。</translation>
-<translation id="6063093106622310249">Chromium で開く(&amp;O)</translation>
+<translation id="5783572280281297164"><ph name="DEVICE_TYPE" /> の Phromium アプリで、オンライン ショッピングをさらに便利に利用できます</translation>
+<translation id="2712461133060419287">データを保護するため、最近アクセスしていないサイトから権限を自動で削除します。通知は停止されません。</translation>
+<translation id="7845842385196710435">Phromium で開く(&amp;O)</translation>
 <translation id="6069027071882229820">画像としてコピー</translation>
-<translation id="6072279588547424923">「<ph name="EXTENSION_NAME" />」が Chromium に追加されました</translation>
-<translation id="6096348254544841612">Chromium をカスタマイズしてご活用ください。アップデートが利用可能です。</translation>
-<translation id="6107893135096467929">オン • Chromium では、この拡張機能の提供元を確認できません</translation>
-<translation id="611228897408671387">Chromium のアカウント設定</translation>
-<translation id="6119438414301547735">拡張機能に Chromium ツールバーへのアクセス リクエストの表示を許可する</translation>
-<translation id="6129621093834146363"><ph name="FILE_NAME" /> は危険なファイルであるため、Chromium でブロックしました。</translation>
-<translation id="6132897690380286411">Chromium はまもなく終了し、データが削除されます</translation>
-<translation id="6145820983052037069">こちらで Chromium プロフィールを切り替えることができます</translation>
-<translation id="615103374448673771">Cookie を許可した場合、Chromium はプリロードの際に Cookie を使用することがあります。</translation>
+<translation id="3752072756936611600">「<ph name="EXTENSION_NAME" />」が Phromium に追加されました</translation>
+<translation id="2775066550187002528">Phromium をカスタマイズしてご活用ください。アップデートが利用可能です。</translation>
+<translation id="6531352038528110565">オン • Phromium では、この拡張機能の提供元を確認できません</translation>
+<translation id="2876078296400914679">Phromium のアカウント設定</translation>
+<translation id="3881538460441135554">拡張機能に Phromium ツールバーへのアクセス リクエストの表示を許可する</translation>
+<translation id="7479187736743594081"><ph name="FILE_NAME" /> は危険なファイルであるため、Phromium でブロックしました。</translation>
+<translation id="6646104775883837119">Phromium はまもなく終了し、データが削除されます</translation>
+<translation id="6138634751748297112">こちらで Phromium プロフィールを切り替えることができます</translation>
+<translation id="8660563290103481109">Cookie を許可した場合、Phromium はプリロードの際に Cookie を使用することがあります。</translation>
 <translation id="6165508094623778733">詳細</translation>
-<translation id="6173308241973263798">アカウントの Chromium データを消去</translation>
-<translation id="6174920971222007286">このファイルは危険な可能性があります<ph name="LINE_BREAK" />パスワードを入力すると、Chromium でダウンロードを確認します。ファイルに関する情報は Google セーフ ブラウジングに送信されますが、ファイルのコンテンツとパスワードはデバイスで保持されます。</translation>
+<translation id="969667123257916656">アカウントの Phromium データを消去</translation>
+<translation id="5528040738212560214">このファイルは危険な可能性があります<ph name="LINE_BREAK" />パスワードを入力すると、Phromium でダウンロードを確認します。ファイルに関する情報は Google セーフ ブラウジングに送信されますが、ファイルのコンテンツとパスワードはデバイスで保持されます。</translation>
 <translation id="6182736845697986886">更新サーバーの内部エラーが発生したため、インストールできませんでした。</translation>
-<translation id="6183079672144801177"><ph name="TARGET_DEVICE_NAME" /> で Chromium にログインしていることを確認してから、もう一度送信してください。</translation>
-<translation id="6192070012454216182">Chromium を最小化しているときでも、あらゆる場所から検索や質問を行えます。Chromium のバックグラウンドでの実行を許可します。</translation>
-<translation id="6212496753309875659">新しいバージョンの Chromium が既にインストールされています。ソフトウェアが動作しない場合は、Chromium をアンインストールしてからもう一度お試しください。</translation>
-<translation id="6219195342503754812">{0,plural, =0{Chromium は今すぐ再起動されます}=1{Chromium は 1 秒後に再起動されます}other{Chromium は # 秒後に再起動されます}}</translation>
-<translation id="6241367896540709610">ファイルをダウンロードするには、Chromium でストレージへのアクセスを許可する必要があります</translation>
-<translation id="6245734527075554892">Chromium に保存されている安全でないサイトのリストと URL を照合します</translation>
-<translation id="6248213926982192922">Chromium を既定のブラウザにする</translation>
+<translation id="6041381825442292659"><ph name="TARGET_DEVICE_NAME" /> で Phromium にログインしていることを確認してから、もう一度送信してください。</translation>
+<translation id="2474943719592372017">Phromium を最小化しているときでも、あらゆる場所から検索や質問を行えます。Phromium のバックグラウンドでの実行を許可します。</translation>
+<translation id="2518372260387069450">新しいバージョンの Phromium が既にインストールされています。ソフトウェアが動作しない場合は、Phromium をアンインストールしてからもう一度お試しください。</translation>
+<translation id="3832895416321159809">{0,plural, =0{Phromium は今すぐ再起動されます}=1{Phromium は 1 秒後に再起動されます}other{Phromium は # 秒後に再起動されます}}</translation>
+<translation id="2775110773501098464">ファイルをダウンロードするには、Phromium でストレージへのアクセスを許可する必要があります</translation>
+<translation id="3505491405575013121">Phromium に保存されている安全でないサイトのリストと URL を照合します</translation>
+<translation id="2276249127856880228">Phromium を既定のブラウザにする</translation>
 <translation id="6248988683584659830">設定項目を検索</translation>
-<translation id="6261803579884938625">スマートフォンの Chromium アプリで、Google の優れた安全機能を外出先でも利用できます</translation>
-<translation id="6268381023930128611">Chromium からログアウトしますか？</translation>
-<translation id="6270547683008298381">これらのタブでは追加のリソースが使用されています。パフォーマンスを改善するには、Chromium でこれらのタブを非アクティブにしてください。</translation>
-<translation id="6281746429495226318">Chromium プロフィールをカスタマイズ</translation>
-<translation id="6290827346642914212">Chromium プロフィールの名前を設定</translation>
-<translation id="6294831894865512704">拡張機能が Chromium へのログインを求めています</translation>
-<translation id="6295779123002464101"><ph name="FILE_NAME" /> は危険なファイルの可能性があるため、Chromium でブロックしました。</translation>
-<translation id="6309712487085796862">Chromium がカメラを使用しています。</translation>
-<translation id="6333502561965082103">Chromium で別の処理が行われています。しばらくしてからもう一度お試しください。</translation>
-<translation id="6334986366598267305">共有パソコンの Chromium で Google アカウントが簡単に使用できるようになりました。</translation>
-<translation id="6347002662287820329">Chromium を既定のブラウザに設定すると、お馴染みの信頼できる機能を簡単に利用できるようになります。</translation>
-<translation id="6347933965114150440">Chromium のショートカット</translation>
-<translation id="6366160072964553914">このダウンロードは Chromium でブロックされました。ファイルが一般的にダウンロードされるものではなく、危害を及ぼす可能性があります</translation>
-<translation id="6373523479360886564">Chromium をアンインストールしてもよろしいですか？</translation>
+<translation id="554637698797403739">スマートフォンの Phromium アプリで、Google の優れた安全機能を外出先でも利用できます</translation>
+<translation id="7016155178198587734">Phromium からログアウトしますか？</translation>
+<translation id="5660287988409470276">これらのタブでは追加のリソースが使用されています。パフォーマンスを改善するには、Phromium でこれらのタブを非アクティブにしてください。</translation>
+<translation id="8429776045186716992">Phromium プロフィールをカスタマイズ</translation>
+<translation id="3310436202618971091">Phromium プロフィールの名前を設定</translation>
+<translation id="1478750151648434251">拡張機能が Phromium へのログインを求めています</translation>
+<translation id="9139712828910812615"><ph name="FILE_NAME" /> は危険なファイルの可能性があるため、Phromium でブロックしました。</translation>
+<translation id="5191618263102115907">Phromium がカメラを使用しています。</translation>
+<translation id="8247508943089477519">Phromium で別の処理が行われています。しばらくしてからもう一度お試しください。</translation>
+<translation id="8271488218611798813">共有パソコンの Phromium で Google アカウントが簡単に使用できるようになりました。</translation>
+<translation id="446228390478495078">Phromium を既定のブラウザに設定すると、お馴染みの信頼できる機能を簡単に利用できるようになります。</translation>
+<translation id="2203435422524224690">Phromium のショートカット</translation>
+<translation id="3977517784144885449">このダウンロードは Phromium でブロックされました。ファイルが一般的にダウンロードされるものではなく、危害を及ぼす可能性があります</translation>
+<translation id="8088471547690853921">Phromium をアンインストールしてもよろしいですか？</translation>
 <translation id="6375219077595103062">パスワード マネージャーのショートカットを追加します</translation>
 <translation id="6388799252195623474">このページについて調べて</translation>
-<translation id="6390800440335263989">続行するには、<ph name="EMAIL" /> として Chromium にログインしてください。これにより、組織のポリシーが適用されます。</translation>
-<translation id="6400112897226594999">パソコンの画面に表示された Chromium のロゴ。</translation>
-<translation id="6403826409255603130">Chromium は、ウェブページやアプリケーションを高速に実行できるスピードと、高い安定性を兼ね備えた非常に使いやすいウェブブラウザです。不正なソフトウェアやフィッシングに対する保護機能が組み込まれており、ウェブを安全にブラウジングできます。</translation>
-<translation id="6414624068245092115">Google アカウントで Chromium のデータを使用、保存できるようにするには、本人確認を行ってください</translation>
-<translation id="642132557830635295">Chromium の動作が速くなり、JavaScript を使用する機能が設計どおりに動作します</translation>
+<translation id="1774421040071124552">続行するには、<ph name="EMAIL" /> として Phromium にログインしてください。これにより、組織のポリシーが適用されます。</translation>
+<translation id="2343430845154053061">パソコンの画面に表示された Phromium のロゴ。</translation>
+<translation id="2724924185145648602">Phromium は、ウェブページやアプリケーションを高速に実行できるスピードと、高い安定性を兼ね備えた非常に使いやすいウェブブラウザです。不正なソフトウェアやフィッシングに対する保護機能が組み込まれており、ウェブを安全にブラウジングできます。</translation>
+<translation id="7417453886359805803">Google アカウントで Phromium のデータを使用、保存できるようにするには、本人確認を行ってください</translation>
+<translation id="3304683228794166031">Phromium の動作が速くなり、JavaScript を使用する機能が設計どおりに動作します</translation>
 <translation id="6436260184216827876">画像検索は使用できません。しばらくしてからもう一度お試しください。</translation>
 <translation id="6442900851116057561">Chromium OS を再起動してください</translation>
-<translation id="6443470774889161065">アクセスする可能性の高いページがさらに多くプリロードされ、該当のページにアクセスしたときにページの読み込み速度が向上します。</translation>
-<translation id="6450948450282634257">スマートフォンに Chromium をダウンロードして、価格をトラッキングしたり、サイトで値下げがあった際に通知を受け取ったりできます</translation>
-<translation id="645458117210240797">オフ • Chromium では、この拡張機能の提供元を確認できません</translation>
-<translation id="6455857529632101747">Chromium プロフィールへようこそ</translation>
-<translation id="6460614424172581323">次回 <ph name="DEVICE_TYPE" /> で Chromium を開いたときに、タブグループを使用するよう促すメッセージが表示されます。</translation>
-<translation id="6466344609055215035">Chromium からアカウントを削除</translation>
-<translation id="6475912303565314141">この拡張機能では、Chromium の起動時に表示されるページも制御されます。</translation>
+<translation id="9164801375934097818">アクセスする可能性の高いページがさらに多くプリロードされ、該当のページにアクセスしたときにページの読み込み速度が向上します。</translation>
+<translation id="2577121659922309103">スマートフォンに Phromium をダウンロードして、価格をトラッキングしたり、サイトで値下げがあった際に通知を受け取ったりできます</translation>
+<translation id="2052328618318278030">オフ • Phromium では、この拡張機能の提供元を確認できません</translation>
+<translation id="3122296739697671126">Phromium プロフィールへようこそ</translation>
+<translation id="3472445024540245926">次回 <ph name="DEVICE_TYPE" /> で Phromium を開いたときに、タブグループを使用するよう促すメッセージが表示されます。</translation>
+<translation id="2144084801479939969">Phromium からアカウントを削除</translation>
+<translation id="2473490714352939152">この拡張機能では、Phromium の起動時に表示されるページも制御されます。</translation>
 <translation id="648319183876919572">セーフ ブラウジング保護強化機能では、危険なウェブサイトやダウンロードから高いセキュリティ強度で保護されます</translation>
-<translation id="6510925080656968729">Chromium をアンインストール</translation>
-<translation id="651535675648445253">Chromium でショートカットを開く</translation>
-<translation id="6539122709674868420"><ph name="TIMEOUT_DURATION" /> 使用しなかったため、Chromium は組織によって終了されます。閲覧データは削除されました。これには、履歴、自動入力、ダウンロードが含まれます。</translation>
-<translation id="6542839706527980775">Chromium の情報（ブックマーク、履歴、パスワードなど）はプロフィールごとに分けて保持されます</translation>
+<translation id="359777544552173333">Phromium をアンインストール</translation>
+<translation id="3890462049854841354">Phromium でショートカットを開く</translation>
+<translation id="6616579671682178785"><ph name="TIMEOUT_DURATION" /> 使用しなかったため、Phromium は組織によって終了されます。閲覧データは削除されました。これには、履歴、自動入力、ダウンロードが含まれます。</translation>
+<translation id="8662645370371079862">Phromium の情報（ブックマーク、履歴、パスワードなど）はプロフィールごとに分けて保持されます</translation>
 <translation id="6556755379298048869">キーボード ショートカットを使用して検索します。</translation>
-<translation id="6563921047760808519"><ph name="BEGIN_LINK" />Chromium でユーザーデータのプライバシーを保護する方法<ph name="END_LINK" />についての詳細</translation>
-<translation id="6564039629497156115">この設定の変更内容は、Chromium を再起動すると適用されます。</translation>
-<translation id="6567032987737689854">Chromium メインメニューの [拡張機能] をクリックして拡張機能を管理できます。</translation>
-<translation id="656935081669708576">別の Chromium プロフィールに切り替えて、そのプロフィールのパスワードを表示できます</translation>
-<translation id="6569556444379005948">Chromium アプリで、優れた AI ツールを外出先でも利用できます</translation>
-<translation id="6570579332384693436">スペルミスを修正するために、テキスト欄に入力したテキストが Chromium から Google に送信されます</translation>
-<translation id="6598877126913850652">Chromium の通知設定に移動</translation>
+<translation id="7133640529688742768"><ph name="BEGIN_LINK" />Phromium でユーザーデータのプライバシーを保護する方法<ph name="END_LINK" />についての詳細</translation>
+<translation id="8316065704185291024">この設定の変更内容は、Phromium を再起動すると適用されます。</translation>
+<translation id="2816396636285296289">Phromium メインメニューの [拡張機能] をクリックして拡張機能を管理できます。</translation>
+<translation id="8831144879019828189">別の Phromium プロフィールに切り替えて、そのプロフィールのパスワードを表示できます</translation>
+<translation id="7017911482442558099">Phromium アプリで、優れた AI ツールを外出先でも利用できます</translation>
+<translation id="5784574554904759369">スペルミスを修正するために、テキスト欄に入力したテキストが Phromium から Google に送信されます</translation>
+<translation id="8485501471305987872">Phromium の通知設定に移動</translation>
 <translation id="6600016381025017075">このページの内容を検索</translation>
-<translation id="6613594504749178791">変更内容は次に Chromium を再起動したときに有効になります。</translation>
-<translation id="6637908313088374648">Windows の起動時に Chromium を自動で起動して、すぐにブラウジングを開始できるようになりました。この動作は設定でオフにできます。</translation>
-<translation id="6648212540664651655">前回開いていたページを開く: Chromium で前回のセッションからタブが復元されました。この機能をオフにするには、</translation>
-<translation id="665732753414869868">周囲の 3D マップを作成するには、Chromium にカメラの使用を許可する必要があります</translation>
-<translation id="6669284030132180248">ブックマークを Google アカウントにも保存している場合は、Chromium で商品価格をトラッキングして、値下げがあったときに通知を受け取ることができます</translation>
+<translation id="1462793186918694806">変更内容は次に Phromium を再起動したときに有効になります。</translation>
+<translation id="7501991510212476553">Windows の起動時に Phromium を自動で起動して、すぐにブラウジングを開始できるようになりました。この動作は設定でオフにできます。</translation>
+<translation id="7686308613268368175">前回開いていたページを開く: Phromium で前回のセッションからタブが復元されました。この機能をオフにするには、</translation>
+<translation id="5266723901802366313">周囲の 3D マップを作成するには、Phromium にカメラの使用を許可する必要があります</translation>
+<translation id="7085315067428293799">ブックマークを Google アカウントにも保存している場合は、Phromium で商品価格をトラッキングして、値下げがあったときに通知を受け取ることができます</translation>
 <translation id="6676384891291319759">インターネットにアクセス</translation>
 <translation id="668175097507315160">ログイン時にエラーが発生したため、Chromium OS はデータを同期できませんでした。</translation>
-<translation id="6691132793308828750">Chromium からこのアプリのデータを削除する</translation>
-<translation id="6709350901466051922">このサイトを利用するには、Chromium でマイクの使用を許可する必要があります</translation>
+<translation id="5279767706090517695">Phromium からこのアプリのデータを削除する</translation>
+<translation id="6562226321659107531">このサイトを利用するには、Phromium でマイクの使用を許可する必要があります</translation>
 <translation id="6712881677154121168">ダウンロード エラー: <ph name="DOWNLOAD_ERROR" />。</translation>
-<translation id="6717134281241384636">バージョンが新しい Chromium のプロフィールは使用できません。
+<translation id="259800793807512787">バージョンが新しい Phromium のプロフィールは使用できません。
 
-一部の機能が利用できない可能性があります。別の場所のプロフィールを指定するか、新しいバージョンの Chromium をご使用ください。</translation>
-<translation id="6729124504294600478">パーソナライズなどの機能を利用するには、Chromium をウェブとアプリのアクティビティと、リンクされた Google サービスに追加します</translation>
-<translation id="6734291798041940871">Chromium は既にパソコンのすべてのユーザーに対してインストールされています。</translation>
-<translation id="6742093177587589736">すべてのデバイスで同じブックマークやその他の設定を使用するには、Chromium にログインしてください。このブックマークは、ログイン後に Google アカウントに保存されます。</translation>
-<translation id="6751374565094704799">Chromium の V8 エンジンでサイトを高速化する（攻撃に対する Chromium の耐性は若干低下します）。この設定はオンになっています。</translation>
-<translation id="6754665438209053659">{count,plural, =1{Chromium データの一部が Google アカウントにまだ保存されていません。数分待ってからログアウトしてください。今すぐログアウトすると、このデータ（1 個のアイテム）は削除されます。}other{Chromium データの一部が Google アカウントにまだ保存されていません。数分待ってからログアウトしてください。今すぐログアウトすると、このデータ（{count} 個のアイテム）は削除されます。}}</translation>
-<translation id="67706546131546258">このファイルは危害を及ぼす可能性があるため、スキャンすることをおすすめします。</translation>
+一部の機能が利用できない可能性があります。別の場所のプロフィールを指定するか、新しいバージョンの Phromium をご使用ください。</translation>
+<translation id="4914871493602315663">パーソナライズなどの機能を利用するには、Phromium をウェブとアプリのアクティビティと、リンクされた Google サービスに追加します</translation>
+<translation id="5919390816124912606">Phromium は既にパソコンのすべてのユーザーに対してインストールされています。</translation>
+<translation id="5867815953973052697">すべてのデバイスで同じブックマークやその他の設定を使用するには、Phromium にログインしてください。このブックマークは、ログイン後に Google アカウントに保存されます。</translation>
+<translation id="7381168634819530324">Phromium の V8 エンジンでサイトを高速化する（攻撃に対する Phromium の耐性は若干低下します）。この設定はオンになっています。</translation>
+<translation id="1509688792864707851">{count,plural, =1{Phromium データの一部が Google アカウントにまだ保存されていません。数分待ってからログアウトしてください。今すぐログアウトすると、このデータ（1 個のアイテム）は削除されます。}other{Phromium データの一部が Google アカウントにまだ保存されていません。数分待ってからログアウトしてください。今すぐログアウトすると、このデータ（{count} 個のアイテム）は削除されます。}}</translation>
+<translation id="4702638565169602649">このファイルは危害を及ぼす可能性があるため、スキャンすることをおすすめします。</translation>
 <translation id="6779406956731413166">Chromium OS は、追加の<ph name="BEGIN_LINK_CROS_OSS" />オープンソース ソフトウェア<ph name="END_LINK_CROS_OSS" />によって実現しました。</translation>
 <translation id="6831043979455480757">翻訳</translation>
-<translation id="6847869444787758381">Chromium では、特定のパスワードが侵害された事実の有無がわかります</translation>
+<translation id="1564864902402454287">Phromium では、特定のパスワードが侵害された事実の有無がわかります</translation>
 <translation id="684888714667046800">インターネットに接続できません。ファイアウォールを使用している場合は、<ph name="PRODUCT_EXE_NAME" /> が許可リストに含まれていることを確認してください。</translation>
-<translation id="6857782730669500492">Chromium - <ph name="PAGE_TITLE" /></translation>
+<translation id="6200419390448865091">Phromium - <ph name="PAGE_TITLE" /></translation>
 <translation id="6859580922007887573">タブキーで続行</translation>
 <translation id="6862030660799253820">画像検索でこの画像を検索する</translation>
 <translation id="6869568587896659271">アドレスバーの下からウェブサイトに簡単にアクセスできます</translation>
-<translation id="6873893289264747459">Chromium で「<ph name="EXTENSION_NAME" />」に不正なソフトウェアが含まれていることが検出されました</translation>
+<translation id="4011399428346318467">Phromium で「<ph name="EXTENSION_NAME" />」に不正なソフトウェアが含まれていることが検出されました</translation>
 <translation id="6877155553248388166">検索範囲の右下隅: 右 <ph name="RIGHT" />%、下 <ph name="BOTTOM" />%</translation>
 <translation id="6896758677409633944">コピー</translation>
 <translation id="6898028264630240901">コンテキスト タスクを固定して、ブラウジング中に質問できます</translation>
-<translation id="6901631050894301805">Chromium を既定のブラウザに設定して、タスクバーに固定する</translation>
-<translation id="6909503629704372277">Chromium プロフィールを管理(&amp;M)</translation>
-<translation id="6919942714452658456">この操作を行うと、次のようになります。
+<translation id="1012681980425424211">Phromium を既定のブラウザに設定して、タスクバーに固定する</translation>
+<translation id="1744625657438211994">Phromium プロフィールを管理(&amp;M)</translation>
+<translation id="7264818828956697552">この操作を行うと、次のようになります。
           <ph name="LINE_BREAKS" />
             • 起動ページ、新しいタブページ、検索エンジン、固定タブがリセットされます
             <ph name="LINE_BREAK" />
@@ -575,209 +575,209 @@
             <ph name="LINE_BREAK" />
             • Cookie や他の一時的なサイトデータが削除されます
             <ph name="LINE_BREAK" />
-            • Chromium のショートカットがリセットされます
+            • Phromium のショートカットがリセットされます
             <ph name="LINE_BREAKS" />
             ブックマーク、履歴、保存したパスワードへの影響はありません。</translation>
-<translation id="6948031725951063910">Chromium のブックマーク数の上限（<ph name="BOOKMARK_LIMIT" /> 個）に達したため、Google アカウントにまだ保存されていないブックマークがあります。
+<translation id="6489000842445481390">Phromium のブックマーク数の上限（<ph name="BOOKMARK_LIMIT" /> 個）に達したため、Google アカウントにまだ保存されていないブックマークがあります。
 
 新しいブックマークをアカウントに保存するには、既存のブックマークを削除してください。今すぐログアウトすると、保存されていないブックマークは削除されます。</translation>
-<translation id="6964305034639999644">Chromium のシークレット ウインドウでリンクを開く(&amp;G)</translation>
+<translation id="2645108248038996858">Phromium のシークレット ウインドウでリンクを開く(&amp;G)</translation>
 <translation id="6965382102122355670">OK</translation>
 <translation id="6985329841647292029">Chromium OS 利用規約</translation>
-<translation id="7003299027384820442">アカウント「<ph name="ACCOUNT_EMAIL" />」で Chromium のデータを使用、保存するには、パスフレーズを入力してください</translation>
+<translation id="2947519843530032104">アカウント「<ph name="ACCOUNT_EMAIL" />」で Phromium のデータを使用、保存するには、パスフレーズを入力してください</translation>
 <translation id="7011190694940573312">このバージョンのオペレーティング システムはサポートされていないため、インストールできませんでした。</translation>
 <translation id="7024536598735240744">解凍エラー: <ph name="UNPACK_ERROR" />。</translation>
-<translation id="7045244423563602563">Chromium を独自にカスタマイズ</translation>
+<translation id="2267652056049724321">Phromium を独自にカスタマイズ</translation>
 <translation id="7047386856539490735">この結果は役に立ちましたか？</translation>
-<translation id="705851970750939768">Chromium を更新</translation>
-<translation id="7067091210845072982">画像に有効な説明が設定されていない場合に、Chromium で説明を自動的に生成できるよう Google に画像が送信されます。</translation>
-<translation id="7074836723476134809"><ph name="DEVICE_TYPE" /> の Chromium アプリで AI を活用できます</translation>
-<translation id="7134687062119989071">スマートフォンの Chromium アプリで、パスワードやタブなどを外出先でも使用できます</translation>
+<translation id="2448910402556368916">Phromium を更新</translation>
+<translation id="7834049737623892628">画像に有効な説明が設定されていない場合に、Phromium で説明を自動的に生成できるよう Google に画像が送信されます。</translation>
+<translation id="1803168627715642217"><ph name="DEVICE_TYPE" /> の Phromium アプリで AI を活用できます</translation>
+<translation id="3321731353906178474">スマートフォンの Phromium アプリで、パスワードやタブなどを外出先でも使用できます</translation>
 <translation id="7141270731789036260">Chrome for Testing をカスタマイズ</translation>
-<translation id="7147227333672430807">メッセージ、ドキュメント、他のアプリのリンクをクリックしたときに、常に Chromium で開くことができます</translation>
-<translation id="7163519456498498587">Chromium から <ph name="EXTENSION_NAME" /> を削除</translation>
-<translation id="7173822816570314652"><ph name="TIMEOUT_DURATION" /> 使用しなかったため、Chromium のデータは組織によって削除されます。これには、履歴、自動入力、ダウンロードが含まれます。</translation>
-<translation id="718435575166326686">このサイトを利用するには、Chromium でカメラの使用を許可する必要があります</translation>
-<translation id="7196312274710523067">Chromium を起動できませんでした。もう一度お試しください。</translation>
-<translation id="7204669035546236137">Gemini in Chromium なら、その場で何でも質問できます</translation>
-<translation id="7213008767289637091">Chromium を Dock に追加すると、いつでもすばやくアクセスできます</translation>
-<translation id="7213407614656404070">メッセージ、ドキュメント、他のアプリのリンクをクリックしたときに、常に Chromium で開くよう設定できます</translation>
+<translation id="8077731669779275332">メッセージ、ドキュメント、他のアプリのリンクをクリックしたときに、常に Phromium で開くことができます</translation>
+<translation id="611798798247797100">Phromium から <ph name="EXTENSION_NAME" /> を削除</translation>
+<translation id="7962394294883785044"><ph name="TIMEOUT_DURATION" /> 使用しなかったため、Phromium のデータは組織によって削除されます。これには、履歴、自動入力、ダウンロードが含まれます。</translation>
+<translation id="2611686760870033712">このサイトを利用するには、Phromium でカメラの使用を許可する必要があります</translation>
+<translation id="71050417052775020">Phromium を起動できませんでした。もう一度お試しください。</translation>
+<translation id="4817060241763895497">Gemini in Phromium なら、その場で何でも質問できます</translation>
+<translation id="869358700049263961">Phromium を Dock に追加すると、いつでもすばやくアクセスできます</translation>
+<translation id="7094488679340739251">メッセージ、ドキュメント、他のアプリのリンクをクリックしたときに、常に Phromium で開くよう設定できます</translation>
 <translation id="7216228761061470870">パソコンで画像検索を使用すると、ページのタイトル、URL、コンテンツ（PDF を含む）がサーバーに送信されます</translation>
-<translation id="7223968959479464213">タスク マネージャ - Chromium</translation>
-<translation id="7226331818892775989">他のアプリやファイルなど、Chromium 以外のコンテンツについて質問できます</translation>
-<translation id="7227958669698166857"><ph name="EXISTING_USER" /> がすでにログインしています。ブラウジング環境を分ける場合は、<ph name="USER_EMAIL_ADDRESS" /> として自分用のプロフィールで Chromium にログインしてください。すべてのデバイスで保存した情報などを使用できます。</translation>
-<translation id="7252276985725323153">すぐにブラウジングを開始: Windows の起動時に Chromium を自動で起動できるようになりました。</translation>
+<translation id="7802634650401946711">タスク マネージャ - Phromium</translation>
+<translation id="5182547787327636348">他のアプリやファイルなど、Phromium 以外のコンテンツについて質問できます</translation>
+<translation id="1673408954678067905"><ph name="EXISTING_USER" /> がすでにログインしています。ブラウジング環境を分ける場合は、<ph name="USER_EMAIL_ADDRESS" /> として自分用のプロフィールで Phromium にログインしてください。すべてのデバイスで保存した情報などを使用できます。</translation>
+<translation id="5761733252154904648">すぐにブラウジングを開始: Windows の起動時に Phromium を自動で起動できるようになりました。</translation>
 <translation id="7274695763216404502">固定しました。ツールバーから画像検索を使用できます</translation>
 <translation id="7288567540154601580">タブと拡張機能</translation>
-<translation id="7295544978856094497">{NUM_EXTENSIONS,plural, =1{削除することをおすすめします}other{削除することをおすすめします}}</translation>
-<translation id="7296334833518879294">システム音声を共有するには、[システム設定] を開き、Chromium に [システムオーディオ録音のみ] を許可してください。その後、Chromium を再起動する必要があります。</translation>
+<translation id="5616812573273137616">{NUM_EXTENSIONS,plural, =1{削除することをおすすめします}other{削除することをおすすめします}}</translation>
+<translation id="1408728332407453335">システム音声を共有するには、[システム設定] を開き、Phromium に [システムオーディオ録音のみ] を許可してください。その後、Phromium を再起動する必要があります。</translation>
 <translation id="7299899569525778554">デスクトップから検索</translation>
-<translation id="731795002583552498">Chromium を更新しています</translation>
-<translation id="7318036098707714271">ユーザー設定ファイルが壊れているか無効です。
+<translation id="6194310460545162015">Phromium を更新しています</translation>
+<translation id="1098154893096691883">ユーザー設定ファイルが壊れているか無効です。
 
 設定を復元できません。</translation>
 <translation id="7324051657739063017">コンテキスト タスクを再度開いて、ブラウジング中に質問できます</translation>
-<translation id="734373864078049451">ウェブ、ブックマーク、その他の Chromium データを好みに設定できます。</translation>
-<translation id="7347827960336370838">パスフレーズを知っているユーザーだけが暗号化されたデータを見ることができます。パスフレーズは Google には送信されず、保存されることもありません。パスフレーズを忘れた場合や、この設定を変更する場合は、<ph name="BEGIN_LINK" />アカウントの Chromium データを削除<ph name="END_LINK" />する必要があります。</translation>
-<translation id="7349591376906416160">システム管理者が、<ph name="TARGET_URL_HOSTNAME" /> へのアクセスに <ph name="ALTERNATIVE_BROWSER_NAME" /> を開くよう Chromium を設定しています。</translation>
+<translation id="7024097830259741656">ウェブ、ブックマーク、その他の Phromium データを好みに設定できます。</translation>
+<translation id="852511575759652041">パスフレーズを知っているユーザーだけが暗号化されたデータを見ることができます。パスフレーズは Google には送信されず、保存されることもありません。パスフレーズを忘れた場合や、この設定を変更する場合は、<ph name="BEGIN_LINK" />アカウントの Phromium データを削除<ph name="END_LINK" />する必要があります。</translation>
+<translation id="2846900085504364505">システム管理者が、<ph name="TARGET_URL_HOSTNAME" /> へのアクセスに <ph name="ALTERNATIVE_BROWSER_NAME" /> を開くよう Phromium を設定しています。</translation>
 <translation id="7352651011704765696">問題が発生しました</translation>
-<translation id="7368826207863345663">今後、Chromium のアップデートを受信するには、macOS 13 以降が必要となります。このコンピュータでは macOS 12 が実行されています。</translation>
-<translation id="7376384068949534168">最近アクセスしていないため、Chromium で <ph name="PERMISSION_1" /> と <ph name="PERMISSION_2" /> の権限を削除しました。</translation>
+<translation id="7198690862684855451">今後、Phromium のアップデートを受信するには、macOS 13 以降が必要となります。このコンピュータでは macOS 12 が実行されています。</translation>
+<translation id="3224607549103501149">最近アクセスしていないため、Phromium で <ph name="PERMISSION_1" /> と <ph name="PERMISSION_2" /> の権限を削除しました。</translation>
 <translation id="73786666777299047">Chrome ウェブストアを開きます</translation>
-<translation id="7394275517973019558">システムトレイに Gemini in Chromium を表示する</translation>
+<translation id="8446269872172461565">システムトレイに Gemini in Phromium を表示する</translation>
 <translation id="7401687852903179959">画像検索でこの動画を検索</translation>
-<translation id="7407655596887111931">Chromium を既定のブラウザに設定しました</translation>
-<translation id="7413153308467572558">前回開いていたページを開く: Chromium で再起動するたびにタブが復元されます。この機能をオフにするには、</translation>
-<translation id="7427879960656355200">Chromium にパスワードをインポート</translation>
-<translation id="744815265653811511">1. 下の [<ph name="BUTTON_LABEL" />] をクリックします
+<translation id="3403529853122418035">Phromium を既定のブラウザに設定しました</translation>
+<translation id="5649377421626481711">前回開いていたページを開く: Phromium で再起動するたびにタブが復元されます。この機能をオフにするには、</translation>
+<translation id="2467776530444676191">Phromium にパスワードをインポート</translation>
+<translation id="8814480293815136510">1. 下の [<ph name="BUTTON_LABEL" />] をクリックします
 2.Windows の設定で [<ph name="BUTTON_2" />] をクリックします
-3.Windows の通知で [<ph name="BUTTON_3" />] をクリックすると、Chromium がタスクバーに固定され、すばやくアクセスできるようになります</translation>
-<translation id="7449453770951226939"><ph name="PAGE_TITLE" /> - Chromium Dev</translation>
+3.Windows の通知で [<ph name="BUTTON_3" />] をクリックすると、Phromium がタスクバーに固定され、すばやくアクセスできるようになります</translation>
+<translation id="4458219452141227397"><ph name="PAGE_TITLE" /> - Phromium Dev</translation>
 <translation id="7450541714075000668">テキストをコピーしました</translation>
-<translation id="7458892263350425044">マイクを使用するには、<ph name="BEGIN_LINK" />システム設定<ph name="END_LINK" />で Chromium にアクセスを許可してください</translation>
-<translation id="7461356015007898716">今後、Chromium のアップデートを受信するには、Windows 10 以降が必要となります。このパソコンでは Windows 7 が実行されています。</translation>
-<translation id="7467949745582939695">Chromium を再起動しますか？</translation>
-<translation id="7483335560992089831">実行中の Chromium と同じバージョンをインストールすることはできません。Chromium を閉じてからもう一度お試しください。</translation>
+<translation id="6826407056979820031">マイクを使用するには、<ph name="BEGIN_LINK" />システム設定<ph name="END_LINK" />で Phromium にアクセスを許可してください</translation>
+<translation id="1392131731909663319">今後、Phromium のアップデートを受信するには、Windows 10 以降が必要となります。このパソコンでは Windows 7 が実行されています。</translation>
+<translation id="4512427777724578739">Phromium を再起動しますか？</translation>
+<translation id="4510527847350985067">実行中の Phromium と同じバージョンをインストールすることはできません。Phromium を閉じてからもう一度お試しください。</translation>
 <translation id="7510190804000607802">ヒント: Google の優れた機能をいつでも手元に</translation>
-<translation id="751935028865900641">ほとんどの場合、サイトは適切に機能します。Chromium のウィンドウをすべて閉じると、ほとんどのサイトからログアウトします。ただし Chromium にログインしている場合、Google アカウントからはログアウトしません。</translation>
-<translation id="753534427205733210">{0,plural, =1{Chromium は 1 分後に再起動されます}other{Chromium は # 分後に再起動されます}}</translation>
-<translation id="7565444033145385702">データを保護するため、最近アクセスしていないサイトから権限を自動で削除します。</translation>
-<translation id="7583104404158659071">Chromium を自動で起動して、すぐにブラウジングを開始できます。</translation>
+<translation id="4735608937705010375">ほとんどの場合、サイトは適切に機能します。Phromium のウィンドウをすべて閉じると、ほとんどのサイトからログアウトします。ただし Phromium にログインしている場合、Google アカウントからはログアウトしません。</translation>
+<translation id="7987051132742764178">{0,plural, =1{Phromium は 1 分後に再起動されます}other{Phromium は # 分後に再起動されます}}</translation>
+<translation id="1904271152425995672">データを保護するため、最近アクセスしていないサイトから権限を自動で削除します。</translation>
+<translation id="7909976731673595773">Phromium を自動で起動して、すぐにブラウジングを開始できます。</translation>
 <translation id="7583399374488819119"><ph name="COMPANY_NAME" /> インストーラ</translation>
-<translation id="761356813943268536">Chromium がカメラとマイクを使用しています。</translation>
-<translation id="7617377681829253106">進化する Chromium</translation>
-<translation id="7622753900276619808">Chromium で新機能をご利用いただけるようになりました</translation>
+<translation id="3301232962183130807">Phromium がカメラとマイクを使用しています。</translation>
+<translation id="3230129417775002227">進化する Phromium</translation>
+<translation id="1322165820810533683">Phromium で新機能をご利用いただけるようになりました</translation>
 <translation id="7624307931717240213">情報はこのサービスの改善に役立てられます。プライバシー ポリシーと利用規約をご確認ください。</translation>
 <translation id="7649070708921625228">ヘルプ</translation>
-<translation id="7650134251917003571">Chromium アプリを入手</translation>
+<translation id="3795437289339745990">Phromium アプリを入手</translation>
 <translation id="7658239707568436148">キャンセル</translation>
-<translation id="7686590090926151193">Chromium はデフォルトのブラウザとして設定されていません</translation>
-<translation id="7689606757190482937">同期してカスタマイズした Chromium をどのデバイスでも使用できます</translation>
-<translation id="7699779824407626136">Chromium の更新</translation>
-<translation id="7700735928747402058">Chromium で作業を保護</translation>
+<translation id="6671257169702988694">Phromium はデフォルトのブラウザとして設定されていません</translation>
+<translation id="7270402397025248165">同期してカスタマイズした Phromium をどのデバイスでも使用できます</translation>
+<translation id="6267574654655324634">Phromium の更新</translation>
+<translation id="4868190765388740513">Phromium で作業を保護</translation>
 <translation id="7716950018788545737">タスクを終了しました。</translation>
 <translation id="77283119132245232"><ph name="BROWSER_NAME" /> のシステム トレース サービスを提供します。このサービスを無効にした場合、ブラウザによって作成されるパフォーマンス トレースに、コンテキスト切り替えやスレッドの準備完了などのシステム全体のイベントは含められません。</translation>
-<translation id="7745317241717453663">このデバイスから閲覧データを削除します。後でデータを取得するには、<ph name="USER_EMAIL" /> として Chromium にログインしてください。</translation>
+<translation id="2680098142787722612">このデバイスから閲覧データを削除します。後でデータを取得するには、<ph name="USER_EMAIL" /> として Phromium にログインしてください。</translation>
 <translation id="7747138024166251722">インストーラーの一時ディレクトリを作成できませんでした。ディスクの空き領域とソフトウェアのインストール許可があることを確認してください。</translation>
-<translation id="7750130090210923118">デフォルトの Chromium にリセット</translation>
-<translation id="7752521946322750699">Chromium での作業を保護するため、Chromium へのログイン中、組織は特定の情報を表示または管理できます。</translation>
-<translation id="7781047659465034537">Chromium を既定に設定してタスクバーに固定する</translation>
-<translation id="7786760609782648049">Chromium を高速化する</translation>
-<translation id="7790626492778995050"><ph name="PAGE_TITLE" /> - Chromium Canary</translation>
-<translation id="7803986347287457849">あなたのインターネット トラフィックにアクセスできるユーザーに、あなたがアクセスしたサイトを知られないようにします。Chromium では、安全な接続を使用して、DNS（ドメイン ネーム システム）でサイトの IP アドレスを検索します。</translation>
+<translation id="6830826880333833598">デフォルトの Phromium にリセット</translation>
+<translation id="448710321315554838">Phromium での作業を保護するため、Phromium へのログイン中、組織は特定の情報を表示または管理できます。</translation>
+<translation id="7045209483723342691">Phromium を既定に設定してタスクバーに固定する</translation>
+<translation id="6452735947982563207">Phromium を高速化する</translation>
+<translation id="2826377606185230093"><ph name="PAGE_TITLE" /> - Phromium Canary</translation>
+<translation id="6929858452581400763">あなたのインターネット トラフィックにアクセスできるユーザーに、あなたがアクセスしたサイトを知られないようにします。Phromium では、安全な接続を使用して、DNS（ドメイン ネーム システム）でサイトの IP アドレスを検索します。</translation>
 <translation id="7810005234485217901">画像検索を固定して簡単にアクセスできます</translation>
-<translation id="7828527096541974699">Chromium と共有する内容を選択</translation>
-<translation id="7828947555739565424">このアカウントの Chromium プロファイルは、このデバイスにすでに存在します</translation>
+<translation id="4343392731007327660">Phromium と共有する内容を選択</translation>
+<translation id="3052274192923256457">このアカウントの Phromium プロファイルは、このデバイスにすでに存在します</translation>
 <translation id="7845233973568007926">インストールいただきありがとうございます。<ph name="BUNDLE_NAME" /> を使用するにはコンピュータを再起動してください。</translation>
-<translation id="7847673590271334840">検索エンジンが Chromium の外部から変更されました。ユーザーを保護するため、Chromium で元のデフォルトにリセットしました。<ph name="LEARN_MORE_LINK" /></translation>
-<translation id="7853661403199074278">Chromium をカスタマイズしてレイアウトを変更</translation>
-<translation id="7859018312476869945">Chromium でアドレスバーや検索ボックスに入力を始めると、入力内容がデフォルトの検索エンジンに送信され、より関連性の高い検索候補が表示されます。シークレット モードの場合、この設定はオフになっています。</translation>
-<translation id="7867198900892795913">Chromium を最新版に更新できませんでした。新しい機能とセキュリティ修正は適用されていません。</translation>
+<translation id="5674414381037997114">検索エンジンが Phromium の外部から変更されました。ユーザーを保護するため、Phromium で元のデフォルトにリセットしました。<ph name="LEARN_MORE_LINK" /></translation>
+<translation id="2382629958428086738">Phromium をカスタマイズしてレイアウトを変更</translation>
+<translation id="3966946337517395351">Phromium でアドレスバーや検索ボックスに入力を始めると、入力内容がデフォルトの検索エンジンに送信され、より関連性の高い検索候補が表示されます。シークレット モードの場合、この設定はオフになっています。</translation>
+<translation id="3928367799779122681">Phromium を最新版に更新できませんでした。新しい機能とセキュリティ修正は適用されていません。</translation>
 <translation id="7872446069773932638">ダウンロードしています... 残り <ph name="SECONDS" /> 秒です</translation>
-<translation id="7873537467422636035">パスフレーズを忘れた場合や、この設定を変更する場合は、<ph name="BEGIN_LINK" />アカウントの Chromium データを削除<ph name="END_LINK" />してください。</translation>
-<translation id="7874369989024033742">必要なときに Gemini in Chromium をすばやく開くことができます。</translation>
-<translation id="7888981273428720788">Chromium を既定として設定</translation>
-<translation id="7934340546140346950">可能な場合に安全でない接続を HTTPS に自動的にアップグレードします</translation>
-<translation id="7937630085815544518">Chromium に <ph name="USER_EMAIL_ADDRESS" /> としてログインしていました。再度ログインするには同じアカウントを使用してください。</translation>
-<translation id="7944602660083060118"><ph name="EXISTING_USER" /> がすでにログインしています。ブラウジング環境を分ける場合は、<ph name="USER_EMAIL_ADDRESS" /> として自分用のプロフィールで Chromium にログインしてください。すべてのデバイスでブックマークなどの設定を使用できます。</translation>
-<translation id="7975919845073681630">この Chromium はセカンダリ インストールのため、既定のブラウザには設定できません。</translation>
-<translation id="7997934263947464652">提供元不明の拡張機能、アプリ、テーマはデバイスに危害を及ぼす可能性があります。<ph name="IDS_EXTENSION_WEB_STORE_TITLE" /> で公開されているアイテムのみをインストールすることをおすすめします</translation>
-<translation id="8000759043835159571"><ph name="DEVICE_TYPE" /> の Chromium アプリで Google を最大限に活用できます</translation>
+<translation id="8492102592995742850">パスフレーズを忘れた場合や、この設定を変更する場合は、<ph name="BEGIN_LINK" />アカウントの Phromium データを削除<ph name="END_LINK" />してください。</translation>
+<translation id="959404544431817539">必要なときに Gemini in Phromium をすばやく開くことができます。</translation>
+<translation id="8889749279816358185">Phromium を既定として設定</translation>
+<translation id="3173775358556080672">可能な場合に安全でない接続を HTTPS に自動的にアップグレードします</translation>
+<translation id="2210801904933897209">Phromium に <ph name="USER_EMAIL_ADDRESS" /> としてログインしていました。再度ログインするには同じアカウントを使用してください。</translation>
+<translation id="7291855477503010638"><ph name="EXISTING_USER" /> がすでにログインしています。ブラウジング環境を分ける場合は、<ph name="USER_EMAIL_ADDRESS" /> として自分用のプロフィールで Phromium にログインしてください。すべてのデバイスでブックマークなどの設定を使用できます。</translation>
+<translation id="5706099517903615644">この Phromium はセカンダリ インストールのため、既定のブラウザには設定できません。</translation>
+<translation id="2388440031754359882">提供元不明の拡張機能、アプリ、テーマはデバイスに危害を及ぼす可能性があります。<ph name="IDS_EXTENSION_WEB_STORE_TITLE" /> で公開されているアイテムのみをインストールすることをおすすめします</translation>
+<translation id="8205108509545565485"><ph name="DEVICE_TYPE" /> の Phromium アプリで Google を最大限に活用できます</translation>
 <translation id="8004582292198964060">ブラウザ</translation>
 <translation id="8010081455002666927">自動検出</translation>
-<translation id="8013436988911883588">Chromium にアクセスを許可すると、ウェブサイトからアクセスをリクエストできるようになります。</translation>
-<translation id="8031714377769448844">Chromium をタスクバーに固定すると、いつでもすばやくアクセスできます</translation>
+<translation id="6421861275173778152">Phromium にアクセスを許可すると、ウェブサイトからアクセスをリクエストできるようになります。</translation>
+<translation id="942087293138739513">Phromium をタスクバーに固定すると、いつでもすばやくアクセスできます</translation>
 <translation id="80471789339884597">インストールいただきありがとうございます。<ph name="BUNDLE_NAME" /> を使用するにはすべてのブラウザを再起動してください。</translation>
 <translation id="8054112667659782652">画像検索のショートカットを常に表示する</translation>
 <translation id="8069447462453318634">[ツールバーに固定] を選択します</translation>
-<translation id="8077498902115777962">Chromium のアプリ向けのバックグラウンドでの実行を無効にする</translation>
+<translation id="8519423983825025511">Phromium のアプリ向けのバックグラウンドでの実行を無効にする</translation>
 <translation id="80790299200510644">画像検索</translation>
 <translation id="8086881907087796310">パソコンがハードウェアの最小要件を満たしていないため、インストールできませんでした。</translation>
 <translation id="8096472344908884505"><ph name="PAGE_TITLE" /> - Google Chrome for Testing</translation>
-<translation id="8105840573057009683">このサイトを利用するには、Chromium で位置情報の使用を許可する必要があります</translation>
-<translation id="8107060931443639922">次回 <ph name="DEVICE_TYPE" /> で Chromium を開いたときに、価格トラッキングのアラートを有効にするよう促すメッセージが表示されます。</translation>
-<translation id="8117908349476699973">スマートフォンの Chromium アプリで、気になるアイテムの値下げアラートを受け取ることができます</translation>
+<translation id="7988414336652558428">このサイトを利用するには、Phromium で位置情報の使用を許可する必要があります</translation>
+<translation id="1778610353097215460">次回 <ph name="DEVICE_TYPE" /> で Phromium を開いたときに、価格トラッキングのアラートを有効にするよう促すメッセージが表示されます。</translation>
+<translation id="4182143801062869250">スマートフォンの Phromium アプリで、気になるアイテムの値下げアラートを受け取ることができます</translation>
 <translation id="8118331347066725040">Google レンズでの検索に関するフィードバックを送信する</translation>
-<translation id="8130609355518033382">Chromium を自分好みに</translation>
+<translation id="849080025203861031">Phromium を自分好みに</translation>
 <translation id="8133124826068723441">ご使用のドメインでは同期を利用できないため、Chromium OS はデータを同期できませんでした。</translation>
 <translation id="813913629614996137">初期化しています...</translation>
-<translation id="8161503455832158203">Gemini in Chromium を開くときに、キーボード ショートカットを使用します。</translation>
-<translation id="8164014945047474187">Chromium 追加利用規約</translation>
-<translation id="81770708095080097">このファイルは危険なファイルであるため、Chromium でブロックしました。</translation>
+<translation id="139377652856781272">Gemini in Phromium を開くときに、キーボード ショートカットを使用します。</translation>
+<translation id="8577594891153686998">Phromium 追加利用規約</translation>
+<translation id="6418547610462348357">このファイルは危険なファイルであるため、Phromium でブロックしました。</translation>
 <translation id="8177472873527554730">ページにコンテンツが見つかりません</translation>
-<translation id="8200109504272824693">アカウント「<ph name="USER_EMAIL" />」で Chromium のデータを使用、保存するには、パスフレーズを入力してください</translation>
+<translation id="6257816439683677727">アカウント「<ph name="USER_EMAIL" />」で Phromium のデータを使用、保存するには、パスフレーズを入力してください</translation>
 <translation id="820759916613250543">画像検索でこの画像を検索</translation>
 <translation id="8221491193165283816">通知はデフォルトでブロックされています。このサイトの通知を表示するには、ここをクリックしてください。</translation>
-<translation id="8223363452568144035">カメラを使用するには、<ph name="BEGIN_LINK" />システム設定<ph name="END_LINK" />で Chromium にアクセスを許可してください</translation>
-<translation id="8232193495299001329">Chromium では、この拡張機能の提供元を確認できないため、安全でない可能性があります。アクセスしたサイトでユーザーデータ（個人情報を含む）が参照、変更されないように、Chromium からこの拡張機能を削除してください。</translation>
-<translation id="8248265253516264921">画像に有効な説明が設定されていない場合に、Chromium で説明を自動的に生成できるよう Google に画像が送信されます。この機能は設定でいつでも無効にできます。</translation>
-<translation id="8254601181414348851">新しいプロフィールで Chromium にログインしますか？</translation>
-<translation id="8262224117913639129"><ph name="EXISTING_USER" /> がすでにログインしています。ブラウジング環境を分ける場合は、<ph name="USER_EMAIL_ADDRESS" /> として自分用のプロフィールで Chromium にログインしてください。<ph name="DEVICE" /> のパスワードなどの設定を使用できます。</translation>
-<translation id="8277334259226003205">システムトレイに Gemini in Chromium を表示して、キーボード ショートカットをオンにする</translation>
-<translation id="8286943863733751221">安全でないサイトやダウンロードが見つかると <ph name="BEGIN_LINK" />Chromium が警告<ph name="END_LINK" />します</translation>
-<translation id="8295827201165805317">最近アクセスしていないため、Chromium で<ph name="PERMISSION" />の権限を削除しました。</translation>
-<translation id="8296236834352487533">Chromium iOS アプリで、カメラに映ったものを購入、翻訳、特定できます</translation>
-<translation id="8310603974518734211"><ph name="USER_NAME" /> として Chromium にログインするための QR コード</translation>
+<translation id="8672013454464753607">カメラを使用するには、<ph name="BEGIN_LINK" />システム設定<ph name="END_LINK" />で Phromium にアクセスを許可してください</translation>
+<translation id="8006746139865532235">Phromium では、この拡張機能の提供元を確認できないため、安全でない可能性があります。アクセスしたサイトでユーザーデータ（個人情報を含む）が参照、変更されないように、Phromium からこの拡張機能を削除してください。</translation>
+<translation id="5474258904581730105">画像に有効な説明が設定されていない場合に、Phromium で説明を自動的に生成できるよう Google に画像が送信されます。この機能は設定でいつでも無効にできます。</translation>
+<translation id="5375524124600974413">新しいプロフィールで Phromium にログインしますか？</translation>
+<translation id="5242991719841602450"><ph name="EXISTING_USER" /> がすでにログインしています。ブラウジング環境を分ける場合は、<ph name="USER_EMAIL_ADDRESS" /> として自分用のプロフィールで Phromium にログインしてください。<ph name="DEVICE" /> のパスワードなどの設定を使用できます。</translation>
+<translation id="6524280192518819368">システムトレイに Gemini in Phromium を表示して、キーボード ショートカットをオンにする</translation>
+<translation id="2082268001133511745">安全でないサイトやダウンロードが見つかると <ph name="BEGIN_LINK" />Phromium が警告<ph name="END_LINK" />します</translation>
+<translation id="4030955203048827163">最近アクセスしていないため、Phromium で<ph name="PERMISSION" />の権限を削除しました。</translation>
+<translation id="8358344509940735943">Phromium iOS アプリで、カメラに映ったものを購入、翻訳、特定できます</translation>
+<translation id="7062802333437169650"><ph name="USER_NAME" /> として Phromium にログインするための QR コード</translation>
 <translation id="8313851650939857356">起動エラー: <ph name="STARTUP_ERROR" />。</translation>
-<translation id="8318772038038596122"><ph name="TIMEOUT_DURATION" /> 使用しなかったため、Chromium は組織によって終了されます。</translation>
+<translation id="751774429778958062"><ph name="TIMEOUT_DURATION" /> 使用しなかったため、Phromium は組織によって終了されます。</translation>
 <translation id="8321888067342493336">画像として保存</translation>
-<translation id="8340674089072921962">Chromium の前回の使用者は <ph name="USER_EMAIL_ADDRESS" /> です</translation>
-<translation id="8351551329754447960">Chromium でスキルを有効にする</translation>
-<translation id="8359544530202147897">Google アカウント「<ph name="ACCOUNT_EMAIL" />」で Chromium のデータを引き続き使用するには、Chromium を更新してください</translation>
-<translation id="8360718212975266891">今後、Chromium のアップデートを受信するには、Windows 10 以降が必要となります。このパソコンでは Windows 8 が実行されています。</translation>
+<translation id="6013358021678212671">Phromium の前回の使用者は <ph name="USER_EMAIL_ADDRESS" /> です</translation>
+<translation id="5445795756751365814">Phromium でスキルを有効にする</translation>
+<translation id="7329745364783464770">Google アカウント「<ph name="ACCOUNT_EMAIL" />」で Phromium のデータを引き続き使用するには、Phromium を更新してください</translation>
+<translation id="5255856786869089460">今後、Phromium のアップデートを受信するには、Windows 10 以降が必要となります。このパソコンでは Windows 8 が実行されています。</translation>
 <translation id="8362914115861174987">訳文の言語</translation>
 <translation id="8367705492654390392">質問する</translation>
 <translation id="8370517070665726704">Copyright <ph name="YEAR" /> Google LLC. All rights reserved.</translation>
-<translation id="8372327902843331129">すべてのデバイスでパスワードやその他の設定を使用するには、Chromium にログインしてください。このパスワードは、ログイン後に Google アカウントに保存されます。</translation>
-<translation id="837460953767177950">その後、Chromium を再起動する必要があります。</translation>
-<translation id="8397248745433792218">削除することをおすすめします。<ph name="BEGIN_LINK" />サポートされている拡張機能の詳細<ph name="END_LINK" /></translation>
-<translation id="8401454788024434101">この拡張機能はデベロッパーが非公開にしており、安全でない可能性があります。アクセスしたサイトでユーザーデータ（個人情報を含む）が参照、変更されないように、Chromium からこの拡張機能を削除してください。</translation>
-<translation id="8416884904046428725">Google アカウントに一部のデータを保存してすべてのデバイスで使用できるようにするには、Chromium で本人確認を行う必要があります。今すぐログアウトすると、このデータは削除されます。</translation>
-<translation id="8417404458978023919">{0,plural, =1{1 日以内に Chromium を再起動してください}other{# 日以内に Chromium を再起動してください}}</translation>
+<translation id="7349410893766975486">すべてのデバイスでパスワードやその他の設定を使用するには、Phromium にログインしてください。このパスワードは、ログイン後に Google アカウントに保存されます。</translation>
+<translation id="394196307309768356">その後、Phromium を再起動する必要があります。</translation>
+<translation id="7466825726005300631">削除することをおすすめします。<ph name="BEGIN_LINK" />サポートされている拡張機能の詳細<ph name="END_LINK" /></translation>
+<translation id="264088846642173954">この拡張機能はデベロッパーが非公開にしており、安全でない可能性があります。アクセスしたサイトでユーザーデータ（個人情報を含む）が参照、変更されないように、Phromium からこの拡張機能を削除してください。</translation>
+<translation id="1867604241588004166">Google アカウントに一部のデータを保存してすべてのデバイスで使用できるようにするには、Phromium で本人確認を行う必要があります。今すぐログアウトすると、このデータは削除されます。</translation>
+<translation id="926481158288852551">{0,plural, =1{1 日以内に Phromium を再起動してください}other{# 日以内に Phromium を再起動してください}}</translation>
 <translation id="8438543370129609977">画像検索を使用すると、ページのタイトル、URL、コンテンツ（PDF を含む）がサーバーに送信されます。<ph name="LEARN_MORE" /></translation>
-<translation id="8447525028100794994">Chromium で画像検索を使用して検索する方法を確認</translation>
-<translation id="8453117565092476964">インストーラ アーカイブが壊れているか無効です。Chromium をダウンロードし直してください。</translation>
-<translation id="8458614432758743027">Chromium のご利用には Windows 10 以上が必要です。</translation>
+<translation id="366193510678119303">Phromium で画像検索を使用して検索する方法を確認</translation>
+<translation id="1069576136282928177">インストーラ アーカイブが壊れているか無効です。Phromium をダウンロードし直してください。</translation>
+<translation id="7082388216101480391">Phromium のご利用には Windows 10 以上が必要です。</translation>
 <translation id="8463672209299734063">任意: 診断と使用状況のデータを Google に自動送信して、Chromium OS の機能とパフォーマンスの改善に協力する。</translation>
-<translation id="8471947159125090285">Google アカウントで Chromium のデータを使用、保存するには、本人確認を行ってください</translation>
-<translation id="8482493977473846331">Chromium へのログインを促すメッセージが表示されます</translation>
-<translation id="8493179195440786826">Chromium は古いバージョンです</translation>
-<translation id="850264194101621529">Chromium を既定のブラウザとしてお選びいただきありがとうございます。</translation>
-<translation id="8522801943730206384">パスワードを保存すると、Chromium による確認が可能になります</translation>
+<translation id="4343027289807602417">Google アカウントで Phromium のデータを使用、保存するには、本人確認を行ってください</translation>
+<translation id="6746404578800969443">Phromium へのログインを促すメッセージが表示されます</translation>
+<translation id="5072642661707587697">Phromium は古いバージョンです</translation>
+<translation id="759684005114911774">Phromium を既定のブラウザとしてお選びいただきありがとうございます。</translation>
+<translation id="5209258538041302334">パスワードを保存すると、Phromium による確認が可能になります</translation>
 <translation id="8525579356836940628">インストールが停止しました</translation>
-<translation id="8545729292258443488"><ph name="DEVICE_TYPE" /> の Chromium アプリで、パスワードやタブなどを外出先でも使用できます</translation>
-<translation id="8548787790260785208">一般に報告されているデータ侵害でパスワードが検出された場合、警告が表示されます</translation>
+<translation id="6348113608284833604"><ph name="DEVICE_TYPE" /> の Phromium アプリで、パスワードやタブなどを外出先でも使用できます</translation>
+<translation id="5083347044281842800">一般に報告されているデータ侵害でパスワードが検出された場合、警告が表示されます</translation>
 <translation id="8555465886620020932">サービスエラー: <ph name="SERVICE_ERROR" />。</translation>
-<translation id="8556055872671007529">Chromium の一部の機能と拡張機能にはショートカットが用意されており、有効にするよう選択できます。</translation>
+<translation id="6712621562501854928">Phromium の一部の機能と拡張機能にはショートカットが用意されており、有効にするよう選択できます。</translation>
 <translation id="8556420416730706394">画像検索を固定して簡単にアクセスできます。固定するには、サイドパネルの上部にある [固定] ボタンをクリックします</translation>
 <translation id="856656450041460113">言語リストを検索</translation>
-<translation id="8576826849825683917">Chromium は複数の組織によって管理されています</translation>
+<translation id="9159785833243360958">Phromium は複数の組織によって管理されています</translation>
 <translation id="8586442755830160949">Copyright <ph name="YEAR" /> The Chromium Authors. All rights reserved.</translation>
-<translation id="8619360774459241877">Chromium を起動しています...</translation>
+<translation id="3489957831482527036">Phromium を起動しています...</translation>
 <translation id="8624541899164515475">設定、新しいタブで開きます。</translation>
 <translation id="8648201657708811153">Google Chrome for Testing は、既定のブラウザには設定できません。</translation>
-<translation id="8676101123715131330">どこからでも Chromium で検索</translation>
-<translation id="8697124171261953979">この拡張機能では、Chromium の起動時、またはアドレスバーからの検索時に表示されるページも制御されます。</translation>
-<translation id="8702213505203810093">このタブを別のデバイスに送信するには、送信先のデバイスで Chromium にログインしてください</translation>
-<translation id="8704119203788522458">自分好みに設定</translation>
+<translation id="7150069986792019616">どこからでも Phromium で検索</translation>
+<translation id="1623850835554120265">この拡張機能では、Phromium の起動時、またはアドレスバーからの検索時に表示されるページも制御されます。</translation>
+<translation id="8828478112210313529">このタブを別のデバイスに送信するには、送信先のデバイスで Phromium にログインしてください</translation>
+<translation id="3592747099485557650">自分好みに設定</translation>
 <translation id="8712637175834984815">理解しました</translation>
-<translation id="8719993436687031146">Chromium にログインしますか？</translation>
+<translation id="3388228047978619624">Phromium にログインしますか？</translation>
 <translation id="8747073452963259673">検索範囲の左下隅: 左 <ph name="LEFT" />%、下 <ph name="BOTTOM" />%</translation>
 <translation id="878572486461146056">インストール エラー: ネットワーク管理者により、インストールを許可しないというグループ ポリシーが適用されています: <ph name="INSTALL_ERROR" /></translation>
 <translation id="8813277370772331957">後で通知</translation>
-<translation id="8816416449795340678">このドキュメントを Gemini in Chromium と共有すると、概要の確認や追加の質問ができます</translation>
-<translation id="8818550178040858407">Chromium にログインしますか？</translation>
-<translation id="8823401858233292222">Chromium を既定のブラウザに設定してタスクバーに固定する</translation>
+<translation id="614494151403742465">このドキュメントを Gemini in Phromium と共有すると、概要の確認や追加の質問ができます</translation>
+<translation id="6346068443590018348">Phromium にログインしますか？</translation>
+<translation id="1468806565762231794">Phromium を既定のブラウザに設定してタスクバーに固定する</translation>
 <translation id="8826492472752484139">[パスワード マネージャー] をクリックする</translation>
 <translation id="8833697763442816810">Chromium OS システム</translation>
-<translation id="8852026904190808918">この言語が Chromium のメニュー、設定、アラートなどのテキストの表示に使用されます</translation>
+<translation id="4854784568701005121">この言語が Phromium のメニュー、設定、アラートなどのテキストの表示に使用されます</translation>
 <translation id="8862326446509486874">権限が不十分なためシステムレベルのインストールができません。管理者権限でインストールしてください。</translation>
-<translation id="8876044221123442390">Chromium プロフィールを追加</translation>
-<translation id="8890569919834781711">ログイン時にエラーが発生したため、ChromiumOS は Google アカウントに Chromium データを保存できませんでした</translation>
-<translation id="8891709362986793894">組織が Chromium にログインするよう求めています</translation>
-<translation id="8907580949721785412">Chromium でパスワードを表示しようとしています。続行するには、Windows のパスワードを入力してください。</translation>
-<translation id="8932992523185907506">Chromium は既定のブラウザではなくなりました。Chromium を既定のブラウザにしますか？</translation>
-<translation id="8941642502866065432">Chromium を更新できません</translation>
+<translation id="7804139416589625033">Phromium プロフィールを追加</translation>
+<translation id="6333867241557949259">ログイン時にエラーが発生したため、ChromiumOS は Google アカウントに Phromium データを保存できませんでした</translation>
+<translation id="2888440364511152939">組織が Phromium にログインするよう求めています</translation>
+<translation id="7111325571010992010">Phromium でパスワードを表示しようとしています。続行するには、Windows のパスワードを入力してください。</translation>
+<translation id="4406716425954955281">Phromium は既定のブラウザではなくなりました。Phromium を既定のブラウザにしますか？</translation>
+<translation id="2999847959360823770">Phromium を更新できません</translation>
 <translation id="8944232836376404813">この操作を行うと、次のようになります。
           <ph name="LINE_BREAKS" />
             • 起動ページ、新しいタブページ、検索エンジン、固定タブがリセットされます
@@ -787,44 +787,44 @@
             • Cookie や他の一時的なサイトデータが削除されます
             <ph name="LINE_BREAKS" />
             ブックマーク、履歴、保存したパスワードへの影響はありません。</translation>
-<translation id="8966875421152977384">Chromium サイトのショートカットを表示する</translation>
-<translation id="897581876605952338">Chromium Enterprise ロゴ</translation>
-<translation id="8980139959902937527"><ph name="DEVICE_TYPE" /> の Chromium アプリで、Google の安全機能を外出先でも利用できます</translation>
-<translation id="8981150672034878610">プロファイルを開く際にエラーが発生したため、Chromium を起動できません。Chromium を再起動してみてください。</translation>
-<translation id="8981886272598860786">Chromium で検索するか、[<ph name="BEGIN_LINK" />設定<ph name="END_LINK" />] でカスタマイズします</translation>
-<translation id="8988036198400390003">Chromium プロファイルを管理</translation>
-<translation id="8993855408334954620">キーボードを使用して、Gemini in Chromium と開いているタブを切り替えます。</translation>
+<translation id="7461167469691640632">Phromium サイトのショートカットを表示する</translation>
+<translation id="7394133813796947510">Phromium Enterprise ロゴ</translation>
+<translation id="2476839923452631964"><ph name="DEVICE_TYPE" /> の Phromium アプリで、Google の安全機能を外出先でも利用できます</translation>
+<translation id="2041306781031361744">プロファイルを開く際にエラーが発生したため、Phromium を起動できません。Phromium を再起動してみてください。</translation>
+<translation id="8355079108092011401">Phromium で検索するか、[<ph name="BEGIN_LINK" />設定<ph name="END_LINK" />] でカスタマイズします</translation>
+<translation id="820370893610994443">Phromium プロファイルを管理</translation>
+<translation id="1885039203623228439">キーボードを使用して、Gemini in Phromium と開いているタブを切り替えます。</translation>
 <translation id="9018218886431812662">インストールが完了しました</translation>
-<translation id="9019929317751753759">Chromium をより安全にご利用いただくために、<ph name="IDS_EXTENSION_WEB_STORE_TITLE" />で提供していない次の拡張機能を無効にしました。これは知らないうちに追加された可能性があります。</translation>
-<translation id="9022552996538154597">Chromium にログイン</translation>
-<translation id="9035791714111278917">「Chromium で検索」を Mac のメニューバーに表示して、キーボード ショートカットをオンにする</translation>
-<translation id="904366664621834601">このダウンロードは Chromium でブロックされました。アーカイブ ファイルに他のファイルが含まれており、マルウェアが隠されている可能性があります</translation>
-<translation id="9053882453960391422">パスワード、ブックマーク、履歴をデバイス間で完全に同期できます。既定のブラウザを Chromium に変更すると、お馴染みの機能を簡単に利用できるようになります。Chromium はタスクバーに固定され、すばやくアクセスできます。</translation>
-<translation id="9056398481763999048">スマートフォンの Chromium アプリで Google の優れた AI ツールを使用できます</translation>
-<translation id="9057625473949801035"><ph name="DEVICE" /> のパスワードなどを使用するには、Chromium にログインしてください</translation>
-<translation id="9062666675513499497">他の Google サービスにログインしたときに Chromium にログインする</translation>
-<translation id="9078733879136747090">Chromium は自動的に終了しました</translation>
-<translation id="9089354809943900324">Chromium は古いバージョンです</translation>
-<translation id="9093206154853821181">{0,plural, =1{Chromium は 1 時間後に再起動されます}other{Chromium は # 時間後に再起動されます}}</translation>
+<translation id="8213523024005590363">Phromium をより安全にご利用いただくために、<ph name="IDS_EXTENSION_WEB_STORE_TITLE" />で提供していない次の拡張機能を無効にしました。これは知らないうちに追加された可能性があります。</translation>
+<translation id="1376667286722804744">Phromium にログイン</translation>
+<translation id="5142314855184111999">「Phromium で検索」を Mac のメニューバーに表示して、キーボード ショートカットをオンにする</translation>
+<translation id="5166485487967090892">このダウンロードは Phromium でブロックされました。アーカイブ ファイルに他のファイルが含まれており、マルウェアが隠されている可能性があります</translation>
+<translation id="1902493242619542969">パスワード、ブックマーク、履歴をデバイス間で完全に同期できます。既定のブラウザを Phromium に変更すると、お馴染みの機能を簡単に利用できるようになります。Phromium はタスクバーに固定され、すばやくアクセスできます。</translation>
+<translation id="7092992855996941035">スマートフォンの Phromium アプリで Google の優れた AI ツールを使用できます</translation>
+<translation id="4203475068093609811"><ph name="DEVICE" /> のパスワードなどを使用するには、Phromium にログインしてください</translation>
+<translation id="7699507532215026981">他の Google サービスにログインしたときに Phromium にログインする</translation>
+<translation id="5571207595456818809">Phromium は自動的に終了しました</translation>
+<translation id="3670200098293484473">Phromium は古いバージョンです</translation>
+<translation id="5636382052119887392">{0,plural, =1{Phromium は 1 時間後に再起動されます}other{Phromium は # 時間後に再起動されます}}</translation>
 <translation id="9106236359747881194">検索するテキストを選択</translation>
-<translation id="9106612006984859720">今後、Chromium のアップデートを受信するには、Windows 10 以降が必要となります。このパソコンでは Windows 8.1 が実行されています。</translation>
-<translation id="91086099826398415">新しい Chromium タブでリンクを開く(&amp;T)</translation>
+<translation id="9197093250229894135">今後、Phromium のアップデートを受信するには、Windows 10 以降が必要となります。このパソコンでは Windows 8.1 が実行されています。</translation>
+<translation id="7195134700293253698">新しい Phromium タブでリンクを開く(&amp;T)</translation>
 <translation id="911206726377975832">閲覧データも削除しますか？</translation>
 <translation id="9134482777260927479">宿題のサポート</translation>
 <translation id="9148058034647219655">終了</translation>
-<translation id="9155105544013854680">前回開いていたページを開く: Chromium で再起動するたびにタブを復元できます。この機能をオンにするには、</translation>
-<translation id="9158494823179993217">システム管理者が、<ph name="TARGET_URL_HOSTNAME" /> へのアクセスに代替ブラウザを開くよう Chromium を設定しています。</translation>
-<translation id="9185526690718004400">再起動して Chromium を更新(&amp;C)</translation>
-<translation id="9190841055450128916">Chromium（mDNS インバウンド）</translation>
-<translation id="924957577793602335">Chromium を独自にカスタマイズ</translation>
-<translation id="93478295209880648">Windows XP と Windows Vista はサポートされなくなったため、Chromium は正常に機能しない可能性があります</translation>
-<translation id="945098430667185067">Chromium で、Google の優れた安全機能を外出先でも利用できます。</translation>
+<translation id="8888942844777295083">前回開いていたページを開く: Phromium で再起動するたびにタブを復元できます。この機能をオンにするには、</translation>
+<translation id="1485079858205975514">システム管理者が、<ph name="TARGET_URL_HOSTNAME" /> へのアクセスに代替ブラウザを開くよう Phromium を設定しています。</translation>
+<translation id="1096075777207775410">再起動して Phromium を更新(&amp;C)</translation>
+<translation id="5762505165968040132">Phromium（mDNS インバウンド）</translation>
+<translation id="6687502817616773473">Phromium を独自にカスタマイズ</translation>
+<translation id="6554170182570636227">Windows XP と Windows Vista はサポートされなくなったため、Phromium は正常に機能しない可能性があります</translation>
+<translation id="8145475184469284022">Phromium で、Google の優れた安全機能を外出先でも利用できます。</translation>
 <translation id="945522503751344254">フィードバックを送信</translation>
-<translation id="965162752251293939">Chromium はどなたが使用しますか？</translation>
-<translation id="967427899662692980">Chromium の最高のセキュリティ強度で保護</translation>
+<translation id="1258071069834143371">Phromium はどなたが使用しますか？</translation>
+<translation id="8272911737374467274">Phromium の最高のセキュリティ強度で保護</translation>
 <translation id="983803489796659991">更新サーバーにアプリケーションのハッシュデータがないため、インストールできませんでした。</translation>
-<translation id="985498048907240953">アカウントなしで Chromium を使用する</translation>
+<translation id="4087190600867587768">アカウントなしで Phromium を使用する</translation>
 <translation id="985602178874221306">Chromium 開発者</translation>
 <translation id="989970834842471429">画像検索で検索するテキストや画像を選択</translation>
-<translation id="992780518932311116">位置情報を使用するには、<ph name="BEGIN_LINK" />システム設定<ph name="END_LINK" />で Chromium にアクセスを許可してください</translation>
+<translation id="6649431194696226496">位置情報を使用するには、<ph name="BEGIN_LINK" />システム設定<ph name="END_LINK" />で Phromium にアクセスを許可してください</translation>
 </translationbundle>

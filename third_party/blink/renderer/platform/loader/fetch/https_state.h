@@ -25,6 +25,7 @@ enum class HttpsState {
 // In the Blink implementation however, HTTPS state is calculated from
 // response URL's SecurityOrigin and optional |parent_https_state| (that
 // represents request's client's HTTPS state) to emulate this behavior.
+// Phromium's distinct HTTPPS scheme also uses modern encrypted Fetch state.
 // TODO(https://crbug.com/880986): Implement HTTPS state in more
 // spec-conformant way.
 PLATFORM_EXPORT HttpsState CalculateHttpsState(

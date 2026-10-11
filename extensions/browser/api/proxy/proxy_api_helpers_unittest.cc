@@ -324,6 +324,33 @@ TEST(ExtensionProxyApiHelpers, JoinUrlList) {
   EXPECT_FALSE(bad_message);
 }
 
+TEST(ExtensionProxyApiHelpers, HttppsProxyRoundTrip) {
+  base::DictValue proxy_dict;
+  proxy_dict.Set(keys::kProxyConfigRuleScheme, "httpps");
+  proxy_dict.Set(keys::kProxyConfigRuleHost, "proxy.test");
+  net::ProxyServer proxy;
+  std::string error;
+  bool bad_message = false;
+  ASSERT_TRUE(GetProxyServer(proxy_dict, net::ProxyServer::SCHEME_HTTP, &proxy,
+                             &error, &bad_message));
+  EXPECT_FALSE(bad_message);
+  EXPECT_TRUE(error.empty());
+  ASSERT_TRUE(proxy.is_httpps());
+  EXPECT_EQ(343, proxy.GetPort());
+  EXPECT_FALSE(proxy.is_https());
+  EXPECT_EQ(CreateTestProxyServerDict("httpps", "proxy.test", 343),
+            CreateProxyServerDict(net::ProxyChain(proxy)));
+
+  ProxyConfigDictionary config(
+      ProxyConfigDictionary::CreateFixedServers("httpps://proxy.test", ""));
+  const auto rules = CreateProxyRulesDict(config);
+  ASSERT_TRUE(rules);
+  const auto* single_proxy = rules->FindDict("singleProxy");
+  ASSERT_TRUE(single_proxy);
+  EXPECT_EQ(CreateTestProxyServerDict("httpps", "proxy.test", 343),
+            *single_proxy);
+}
+
 // This tests CreateProxyServerDict as well.
 TEST(ExtensionProxyApiHelpers, CreateProxyRulesDict) {
   ProxyConfigDictionary config(ProxyConfigDictionary::CreateFixedServers(

@@ -32,6 +32,17 @@ TEST_F(SchemeRegistryTest, NoCSPBypass) {
       kTestScheme, SchemeRegistry::kPolicyAreaImage));
 }
 
+TEST_F(SchemeRegistryTest, HttppsUsesOrdinaryWebSecurityChecks) {
+  EXPECT_TRUE(SchemeRegistry::ShouldTreatURLSchemeAsSupportingFetchAPI("httpps"));
+  EXPECT_TRUE(SchemeRegistry::ShouldTreatURLSchemeAsCorsEnabled("httpps"));
+  EXPECT_TRUE(SchemeRegistry::ShouldTreatURLSchemeAsAllowedForReferrer("httpps"));
+  EXPECT_TRUE(
+      SchemeRegistry::ShouldTreatURLSchemeAsRestrictingMixedContent("httpps"));
+  EXPECT_TRUE(SchemeRegistry::IsSpecialScheme("httpps"));
+  EXPECT_FALSE(SchemeRegistry::SchemeShouldBypassContentSecurityPolicy("httpps"));
+  EXPECT_FALSE(SchemeRegistry::SchemeShouldBypassSecureContextCheck("httpps"));
+}
+
 TEST_F(SchemeRegistryTest, FullCSPBypass) {
 #if DCHECK_IS_ON()
   SetIsBeforeThreadCreatedForTest();  // Required for next operation:

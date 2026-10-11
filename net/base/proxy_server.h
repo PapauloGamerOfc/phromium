@@ -39,7 +39,10 @@ class NET_EXPORT ProxyServer {
     // A QUIC proxy is an HTTP proxy in which QUIC is used as the transport,
     // instead of TCP.
     SCHEME_QUIC = 1 << 6,
-    kMaxValue = SCHEME_QUIC,
+    // HTTP proxy semantics over the experimental TLS 2.0 draft transport.
+    // This is not HTTPS and must not select the TLS 1.3/H2 proxy path.
+    SCHEME_HTTPPS = 1 << 7,
+    kMaxValue = SCHEME_HTTPPS,
   };
 
   // Default copy-constructor and assignment operator are OK!
@@ -84,11 +87,13 @@ class NET_EXPORT ProxyServer {
   bool is_http() const { return scheme_ == SCHEME_HTTP; }
 
   // Returns true if this ProxyServer is an HTTPS proxy. Note this
-  // does not include proxies matched by |is_quic()|.
+  // does not include proxies matched by |is_quic()| or |is_httpps()|.
   //
   // Generally one should test the more general concept of
-  // |is_secure_http_like()| to account for |is_quic()|.
+  // |is_secure_http_like()| to account for all encrypted HTTP transports.
   bool is_https() const { return scheme_ == SCHEME_HTTPS; }
+
+  bool is_httpps() const { return scheme_ == SCHEME_HTTPPS; }
 
   // Returns true if this ProxyServer is a SOCKS proxy.
   bool is_socks() const {
@@ -100,11 +105,15 @@ class NET_EXPORT ProxyServer {
 
   // Returns true if the ProxyServer's scheme is HTTP compatible (uses HTTP
   // headers, has a CONNECT method for establishing tunnels).
-  bool is_http_like() const { return is_http() || is_https() || is_quic(); }
+  bool is_http_like() const {
+    return is_http() || is_https() || is_quic() || is_httpps();
+  }
 
   // Returns true if the proxy server has HTTP semantics, AND
   // the channel between the client and proxy server is secure.
-  bool is_secure_http_like() const { return is_https() || is_quic(); }
+  bool is_secure_http_like() const {
+    return is_https() || is_quic() || is_httpps();
+  }
 
   const HostPortPair& host_port_pair() const;
 

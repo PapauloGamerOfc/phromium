@@ -40,6 +40,49 @@ using CookieDeletionInfo = net::CookieDeletionInfo;
 using testing::IsEmpty;
 using testing::UnorderedElementsAre;
 
+TEST(BrowsingDataFilterBuilderImplTest,
+     CookieNamespaceSurvivesDeletionPipeline) {
+  using Mode = BrowsingDataFilterBuilder::Mode;
+  const net::CookieAccessParams params{net::CookieAccessSemantics::UNKNOWN,
+                                       net::CookieScopeSemantics::UNKNOWN,
+                                       false};
+  for (const std::optional<bool> only_httpps :
+       {std::optional<bool>(), std::optional<bool>(false),
+        std::optional<bool>(true)}) {
+    BrowsingDataFilterBuilderImpl builder(Mode::kDelete);
+    builder.AddRegisterableDomain("example.com");
+    builder.SetCookieHttppsNamespace(only_httpps);
+    auto copy = builder.Copy();
+    EXPECT_EQ(builder, *copy);
+    auto info =
+        network::DeletionFilterToInfo(copy->BuildCookieDeletionFilter());
+    EXPECT_EQ(only_httpps, info.httpps_namespace);
+    for (const char* source : {"http://sub.example.com", "https://example.com",
+                               "httpps://sub.example.com"}) {
+      GURL url(source);
+      auto cookie = net::CanonicalCookie::CreateForTesting(
+          url, "a=b; Domain=example.com", base::Time::Now(),
+          net::CookieSourceType::kOther);
+      ASSERT_TRUE(cookie);
+      EXPECT_EQ(!only_httpps.has_value() ||
+                    only_httpps.value() == url.SchemeIs("httpps"),
+                info.Matches(*cookie, params));
+    }
+    copy->SetCookieHttppsNamespace(only_httpps.has_value()
+                                       ? std::optional<bool>()
+                                       : std::optional<bool>(true));
+    EXPECT_NE(builder, *copy);
+  }
+
+  // A cookie-scoped restriction must not trigger the remover's unfiltered
+  // delete-all fast path. User-initiated clearing leaves the field unset.
+  BrowsingDataFilterBuilderImpl all(Mode::kPreserve);
+  EXPECT_TRUE(all.MatchesAllOriginsAndDomains());
+  all.SetCookieHttppsNamespace(false);
+  EXPECT_FALSE(all.MatchesAllOriginsAndDomains());
+  EXPECT_FALSE(all.MatchesMostOriginsAndDomains());
+}
+
 const char kGoogleDomain[] = "google.com";
 // sp.nom.br is an eTLD, so this is a regular valid registrable domain, just
 // like google.com.

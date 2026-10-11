@@ -392,8 +392,15 @@ int SSLConnectJob::DoSSLConnect() {
 
   SSLConfig ssl_config = params_->ssl_config();
   ssl_config.ignore_certificate_errors =
+      !ssl_config.is_httpps &&
       *common_connect_job_params()->ignore_certificate_errors;
   ssl_config.network_anonymization_key = params_->network_anonymization_key();
+
+  if (ssl_config.is_httpps &&
+      ssl_config.session_usage == SessionUsage::kProxy) {
+    // CONNECT and proxy authentication are never speculative replayable data.
+    ssl_config.early_data_enabled = false;
+  }
 
   if (is_connected_via_stale_dns_) {
     // If we are connecting via stale DNS, we must disable early data.
@@ -403,7 +410,8 @@ int SSLConnectJob::DoSSLConnect() {
     ssl_config.early_data_enabled = false;
   }
 
-  if (IsEchEnabled(ssl_client_context(), params_->host_and_port())) {
+  if (!ssl_config.is_httpps &&
+      IsEchEnabled(ssl_client_context(), params_->host_and_port())) {
     if (ech_retry_configs_) {
       ssl_config.ech_config_list = *ech_retry_configs_;
     } else if (endpoint_result_) {
@@ -419,12 +427,15 @@ int SSLConnectJob::DoSSLConnect() {
     }
   }
 
-  if (ssl_client_context()->config().ShouldAdvertiseTrustAnchorIDs()) {
+  if (!ssl_config.is_httpps &&
+      ssl_client_context()->config().ShouldAdvertiseTrustAnchorIDs()) {
     ssl_config.trust_anchor_ids =
         ssl_client_context()->config().SelectAllTrustAnchorIDs();
   }
-  ssl_config.server_padding_to_request =
-      ssl_client_context()->config().RequestServerPadding();
+  if (!ssl_config.is_httpps) {
+    ssl_config.server_padding_to_request =
+        ssl_client_context()->config().RequestServerPadding();
+  }
 
   net_log().AddEvent(NetLogEventType::SSL_CONNECT_JOB_SSL_CONNECT, [&] {
     base::DictValue dict;

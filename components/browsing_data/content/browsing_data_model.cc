@@ -288,8 +288,13 @@ void StorageRemoverHelper::Visitor::operator()<net::CanonicalCookie>(
   if (types.Has(BrowsingDataModel::StorageType::kCookie)) {
     if (helper->delegate_ &&
         helper->delegate_->IsCookieDeletionDisabled(
-            net::cookie_util::CookieOriginToURL(cookie.Domain(),
-                                                cookie.SecureAttribute()))) {
+            net::cookie_util::CookieOriginToURL(
+                cookie.Domain(),
+                cookie.SourceScheme() == net::CookieSourceScheme::kHttpps
+                    ? net::CookieSourceScheme::kHttpps
+                : cookie.SecureAttribute()
+                    ? net::CookieSourceScheme::kSecure
+                    : net::CookieSourceScheme::kNonSecure))) {
       // TODO(crbug.com/40940636): Expand test coverage for this block.
       return;
     }
@@ -561,7 +566,7 @@ const url::Origin BrowsingDataModel::GetOriginForDataKey(
           },
           [](const net::CanonicalCookie& cookie) {
             GURL cookie_url = net::cookie_util::CookieOriginToURL(
-                cookie.Domain(), browsing_data::IsHttpsCookieSourceScheme(
+                cookie.Domain(), browsing_data::CookieSourceSchemeForDisplay(
                                      cookie.SourceScheme()));
             return url::Origin::Create(cookie_url);
           },

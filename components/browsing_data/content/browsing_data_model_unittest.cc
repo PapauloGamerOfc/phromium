@@ -161,6 +161,17 @@ TEST_F(BrowsingDataModelTest, PrimaryHostMapping) {
                });
 }
 
+TEST_F(BrowsingDataModelTest, CookieOwningOriginPreservesHttpps) {
+  for (const char* attributes : {"a=b", "a=b; Secure"}) {
+    auto cookie = net::CanonicalCookie::CreateForTesting(
+        GURL("httpps://example.com"), attributes, base::Time::Now(),
+        net::CookieSourceType::kOther);
+    ASSERT_TRUE(cookie);
+    EXPECT_EQ(url::Origin::Create(GURL("httpps://example.com")),
+              BrowsingDataModel::GetOriginForDataKey(*cookie));
+  }
+}
+
 TEST_F(BrowsingDataModelTest, EntryCoalescense) {
   // Check that multiple entries are correctly coalesced.
   // Browsing data with the same owner + data_key pair should update the

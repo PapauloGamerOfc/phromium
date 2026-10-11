@@ -259,7 +259,6 @@ ContentEncodingType ToContentEncodingType(SourceStreamType type) {
   }
 }
 
-
 // These values are persisted to logs. Entries should not be renumbered and
 // numeric values should never be reused.
 // LINT.IfChange(HttpRequestSSLUpgradeDecision)
@@ -348,7 +347,7 @@ std::unique_ptr<URLRequestJob> URLRequestHttpJob::Create(URLRequest* request) {
 
   // URLRequestContext must have been initialized.
   DCHECK(request->context()->http_transaction_factory());
-  DCHECK(url.SchemeIsHTTPOrHTTPS() || url.SchemeIsWSOrWSS());
+  DCHECK(url.SchemeIsHTTPOrHTTPSOrHTTPPS() || url.SchemeIsWSOrWSS());
 
   SSLUpgradeDecision upgrade_decision = SSLUpgradeDecision::kNoUpgrade;
   if (TransportSecurityState* hsts =
@@ -842,6 +841,9 @@ void URLRequestHttpJob::SetCookieHeaderAndStart(
       CookieRequestScheme cookie_request_schemes;
 
       switch (cookie_scheme) {
+        // This histogram groups cryptographic vs plaintext transport; HTTPPS
+        // is cryptographic even though its cookie namespace is independent.
+        case CookieSourceScheme::kHttpps:
         case CookieSourceScheme::kSecure:
           cookie_request_schemes =
               request_is_secure
@@ -903,7 +905,7 @@ void URLRequestHttpJob::SetCookieHeaderAndStart(
   // https://wicg.github.io/dbsc/ for specification.
   device_bound_sessions::SessionService* service =
       request_->context()->device_bound_session_service();
-  if (service) {
+  if (service && !request_info_.url.SchemeIs(url::kHttppsScheme)) {
     device_bound_sessions::DbscRequest request(request_);
     std::optional<device_bound_sessions::SessionService::DeferralParams>
         deferral = service->ShouldDefer(request, &request_info_.extra_headers);
@@ -1135,6 +1137,11 @@ void URLRequestHttpJob::OnSetCookieResult(const CookieOptions& options,
 #if BUILDFLAG(ENABLE_DEVICE_BOUND_SESSIONS)
 void URLRequestHttpJob::ProcessDeviceBoundSessionsHeader() {
   DCHECK(response_info_);
+  // DBSC relies on cookies and TLS-specific session semantics. It is not
+  // available for the experimental HTTPPS transport.
+  if (request_info_.url.SchemeIs(url::kHttppsScheme)) {
+    return;
+  }
   const SSLInfo& ssl_info = response_info_->ssl_info;
   // Do not process DBSC headers on connections with certificate errors.
   if (!ssl_info.is_valid() || IsCertStatusError(ssl_info.cert_status)) {
@@ -1154,6 +1161,11 @@ void URLRequestHttpJob::ProcessDeviceBoundSessionsHeader() {
 
 void URLRequestHttpJob::ProcessStrictTransportSecurityHeader() {
   DCHECK(response_info_);
+  // Lab HTTPPS trust must not add or remove HTTPS-only HSTS policy. Ordinary
+  // HTTPS/WSS HSTS processing, including preloads and enforcement, is unchanged.
+  if (request_info_.url.SchemeIs(url::kHttppsScheme)) {
+    return;
+  }
   TransportSecurityState* security_state =
       request_->context()->transport_security_state();
   const SSLInfo& ssl_info = response_info_->ssl_info;

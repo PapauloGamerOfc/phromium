@@ -18,6 +18,9 @@ TEST(KnownPortsTest, IsDefaultPortForProtocol) {
       // Known ones.
       {80, "http", true},
       {443, "https", true},
+      {343, "httpps", true},
+      {443, "httpps", false},
+      {343, "https", false},
       {80, "ws", true},
       {443, "wss", true},
       {21, "ftp", true},
@@ -49,6 +52,7 @@ TEST(KnownPortsTest, DefaultPortForProtocol) {
       // Known ones.
       {80, "http"},
       {443, "https"},
+      {343, "httpps"},
       {80, "ws"},
       {443, "wss"},
       {21, "ftp"},

@@ -15,6 +15,8 @@
 #include "net/log/net_log_with_source.h"
 #include "net/proxy_resolution/mac/mac_system_proxy_resolution_request.h"
 #include "net/proxy_resolution/mac/mac_system_proxy_resolver.h"
+#include "url/gurl.h"
+#include "url/url_constants.h"
 
 namespace net {
 
@@ -70,6 +72,13 @@ int MacSystemProxyResolutionService::ResolveProxy(
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK(!callback.is_null());
   DCHECK(request);
+
+  // Native OS resolvers do not know HTTPPS. They can report DIRECT for an
+  // unknown scheme, which would silently bypass the configured proxy policy.
+  // The default Chromium PAC resolver and imported manual settings support it.
+  if (url.SchemeIs(url::kHttppsScheme)) {
+    return ERR_NOT_IMPLEMENTED;
+  }
 
   net_log.BeginEvent(NetLogEventType::PROXY_RESOLUTION_SERVICE);
 

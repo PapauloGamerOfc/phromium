@@ -61,6 +61,9 @@ std::string_view GetDefaultPort(std::string_view scheme) {
   if (scheme == url::kHttpsScheme) {
     return "443";
   }
+  if (scheme == url::kHttppsScheme) {
+    return "343";
+  }
   return std::string_view();
 }
 
@@ -388,7 +391,7 @@ bool ContentSettingsPattern::Builder::Validate(const PatternParts& parts) {
 
   // Test if the scheme is supported or a wildcard.
   if (!parts.is_scheme_wildcard && parts.scheme != url::kHttpScheme &&
-      parts.scheme != url::kHttpsScheme) {
+      parts.scheme != url::kHttpsScheme && parts.scheme != url::kHttppsScheme) {
     return false;
   }
   return true;
@@ -467,7 +470,8 @@ ContentSettingsPattern ContentSettingsPattern::FromURL(const GURL& url) {
     } else if (local_url->SchemeIs(url::kHttpScheme)) {
       builder.WithSchemeWildcard()->WithDomainWildcard()->WithHost(
           local_url->GetHost());
-    } else if (local_url->SchemeIs(url::kHttpsScheme)) {
+    } else if (local_url->SchemeIs(url::kHttpsScheme) ||
+               local_url->SchemeIs(url::kHttppsScheme)) {
       builder.WithScheme(local_url->GetScheme())
           ->WithDomainWildcard()
           ->WithHost(local_url->GetHost());
@@ -478,8 +482,9 @@ ContentSettingsPattern ContentSettingsPattern::FromURL(const GURL& url) {
       // Unsupported scheme
     }
     if (local_url->port().empty()) {
-      if (local_url->SchemeIs(url::kHttpsScheme)) {
-        builder.WithPort(std::string(GetDefaultPort(url::kHttpsScheme)));
+      if (local_url->SchemeIs(url::kHttpsScheme) ||
+          local_url->SchemeIs(url::kHttppsScheme)) {
+        builder.WithPort(std::string(GetDefaultPort(local_url->scheme())));
       } else if (!is_non_wildcard_portless_scheme) {
         builder.WithPortWildcard();
       }

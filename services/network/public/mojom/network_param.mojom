@@ -27,6 +27,7 @@ enum ProxyScheme {
   kSocks5,
   kHttps,
   kQuic,
+  kHttpps,
 };
 
 // Mirror of net::ProxyServer.

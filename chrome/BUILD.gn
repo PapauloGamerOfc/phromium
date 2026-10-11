@@ -526,6 +526,10 @@ if (is_win) {
       "--scm=1",
       "--bundle_id=$chrome_mac_bundle_id",
     ]
+    if (!is_chrome_branded && !is_chrome_for_testing) {
+      # Phromium ships its original ICNS, not Chromium's compiled asset catalog.
+      args += [ "--legacy-icon" ]
+    }
     if (enable_updater) {
       args += [ "--privileged_helper_id=$privileged_helper_name" ]
       if (is_chrome_branded) {
@@ -694,9 +698,11 @@ if (is_win) {
     public_deps = [
       ":chrome_app_icon",
       ":chrome_app_strings",
-      ":chrome_asset_catalog",
       "//components/policy:chrome_manifest_bundle",
     ]
+    if (is_chrome_branded || is_chrome_for_testing) {
+      public_deps += [ ":chrome_asset_catalog" ]
+    }
   }
 
   bundle_data("chrome_versioned_bundle_data") {

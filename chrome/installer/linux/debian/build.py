@@ -135,31 +135,32 @@ def main() -> None:
 
         logging.info(f"Staging Debian install files in '{staging_dir}'...")
         install_dir = staging_dir / config.info_vars["INSTALLDIR"].lstrip("/")
-        cron_dir = install_dir / "cron"
-        cron_dir.mkdir(parents=True, exist_ok=True)
-        cron_dir.chmod(installer.StandardPermissions.EXECUTABLE)
+        if config.repoconfig:
+            cron_dir = install_dir / "cron"
+            cron_dir.mkdir(parents=True, exist_ok=True)
+            cron_dir.chmod(installer.StandardPermissions.EXECUTABLE)
 
-        cron_file = cron_dir / config.info_vars["PACKAGE"]
-        installer.process_template(
-            output_dir / "installer/common/repo.cron",
-            cron_file,
-            config.get_template_context(),
-        )
-        cron_file.chmod(installer.StandardPermissions.EXECUTABLE)
+            cron_file = cron_dir / config.info_vars["PACKAGE"]
+            installer.process_template(
+                output_dir / "installer/common/repo.cron",
+                cron_file,
+                config.get_template_context(),
+            )
+            cron_file.chmod(installer.StandardPermissions.EXECUTABLE)
 
-        cron_daily_link = (
-            staging_dir / "etc/cron.daily" / config.info_vars["PACKAGE"]
-        )
-        if cron_daily_link.is_symlink() or cron_daily_link.exists():
-            cron_daily_link.unlink()
-        os.symlink(
-            os.path.join(
-                config.info_vars["INSTALLDIR"],
-                "cron",
-                config.info_vars["PACKAGE"],
-            ),
-            cron_daily_link,
-        )
+            cron_daily_link = (
+                staging_dir / "etc/cron.daily" / config.info_vars["PACKAGE"]
+            )
+            if cron_daily_link.is_symlink() or cron_daily_link.exists():
+                cron_daily_link.unlink()
+            os.symlink(
+                os.path.join(
+                    config.info_vars["INSTALLDIR"],
+                    "cron",
+                    config.info_vars["PACKAGE"],
+                ),
+                cron_daily_link,
+            )
 
         for script in ["postinst", "prerm", "postrm"]:
             dest = staging_dir / "DEBIAN" / script

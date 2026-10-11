@@ -352,6 +352,15 @@ struct SocketBrokerRemotes {
 
 // Parameters for constructing a network context.
 struct NetworkContextParams {
+  // Additional public DER roots for experimental HTTPPS origins only.
+  // The HTTPS verifier's root policy applies by default. These private anchors
+  // are never added to HTTPS or HTTPPS proxy trust.
+  array<array<uint8>> httpps_trust_anchors;
+
+  // Separate additional public DER roots for the HTTPPS connection to a proxy.
+  // Default browser trust applies; private origin roots are never a fallback.
+  array<array<uint8>> httpps_proxy_trust_anchors;
+
   // The user agent string.
   string user_agent;
 

@@ -9,6 +9,39 @@
 
 namespace network {
 
+TEST(URLUtilTest, IsURLHandledByNetworkServiceIncludesHttpps) {
+  const struct {
+    const char* url;
+    bool handled;
+  } kTestCases[] = {
+      {"http://example.com/", true},
+      {"https://example.com/", true},
+      {"httpps://example.com/", true},
+      {"HTTPPS://example.com:343/", true},
+      {"httpps://example.com:8443/path", true},
+      {"ws://example.com/", true},
+      {"wss://example.com/", true},
+      {"file:///tmp/example.html", false},
+      {"blob:httpps://example.com/uuid", false},
+      {"data:text/html,example", false},
+      {"about:blank", false},
+      {"chrome://version/", false},
+      {"ftp://example.com/", false},
+      {"httpps-other://example.com/", false},
+      {"custom://example.com/", false},
+      {"", false},
+  };
+
+  // Navigation and download routing use this helper to select the network
+  // factory. HTTPPS must not fall through to external protocol handling, while
+  // local resources and unsupported schemes still need their own factories.
+  for (const auto& test_case : kTestCases) {
+    SCOPED_TRACE(test_case.url);
+    EXPECT_EQ(test_case.handled,
+              IsURLHandledByNetworkService(GURL(test_case.url)));
+  }
+}
+
 TEST(URLUtilTest, SerializeResponseUrlForReporting) {
   struct {
     const char* input;

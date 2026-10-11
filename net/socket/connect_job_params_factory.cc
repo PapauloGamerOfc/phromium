@@ -37,6 +37,29 @@ namespace net {
 
 namespace {
 
+// HTTPPS has an independent rollout and can be disabled for a deployment with
+// --disable-features=EnableHttppsEarlyData without changing ordinary TLS.
+BASE_FEATURE(kEnableHttppsEarlyData, base::FEATURE_ENABLED_BY_DEFAULT);
+
+// TLS 2.0 applies to one encrypted hop, whether it is the origin or a proxy.
+// Keep this separate from ordinary TLS settings on any other hop in the chain.
+void ConfigureHttpps(SSLConfig& ssl_config) {
+  ssl_config.is_httpps = true;
+  ssl_config.allowed_bad_certs.clear();
+  ssl_config.ignore_certificate_errors = false;
+  ssl_config.disable_cert_verification_network_fetches = true;
+  // The HTTP transaction layer decides whether an origin request is replayable
+  // and confirms the handshake before unsafe requests. CONNECT/proxy credentials
+  // never use early data, even when the outer configuration enables it.
+  ssl_config.early_data_enabled =
+      ssl_config.session_usage == SessionUsage::kDestination &&
+      base::FeatureList::IsEnabled(kEnableHttppsEarlyData);
+  ssl_config.alpn_protos = {NextProto::kProtoHTTP11};
+  ssl_config.application_settings.clear();
+  ssl_config.renego_allowed_default = false;
+  ssl_config.renego_allowed_for_protos.clear();
+}
+
 // Populates `ssl_config's` ALPN-related fields. Namely, `alpn_protos`,
 // `application_settings`, `renego_allowed_default`, and
 // `renego_allowed_for_protos`.
@@ -206,6 +229,9 @@ ConnectJobParams CreateProxyParams(
     proxy_server_ssl_config.proxy_chain = proxy_chain;
     proxy_server_ssl_config.proxy_chain_index = proxy_chain_index;
     proxy_server_ssl_config.session_usage = SessionUsage::kProxy;
+    if (proxy_server.is_httpps()) {
+      ConfigureHttpps(proxy_server_ssl_config);
+    }
   }
 
   // Create the nested parameters over which the connection to the proxy
@@ -297,6 +323,9 @@ ConnectJobParams ConstructConnectJobParams(
   // Set up `ssl_config` if using SSL to the endpoint.
   SSLConfig ssl_config;
   if (UsingSsl(endpoint)) {
+    ssl_config.is_httpps =
+        std::holds_alternative<url::SchemeHostPort>(endpoint) &&
+        std::get<url::SchemeHostPort>(endpoint).scheme() == url::kHttppsScheme;
     ssl_config.allowed_bad_certs = allowed_bad_certs;
     ssl_config.privacy_mode = privacy_mode;
 
@@ -314,6 +343,10 @@ ConnectJobParams ConstructConnectJobParams(
     ssl_config.proxy_chain = proxy_chain;
     ssl_config.proxy_chain_index = proxy_chain.length();
     ssl_config.session_usage = SessionUsage::kDestination;
+
+    if (ssl_config.is_httpps) {
+      ConfigureHttpps(ssl_config);
+    }
   }
 
   // Create the nested parameters over which the connection to the endpoint

@@ -169,7 +169,10 @@ const ProxyList* ProxyConfig::ProxyRules::MapUrlSchemeToProxyList(
     const std::string& url_scheme) const {
   const ProxyList* proxy_server_list =
       const_cast<ProxyRules*>(this)->MapUrlSchemeToProxyListNoFallback(
-          url_scheme);
+          // System settings expose an HTTPS proxy list, not an HTTPPS list.
+          // Reuse that selection without rewriting the URL given to bypass
+          // rules or PAC, and without making httpps= an alias in the parser.
+          url_scheme == "httpps" ? "https" : url_scheme);
   if (proxy_server_list && !proxy_server_list->IsEmpty()) {
     return proxy_server_list;
   }

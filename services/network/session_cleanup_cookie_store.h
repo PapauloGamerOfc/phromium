@@ -68,7 +68,7 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) SessionCleanupCookieStore
   void OnLoad(LoadedCallback loaded_callback,
               std::vector<std::unique_ptr<net::CanonicalCookie>> cookies);
 
-  // Map of (domain keys(eTLD+1), is secure cookie) to number of cookies in the
+  // Map of (domain keys(eTLD+1), source scheme) to number of cookies in the
   // database.
   CookiesPerOriginMap cookies_per_origin_;
 

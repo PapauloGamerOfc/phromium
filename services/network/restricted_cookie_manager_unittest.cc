@@ -1218,6 +1218,40 @@ TEST_P(RestrictedCookieManagerTest, SetCanonicalCookie) {
       ElementsAre(net::MatchesCookieNameValue("new-name", "new-value")));
 }
 
+TEST_P(RestrictedCookieManagerTest, HttppsWritesKeepTheirNamespace) {
+  SetSessionCookie("session", "https", "example.com", "/");
+  const GURL httpps("httpps://example.com:443/");
+  const url::Origin origin = url::Origin::Create(httpps);
+  const net::SiteForCookies site = net::SiteForCookies::FromUrl(httpps);
+  const net::IsolationInfo isolation = net::IsolationInfo::Create(
+      net::IsolationInfo::RequestType::kOther, origin, origin, site);
+  auto service = std::make_unique<RestrictedCookieManager>(
+      RestrictedCookieManagerRole(), &cookie_monster_, cookie_settings_, origin,
+      isolation, CookieSettingOverrides(), DevtoolsCookieSettingOverrides(),
+      /*prefer_bound_cookie_context=*/false, recording_client_.GetRemote());
+  mojo::Remote<mojom::RestrictedCookieManager> remote;
+  mojo::Receiver<mojom::RestrictedCookieManager> receiver(
+      service.get(), remote.BindNewPipeAndPassReceiver());
+  RestrictedCookieManagerSync sync(remote.get());
+  EXPECT_TRUE(sync.SetCanonicalCookie(
+      mojom::RestrictedCanonicalCookieParams::New(
+          "session", "httpps", "example.com", "/", base::Time(), base::Time(),
+          base::Time(), /*secure=*/true, /*httponly=*/false,
+          net::CookieSameSite::NO_RESTRICTION, net::COOKIE_PRIORITY_DEFAULT,
+          mojom::RestrictedCookiePartition::UNPARTITIONED),
+      httpps, site, origin, net::StorageAccessApiStatus::kNone));
+  auto cookies = sync.GetAllForUrl(httpps, site, origin,
+                                   net::StorageAccessApiStatus::kNone,
+                                   GetAllCookiesOptions());
+  ASSERT_EQ(1u, cookies.size());
+  EXPECT_EQ("httpps", cookies[0].Value());
+  EXPECT_EQ(net::CookieSourceScheme::kHttpps, cookies[0].SourceScheme());
+  EXPECT_THAT(sync_service_->GetAllForUrl(
+                  kDefaultUrl, kDefaultSiteForCookies, kDefaultOrigin,
+                  net::StorageAccessApiStatus::kNone, GetAllCookiesOptions()),
+              ElementsAre(net::MatchesCookieNameValue("session", "https")));
+}
+
 TEST_P(RestrictedCookieManagerTest, SetCanonicalCookie_WithStorageAccess) {
   service_->OverrideIsolationInfoForTesting(kThirdPartyIsolationInfo);
   SetSessionCookie("cookie-name", "cookie-value", "example.com", "/");

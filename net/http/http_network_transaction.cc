@@ -2506,6 +2506,9 @@ GURL HttpNetworkTransaction::AuthURL(HttpAuth::Target target) const {
       // TODO(crbug.com/40704785): Mapping proxy addresses to
       // URLs is a lossy conversion, shouldn't do this.
       auto& proxy_server = proxy_info_.proxy_chain().First();
+      if (proxy_server.is_httpps()) {
+        return GURL("httpps://" + proxy_server.host_port_pair().ToString());
+      }
       const char* scheme =
           proxy_server.is_secure_http_like() ? "https://" : "http://";
       return GURL(scheme + proxy_server.host_port_pair().ToString());
@@ -2681,6 +2684,10 @@ void HttpNetworkTransaction::RecordStreamRequestResult(int result) {
 }
 
 void HttpNetworkTransaction::ProcessAltSvcHeader() {
+  // This HTTPPS profile has no alternative transport. Do not persist Alt-Svc.
+  if (request_->url.SchemeIs(url::kHttppsScheme)) {
+    return;
+  }
   if (IsSecureRequest()) {
     stream_->GetSSLInfo(&response_.ssl_info);
     if (response_.ssl_info.is_valid() &&

@@ -880,7 +880,8 @@ void FrameLoader::StartNavigation(FrameLoadRequest& request,
 
   DCHECK(Client()->HasWebView());
   // Check for non-escaped new lines in the url.
-  if (url.PotentiallyDanglingMarkup() && url.ProtocolIsInHttpFamily()) {
+  if (url.PotentiallyDanglingMarkup() &&
+      url.ProtocolIsInHttpFamilyOrHTTPPS()) {
     Deprecation::CountDeprecation(
         origin_window, WebFeature::kCanRequestURLHTTPContainingNewline);
     return;

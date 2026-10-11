@@ -1211,36 +1211,33 @@ const base::FeatureParam<bool>
 // HTTP when HTTPS can't be reasonably expected.
 BASE_FEATURE(kHttpsFirstBalancedMode, base::FEATURE_ENABLED_BY_DEFAULT);
 
-// Automatically enables HTTPS-First Mode in a balanced configuration when
-// possible.
+// Phromium keeps HTTPS-First Mode available as an explicit user choice, but
+// does not enable it automatically. This does not affect HSTS or redirects
+// received from a server.
 BASE_FEATURE(kHttpsFirstBalancedModeAutoEnable,
-#if BUILDFLAG(IS_ANDROID)
-             base::FEATURE_DISABLED_BY_DEFAULT
-#else
-             base::FEATURE_ENABLED_BY_DEFAULT
-#endif
-);
+             base::FEATURE_DISABLED_BY_DEFAULT);
 
 // Kill switch for crbug.com/40892208.
 BASE_FEATURE(kHttpsFirstModeForAdvancedProtectionUsers,
              "HttpsOnlyModeForAdvancedProtectionUsers",
-             base::FEATURE_ENABLED_BY_DEFAULT);
+             base::FEATURE_DISABLED_BY_DEFAULT);
 
 BASE_FEATURE(kHttpsFirstModeDefaultSettingPairsWithEsb,
-             base::FEATURE_ENABLED_BY_DEFAULT);
+             base::FEATURE_DISABLED_BY_DEFAULT);
 
 // Enables HTTPS-First Mode for engaged sites. No-op if HttpsFirstModeV2 or
 // HTTPS-Upgrades is disabled.
 BASE_FEATURE(kHttpsFirstModeV2ForEngagedSites,
-             base::FEATURE_ENABLED_BY_DEFAULT);
+             base::FEATURE_DISABLED_BY_DEFAULT);
 
 // Enables HTTPS-First Mode for typically secure users. No-op if
 // HttpsFirstModeV2 or HTTPS-Upgrades is disabled.
 BASE_FEATURE(kHttpsFirstModeV2ForTypicallySecureUsers,
              base::FEATURE_DISABLED_BY_DEFAULT);
 
-// Enables automatically upgrading main frame navigations to HTTPS.
-BASE_FEATURE(kHttpsUpgrades, base::FEATURE_ENABLED_BY_DEFAULT);
+// Browser-initiated HTTPS upgrades are opt-in in Phromium. The network stack's
+// HSTS processing and explicit server redirects remain unchanged.
+BASE_FEATURE(kHttpsUpgrades, base::FEATURE_DISABLED_BY_DEFAULT);
 // When enabled, typed schemeless navigations (e.g., typed "example.com" in the
 // Omnibox) that are upgraded to HTTPS will not fallback to HTTP if the HTTPS
 // navigation fails due to a timeout.
@@ -1254,8 +1251,8 @@ const base::FeatureParam<base::TimeDelta>
     kHttpsUpgradesAskBeforeHttpFallbackDelay{
         &kHttpsUpgrades, "ask-before-http-fallback-delay", base::Seconds(5)};
 
-// Enables HTTPS-First Mode by default in Incognito Mode.
-BASE_FEATURE(kHttpsFirstModeIncognito, base::FEATURE_ENABLED_BY_DEFAULT);
+// Incognito uses the same opt-in HTTPS-First policy as regular windows.
+BASE_FEATURE(kHttpsFirstModeIncognito, base::FEATURE_DISABLED_BY_DEFAULT);
 
 // Enables the Incoming Call Notifications scenario. When created by an
 // installed origin, an incoming call notification should have increased

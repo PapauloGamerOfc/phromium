@@ -1,0 +1,90 @@
+name: Phromium experimental checks
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: phromium-checks-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  portable-transport:
+    name: Native HTTPPS engine (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            net/httpps
+            third_party/boringssl
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13'
+      - name: Fetch pinned dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          git submodule update --init --depth 1 third_party/boringssl/src
+          git clone --no-checkout https://github.com/PapauloGamerOfc/tls20-server.git out/reference-server
+          git -C out/reference-server checkout --detach 4f28b2c2da40e8a8371e9846dd3c5cd8a6c9401f
+          git clone --no-checkout https://github.com/PapauloGamerOfc/tls20-spec.git out/reference-spec
+          git -C out/reference-spec checkout --detach 0c9c8bf0914697d521050554e545a167fa8fc345
+          python -m pip install cryptography==50.0.2
+      - name: Compile actual engine with pinned BoringSSL
+        run: cmake -S net/httpps/tests -B out/httpps-native -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build out/httpps-native --config Release --parallel 3
+      - name: Primitive tests
+        run: ctest --test-dir out/httpps-native -C Release --output-on-failure
+      - name: Independent wire interoperability and PKI rejection tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          executable=out/httpps-native/httpps_native_test
+          if [[ "$RUNNER_OS" == "Windows" ]]; then
+            executable=out/httpps-native/Release/httpps_native_test.exe
+          fi
+          python net/httpps/tests/interop_test.py --native "$executable" --server-source out/reference-server
+          python net/httpps/tests/wire_test.py --native "$executable" --server-source out/reference-server
+          python net/httpps/tests/session_interop_test.py --native "$executable" --server-source out/reference-server
+          python net/httpps/tests/client_auth_interop_test.py --native "$executable" --server-source out/reference-server
+          python net/httpps/tests/spec_oracle_test.py --native "$executable" --server-source out/reference-server --spec-source out/reference-spec
+      - name: Scope of these checks
+        shell: bash
+        run: echo 'Portable engine checks include sessions/0-RTT, initial client MAC authentication and a pinned-spec oracle. They do not compile or validate the complete Chromium browser, async adapter, browser client-identity UI, PHA or installers.' >> "$GITHUB_STEP_SUMMARY"
+
+  branding:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+          sparse-checkout: |
+            tools
+            build
+            chrome/app
+            chrome/common
+            chrome/installer
+            chrome/install_static
+            chrome/browser/profiles
+            chrome/elevation_service
+            chrome/windows_services/elevated_tracing_service
+            services/tracing/public/cpp
+            third_party/win_build_output/midl/chrome
+      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: '3.13'
+      - run: python tools/phromium_branding_check.py

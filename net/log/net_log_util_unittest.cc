@@ -19,6 +19,8 @@
 #include "net/base/net_errors.h"
 #include "net/base/net_info_source_list.h"
 #include "net/base/test_completion_callback.h"
+#include "net/cert/cert_verifier.h"
+#include "net/cert/cert_verify_proc.h"
 #include "net/dns/public/doh_provider_entry.h"
 #include "net/http/http_cache.h"
 #include "net/http/http_transaction.h"
@@ -50,6 +52,18 @@ TEST(NetLogUtil, GetNetConstantsOkInNetError) {
   std::optional<int> ok_value =
       constants.GetDict().FindDict("netError")->FindInt("net::OK");
   EXPECT_THAT(ok_value, testing::Optional(0));
+}
+
+TEST(NetLogUtil, HttppsCertificateFlagsHaveCorrectLogValues) {
+  const auto constants = GetNetConstants();
+  const auto* verifier_flags = constants.FindDict("certVerifierFlags");
+  const auto* proc_flags = constants.FindDict("certVerifyFlags");
+  ASSERT_NE(nullptr, verifier_flags);
+  ASSERT_NE(nullptr, proc_flags);
+  EXPECT_THAT(verifier_flags->FindInt("VERIFY_HTTPPS_SERVER"),
+              testing::Optional(int(CertVerifier::VERIFY_HTTPPS_SERVER)));
+  EXPECT_THAT(proc_flags->FindInt("VERIFY_HTTPPS_SERVER"),
+              testing::Optional(int(CertVerifyProc::VERIFY_HTTPPS_SERVER)));
 }
 
 // Make sure GetNetInfo doesn't crash when called on contexts with and without

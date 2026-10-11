@@ -55,6 +55,10 @@ struct NET_EXPORT SSLConfig {
   // configuration.
   int GetCertVerifyFlags() const;
 
+  // Experimental HTTPPS uses the TLS20 draft01 transport, never standard TLS.
+  // It has a separate, explicit trust store and does not permit cert overrides.
+  bool is_httpps = false;
+
   // If specified, the minimum and maximum protocol versions that are enabled.
   // (Use the SSL_PROTOCOL_VERSION_xxx enumerators defined above.) If
   // unspecified, values from the SSLConfigService are used.

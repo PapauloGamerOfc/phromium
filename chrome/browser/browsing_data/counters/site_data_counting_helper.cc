@@ -146,8 +146,12 @@ void SiteDataCountingHelper::GetCookiesCallback(
   std::vector<GURL> origins;
   for (const net::CanonicalCookie& cookie : cookies) {
     if (cookie.CreationDate() >= begin_ && cookie.CreationDate() < end_) {
-      GURL url = net::cookie_util::CookieOriginToURL(cookie.Domain(),
-                                                     cookie.SecureAttribute());
+      GURL url = net::cookie_util::CookieOriginToURL(
+          cookie.Domain(),
+          cookie.SourceScheme() == net::CookieSourceScheme::kHttpps
+              ? net::CookieSourceScheme::kHttpps
+          : cookie.SecureAttribute() ? net::CookieSourceScheme::kSecure
+                                     : net::CookieSourceScheme::kNonSecure);
       origins.push_back(url);
     }
   }

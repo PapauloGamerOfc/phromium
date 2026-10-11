@@ -132,6 +132,18 @@ class OriginTest : public ::testing::Test {
   ScopedSchemeRegistryForTests scoped_registry_;
 };
 
+TEST_F(OriginTest, HttppsOriginIsNotHttps) {
+  const Origin origin = Origin::Create(GURL("httpps://example.test/path"));
+  EXPECT_FALSE(origin.opaque());
+  EXPECT_EQ("httpps", origin.scheme());
+  EXPECT_EQ(343, origin.port());
+  EXPECT_EQ("httpps://example.test", origin.Serialize());
+  EXPECT_EQ(origin, Origin::Create(GURL("httpps://example.test:343/other")));
+  EXPECT_NE(origin, Origin::Create(GURL("https://example.test:343/")));
+  EXPECT_NE(origin, Origin::Create(GURL("http://example.test:343/")));
+  EXPECT_NE(origin, Origin::Create(GURL("httpps://example.test:443/")));
+}
+
 TEST_F(OriginTest, OpaqueOriginComparison) {
   // A default-constructed Origin should should be cross origin to everything
   // but itself.

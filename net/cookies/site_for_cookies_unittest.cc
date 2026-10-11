@@ -67,6 +67,17 @@ void TestEquivalentAndDistinct(const std::vector<GURL>& equivalent,
   }
 }
 
+TEST(SiteForCookiesTest, HttppsIsSchemefullySeparateFromHttps) {
+  const auto site = SiteForCookies::FromUrl(GURL("httpps://www.example.test/"));
+  EXPECT_FALSE(site.IsNull());
+  EXPECT_TRUE(site.IsFirstParty(GURL("httpps://sub.example.test:444/path")));
+  EXPECT_FALSE(site.IsFirstParty(GURL("https://www.example.test:343/")));
+  EXPECT_FALSE(site.IsFirstParty(GURL("http://www.example.test:343/")));
+  EXPECT_FALSE(site.IsEquivalent(
+      SiteForCookies::FromUrl(GURL("https://www.example.test:343/"))));
+  EXPECT_EQ(GURL("httpps://example.test/"), site.RepresentativeUrl());
+}
+
 TEST(SiteForCookiesTest, Default) {
   SiteForCookies should_match_none;
   EXPECT_FALSE(should_match_none.IsFirstParty(GURL("http://example.com")));

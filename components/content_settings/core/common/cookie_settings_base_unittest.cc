@@ -124,6 +124,37 @@ TEST_F(CookieSettingsBaseTest, ShouldDeleteSessionOnly) {
       {}, kDomain, net::CookieSourceScheme::kNonSecure));
 }
 
+TEST_F(CookieSettingsBaseTest, HttppsCookieSettingsUseHttppsOrigin) {
+  CallbackCookieSettings settings(base::BindLambdaForTesting(
+      [](const GURL& url, ContentSettingsType, SettingInfo*) {
+        EXPECT_EQ(GURL("httpps://foo.com/"), url);
+        return CONTENT_SETTING_SESSION_ONLY;
+      }));
+  EXPECT_TRUE(settings.ShouldDeleteCookieOnExit(
+      {}, kDomain, net::CookieSourceScheme::kHttpps));
+}
+
+TEST_F(CookieSettingsBaseTest, DomainExceptionsRespectHttppsNamespace) {
+  CallbackCookieSettings settings(CONTENT_SETTING_SESSION_ONLY);
+  for (bool secondary : {false, true}) {
+    for (const char* scheme : {"https", "httpps"}) {
+      const auto pattern = ContentSettingsPattern::FromString(
+          base::StrCat({scheme, "://foo.com"}));
+      ASSERT_TRUE(pattern.IsValid());
+      ContentSettingsForOneType rules{ContentSettingPatternSource(
+          secondary ? ContentSettingsPattern::Wildcard() : pattern,
+          secondary ? pattern : ContentSettingsPattern::Wildcard(),
+          base::Value(CONTENT_SETTING_ALLOW), ProviderType::kNone, false)};
+      EXPECT_EQ(std::string_view(scheme) != "httpps",
+                settings.ShouldDeleteCookieOnExit(
+                    rules, kDomain, net::CookieSourceScheme::kHttpps));
+      EXPECT_EQ(std::string_view(scheme) == "httpps",
+                settings.ShouldDeleteCookieOnExit(
+                    rules, kDomain, net::CookieSourceScheme::kSecure));
+    }
+  }
+}
+
 TEST_F(CookieSettingsBaseTest, ShouldNotDeleteAllowed) {
   CallbackCookieSettings settings(CONTENT_SETTING_ALLOW);
   EXPECT_FALSE(settings.ShouldDeleteCookieOnExit(

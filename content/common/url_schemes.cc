@@ -27,6 +27,7 @@ bool g_registered_url_schemes = false;
 const char* const kDefaultSavableSchemes[] = {
   url::kHttpScheme,
   url::kHttpsScheme,
+  url::kHttppsScheme,
   url::kFileScheme,
   url::kFileSystemScheme,
   kChromeDevToolsScheme,

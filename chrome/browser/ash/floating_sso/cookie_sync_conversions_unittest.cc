@@ -24,6 +24,14 @@
 
 namespace ash::floating_sso {
 
+TEST(CookieSyncConversionsTest, HttppsCannotBeExportedAsHttps) {
+  auto cookie = net::CanonicalCookie::CreateForTesting(
+      GURL("httpps://example.com"), "session=isolated; Secure",
+      base::Time::Now(), net::CookieSourceType::kHTTP);
+  ASSERT_TRUE(cookie);
+  EXPECT_FALSE(ToSyncProto(*cookie).has_value());
+}
+
 // Verify that a cookie can be written to proto and then restored from it
 // without loosing any data.
 TEST(CookieSyncConversionsTest, CookieToProtoAndBack) {

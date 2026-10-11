@@ -166,7 +166,10 @@ bool GetDeletionPreferenceFromDataType(
 std::optional<BrowsingDataType> GetDataTypeFromDeletionPreference(
     const std::string& pref_name);
 
-bool IsHttpsCookieSourceScheme(net::CookieSourceScheme cookie_source_scheme);
+// Preserves HTTPPS and treats legacy cookies without a recorded source as
+// HTTPS.
+net::CookieSourceScheme CookieSourceSchemeForDisplay(
+    net::CookieSourceScheme cookie_source_scheme);
 
 }  // namespace browsing_data
 

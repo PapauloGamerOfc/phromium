@@ -119,7 +119,8 @@ class NET_EXPORT CookieBase {
   // Returns an enum indicating the scheme of the origin that
   // set this cookie. This is not part of the cookie spec but is being used to
   // collect metrics for a potential change to the cookie spec
-  // (https://tools.ietf.org/html/draft-west-cookie-incrementalism-01#section-3.4)
+  // (https://tools.ietf.org/html/draft-west-cookie-incrementalism-01#section-3.4).
+  // kHttpps additionally enforces the separate HTTPPS cookie namespace.
   CookieSourceScheme SourceScheme() const { return source_scheme_; }
   // Returns the port of the origin that originally set this cookie (the
   // source port). This is not part of the cookie spec but is being used to
@@ -142,7 +143,7 @@ class NET_EXPORT CookieBase {
   // The `partition_key_` field will always be nullopt when partitioned cookies
   // are not enabled.
   // The source_scheme and source_port fields depend on whether or not their
-  // associated features are enabled.
+  // associated features are enabled. The HTTPPS source marker is always kept.
   UniqueCookieKey UniqueKey() const;
 
   // Returns a non-owning key such that two cookies with the same RefUniqueKey()
@@ -150,14 +151,14 @@ class NET_EXPORT CookieBase {
   // The `partition_key_` field will always be nullopt when partitioned cookies
   // are not enabled.
   // The source_scheme and source_port fields depend on whether or not their
-  // associated features are enabled.
+  // associated features are enabled. The HTTPPS source marker is always kept.
   // A RefUniqueKey keeps references that point to data in the CookieBase, so it
   // must not be stored beyond the lifetime of the CookieBase.
   RefUniqueCookieKey RefUniqueKey() const;
 
   // Same as UniqueKey() except it does not contain a source_port or
-  // source_scheme field. For use for determining aliasing cookies, which do not
-  // consider the source_port or source_scheme.
+  // source_scheme field, except for the mandatory HTTPPS namespace marker. For
+  // use for determining aliasing cookies within each protocol namespace.
   UniqueCookieKey LegacyUniqueKey() const;
 
   void SetSourceScheme(CookieSourceScheme source_scheme) {

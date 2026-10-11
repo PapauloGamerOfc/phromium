@@ -2769,7 +2769,9 @@ void NetworkContext::LookupProxyAuthCredentials(
   // TODO(crbug.com/40704785): Mapping proxy addresses to URLs is a
   // lossy conversion, shouldn't do this.
   const char* scheme =
-      proxy_server.is_secure_http_like() ? "https://" : "http://";
+      proxy_server.is_httpps()
+          ? "httpps://"
+          : (proxy_server.is_secure_http_like() ? "https://" : "http://");
   url::SchemeHostPort scheme_host_port(
       GURL(scheme + proxy_server.host_port_pair().ToString()));
   if (!scheme_host_port.IsValid()) {
@@ -3213,6 +3215,34 @@ URLRequestContextOwner NetworkContext::MakeURLRequestContext(
 
   session_params.key_auth_cache_server_entries_by_network_anonymization_key =
       params_->split_auth_cache_by_network_anonymization_key;
+
+  // Independently bounded trust stores. A proxy CA cannot authorize an origin,
+  // nor can an origin CA authorize a proxy. Invalid input empties that store.
+  const auto copy_httpps_roots =
+      [](const std::vector<std::vector<uint8_t>>& input) {
+        std::vector<std::string> roots;
+        if (input.size() > 32) {
+          return roots;
+        }
+        size_t total_bytes = 0;
+        for (const auto& root : input) {
+          if (root.empty() || root.size() > 65536) {
+            return std::vector<std::string>();
+          }
+          total_bytes += root.size();
+          if (total_bytes > 1024 * 1024) {
+            return std::vector<std::string>();
+          }
+        }
+        for (const auto& root : input) {
+          roots.emplace_back(root.begin(), root.end());
+        }
+        return roots;
+      };
+  session_params.httpps_trust_anchors =
+      copy_httpps_roots(params_->httpps_trust_anchors);
+  session_params.httpps_proxy_trust_anchors =
+      copy_httpps_roots(params_->httpps_proxy_trust_anchors);
 
   builder.set_http_network_session_params(session_params);
   builder.set_quic_context(std::move(quic_context));
@@ -3711,7 +3741,9 @@ void NetworkContext::ClearSharedDictionarySessionOnlyData(
           return false;
         }
         return predicate.Run(url.host(),
-                             url.SchemeIsCryptographic()
+                             url.SchemeIs(url::kHttppsScheme)
+                                 ? net::CookieSourceScheme::kHttpps
+                             : url.SchemeIsCryptographic()
                                  ? net::CookieSourceScheme::kSecure
                                  : net::CookieSourceScheme::kNonSecure);
       },
@@ -4177,7 +4209,6 @@ void NetworkContext::SetVariationsHeaders(
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   variations_headers_ = std::move(variations_headers);
 }
-
 
 bool NetworkContext::HasCookieAccessForDeviceBoundSession(
     const net::device_bound_sessions::CookieAccessCheckParams& params) {

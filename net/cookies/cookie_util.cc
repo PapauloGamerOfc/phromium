@@ -358,8 +358,8 @@ std::string CookieDomainAsHost(std::string_view cookie_domain) {
 }
 
 std::string GetEffectiveDomain(std::string_view scheme, std::string_view host) {
-  if (scheme == "http" || scheme == "https" || scheme == "ws" ||
-      scheme == "wss") {
+  if (scheme == "http" || scheme == "https" || scheme == "httpps" ||
+      scheme == "ws" || scheme == "wss") {
     return registry_controlled_domains::GetDomainAndRegistry(
         host,
         registry_controlled_domains::INCLUDE_PRIVATE_REGISTRIES);
@@ -684,6 +684,10 @@ GURL CookieDomainAndPathToURL(std::string_view domain,
 GURL CookieDomainAndPathToURL(std::string_view domain,
                               std::string_view path,
                               CookieSourceScheme source_scheme) {
+  if (source_scheme == CookieSourceScheme::kHttpps) {
+    return CookieDomainAndPathToURL(domain, path,
+                                    std::string_view(url::kHttppsScheme));
+  }
   return CookieDomainAndPathToURL(domain, path,
                                   source_scheme == CookieSourceScheme::kSecure);
 }
@@ -692,8 +696,18 @@ GURL CookieOriginToURL(std::string_view domain, bool is_https) {
   return CookieDomainAndPathToURL(domain, "/", is_https);
 }
 
+GURL CookieOriginToURL(std::string_view domain,
+                       CookieSourceScheme source_scheme) {
+  return CookieDomainAndPathToURL(domain, "/", source_scheme);
+}
+
 GURL SimulatedCookieSource(const CanonicalCookie& cookie,
                            std::string_view source_scheme) {
+  // Administrative callers historically simulate all cookie writes as HTTPS.
+  // Keep the HTTPPS namespace instead of accidentally changing its authority.
+  if (cookie.SourceScheme() == CookieSourceScheme::kHttpps) {
+    source_scheme = url::kHttppsScheme;
+  }
   return CookieDomainAndPathToURL(cookie.Domain(), cookie.Path(),
                                   source_scheme);
 }

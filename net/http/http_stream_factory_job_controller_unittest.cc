@@ -1143,6 +1143,61 @@ TEST_F(HttpStreamFactoryJobControllerTest, ProxyResolutionFailsAsync) {
   EXPECT_TRUE(HttpStreamFactoryPeer::IsJobControllerDeleted(factory_));
 }
 
+TEST_F(HttpStreamFactoryJobControllerTest, HttppsKeepsConfiguredProxyChain) {
+  for (auto scheme : {ProxyServer::SCHEME_HTTP, ProxyServer::SCHEME_HTTPS,
+                      ProxyServer::SCHEME_HTTPPS, ProxyServer::SCHEME_SOCKS4,
+                      ProxyServer::SCHEME_SOCKS5}) {
+    SCOPED_TRACE(scheme);
+    CreateSessionDeps();
+    const auto chain =
+        ProxyChain::FromSchemeHostAndPort(scheme, "proxy.example.test", 343);
+    session_deps_.proxy_resolution_service =
+        ConfiguredProxyResolutionService::CreateFixedFromProxyChainsForTest(
+            {chain}, TRAFFIC_ANNOTATION_FOR_TESTS);
+    tcp_data_ = std::make_unique<SequencedSocketData>();
+    tcp_data_->set_connect_data(MockConnect(ASYNC, ERR_IO_PENDING));
+    HttpRequestInfo info;
+    info.method = "GET";
+    info.url = GURL("httpps://origin.example.test/");
+    Initialize(info);
+    request_ = job_controller_->Start(
+        request_delegate_.get(), nullptr, net_log_with_source_,
+        HttpStreamRequest::HTTP_STREAM, DEFAULT_PRIORITY);
+    ASSERT_TRUE(job_controller_->main_job());
+    EXPECT_EQ(chain, job_controller_->main_job()->proxy_info().proxy_chain());
+    EXPECT_FALSE(job_controller_->alternative_job());
+    EXPECT_FALSE(request_delegate_->IsDone());
+    request_.reset();
+  }
+}
+
+TEST_F(HttpStreamFactoryJobControllerTest,
+       HttppsProxyAcceptedForExistingSchemes) {
+  for (const char* destination :
+       {"http://origin.example.test/", "https://origin.example.test/"}) {
+    SCOPED_TRACE(destination);
+    CreateSessionDeps();
+    const auto chain = ProxyChain::FromSchemeHostAndPort(
+        ProxyServer::SCHEME_HTTPPS, "proxy.example.test", 343);
+    session_deps_.proxy_resolution_service =
+        ConfiguredProxyResolutionService::CreateFixedFromProxyChainsForTest(
+            {chain}, TRAFFIC_ANNOTATION_FOR_TESTS);
+    tcp_data_ = std::make_unique<SequencedSocketData>();
+    tcp_data_->set_connect_data(MockConnect(ASYNC, ERR_IO_PENDING));
+    HttpRequestInfo info;
+    info.method = "GET";
+    info.url = GURL(destination);
+    Initialize(info);
+    request_ = job_controller_->Start(
+        request_delegate_.get(), nullptr, net_log_with_source_,
+        HttpStreamRequest::HTTP_STREAM, DEFAULT_PRIORITY);
+    ASSERT_TRUE(job_controller_->main_job());
+    EXPECT_EQ(chain, job_controller_->main_job()->proxy_info().proxy_chain());
+    EXPECT_FALSE(request_delegate_->IsDone());
+    request_.reset();
+  }
+}
+
 TEST_F(HttpStreamFactoryJobControllerTest, NoSupportedProxies) {
   session_deps_.proxy_resolution_service =
       ConfiguredProxyResolutionService::CreateFixedFromProxyChainsForTest(

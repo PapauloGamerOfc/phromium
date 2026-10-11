@@ -411,9 +411,11 @@ class CookieMonsterTestBase : public CookieStoreTest<T> {
                            const std::string& domain,
                            const std::string& name) {
     CookieList cookies = this->GetAllCookies(cm);
-    for (auto& cookie : cookies)
-      if (cookie.Domain() == domain && cookie.Name() == name)
+    for (auto& cookie : cookies) {
+      if (cookie.Domain() == domain && cookie.Name() == name) {
         return this->DeleteCanonicalCookie(cm, cookie);
+      }
+    }
     return false;
   }
 
@@ -612,10 +614,11 @@ class CookieMonsterTestBase : public CookieStoreTest<T> {
       DCHECK_LT(id, num_cookies);
       surviving_id_list[cookie_data[id].first][cookie_data[id].second]
           .push_back(id);
-      if (cookie_data[id].first)
+      if (cookie_data[id].first) {
         num_secure += 1;
-      else
+      } else {
         num_nonsecure += 1;
+      }
     }
 
     EXPECT_EQ(expected_nonsecure, num_nonsecure);
@@ -687,10 +690,11 @@ class CookieMonsterTestBase : public CookieStoreTest<T> {
     for (const auto& cookie_entry : cookie_entries) {
       for (size_t j = 0; j < cookie_entry.num_cookies; j++) {
         std::string cookie;
-        if (cookie_entry.is_secure)
+        if (cookie_entry.is_secure) {
           cookie = base::StringPrintf("a%d=b; Secure", next_cookie_id);
-        else
+        } else {
           cookie = base::StringPrintf("a%d=b", next_cookie_id);
+        }
         EXPECT_TRUE(SetCookie(cm.get(), https_www_foo_.url(), cookie));
         ++next_cookie_id;
       }
@@ -2212,6 +2216,191 @@ TEST_F(CookieMonsterTest, TestPartitionedCookiesGarbageCollection_MaxCookies) {
                              testing::Key(base::NumberToString(i)))))
         << "Failed to find cookie " << i;
   }
+}
+
+TEST_F(CookieMonsterTest, HttppsCookieNamespaceIsAlwaysIsolated) {
+  // HTTPPS isolation must not depend on the origin-bound cookies experiment or
+  // be undone by a site's legacy scope setting. Use the same host and port.
+  for (bool scheme_bound : {false, true}) {
+    base::test::ScopedFeatureList feature_list;
+    feature_list.InitWithFeatureState(features::kEnableSchemeBoundCookies,
+                                      scheme_bound);
+    for (bool legacy_scope : {false, true}) {
+      for (const std::string attributes :
+           {"; Path=/", "; Path=/; Domain=example.test",
+            "; Path=/; Secure; HttpOnly"}) {
+        SCOPED_TRACE(testing::Message()
+                     << scheme_bound << legacy_scope << attributes);
+        auto cm = std::make_unique<CookieMonster>(nullptr, net::NetLog::Get());
+        if (legacy_scope) {
+          auto delegate = std::make_unique<TestCookieAccessDelegate>();
+          delegate->SetExpectationForCookieScope("example.test",
+                                                 CookieScopeSemantics::LEGACY);
+          cm->SetCookieAccessDelegate(std::move(delegate));
+        }
+        const GURL https("https://example.test:343/");
+        const GURL httpps("httpps://example.test/");
+        const auto options = CookieOptions::MakeAllInclusive();
+        ASSERT_TRUE(CreateAndSetCookie(cm.get(), https,
+                                       "session=https" + attributes, options));
+        ASSERT_TRUE(CreateAndSetCookie(cm.get(), httpps,
+                                       "session=httpps" + attributes, options));
+        EXPECT_EQ("session=https",
+                  GetCookiesWithOptions(cm.get(), https, options));
+        EXPECT_EQ("session=httpps",
+                  GetCookiesWithOptions(cm.get(), httpps, options));
+        EXPECT_EQ(2u, GetAllCookies(cm.get()).size());
+
+        // Overwrite and expiration remove only the HTTPPS cookie.
+        ASSERT_TRUE(CreateAndSetCookie(
+            cm.get(), httpps, "session=changed" + attributes, options));
+        ASSERT_TRUE(CreateAndSetCookie(
+            cm.get(), httpps, "session=; Max-Age=0" + attributes, options));
+        EXPECT_EQ("", GetCookiesWithOptions(cm.get(), httpps, options));
+        EXPECT_EQ("session=https",
+                  GetCookiesWithOptions(cm.get(), https, options));
+
+        ASSERT_TRUE(CreateAndSetCookie(cm.get(), httpps,
+                                       "session=httpps" + attributes, options));
+        ASSERT_TRUE(CreateAndSetCookie(
+            cm.get(), https, "session=; Max-Age=0" + attributes, options));
+        EXPECT_EQ("", GetCookiesWithOptions(cm.get(), https, options));
+        EXPECT_EQ("session=httpps",
+                  GetCookiesWithOptions(cm.get(), httpps, options));
+      }
+    }
+  }
+}
+
+TEST_F(CookieMonsterTest, HttpAndHttpsStillShareNonSecureCookies) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitWithFeatures({}, {features::kEnableSchemeBoundCookies,
+                                     features::kEnablePortBoundCookies});
+  auto cm = std::make_unique<CookieMonster>(nullptr, net::NetLog::Get());
+  const GURL http("http://example.test/");
+  const GURL https("https://example.test/");
+  const GURL httpps("httpps://example.test/");
+  ASSERT_TRUE(SetCookie(cm.get(), http, "shared=http"));
+  EXPECT_EQ("shared=http", GetCookies(cm.get(), https));
+  EXPECT_EQ("", GetCookies(cm.get(), httpps));
+  ASSERT_TRUE(SetCookie(cm.get(), https, "shared=https"));
+  EXPECT_EQ("shared=https", GetCookies(cm.get(), http));
+  ASSERT_TRUE(SetCookie(cm.get(), httpps, "shared=httpps"));
+  EXPECT_EQ("shared=https", GetCookies(cm.get(), http));
+  EXPECT_EQ("shared=https", GetCookies(cm.get(), https));
+  EXPECT_EQ("shared=httpps", GetCookies(cm.get(), httpps));
+}
+
+TEST_F(CookieMonsterTest, HttppsRejectsMismatchedCanonicalCookieSource) {
+  auto cm = std::make_unique<CookieMonster>(nullptr, net::NetLog::Get());
+  const GURL https("https://example.test:343/");
+  const GURL httpps("httpps://example.test/");
+  for (bool from_httpps : {false, true}) {
+    auto cookie = CanonicalCookie::CreateForTesting(
+        from_httpps ? httpps : https, "session=value; Secure", Time::Now(),
+        CookieSourceType::kOther);
+    ASSERT_TRUE(cookie);
+    EXPECT_TRUE(
+        SetCanonicalCookieReturnAccessResult(cm.get(), std::move(cookie),
+                                             from_httpps ? https : httpps, true)
+            .status.HasExclusionReason(CookieInclusionStatus::ExclusionReason::
+                                           EXCLUDE_SCHEME_MISMATCH));
+  }
+  EXPECT_TRUE(GetAllCookies(cm.get()).empty());
+}
+
+TEST_F(CookieMonsterTest, HttppsPartitionedCookiesUseIndependentNamespace) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndDisableFeature(features::kEnableSchemeBoundCookies);
+  auto cm = std::make_unique<CookieMonster>(nullptr, net::NetLog::Get());
+  const GURL https("https://example.test:343/");
+  const GURL httpps("httpps://example.test/");
+  // Same third-party partition tests the protocol boundary independently of
+  // schemeful top-level site partitioning.
+  auto key = CookiePartitionKey::FromURLForTesting(GURL("https://top.test"));
+  ASSERT_TRUE(
+      SetCookie(cm.get(), https, "session=https; Secure; Partitioned", key));
+  ASSERT_TRUE(
+      SetCookie(cm.get(), httpps, "session=httpps; Secure; Partitioned", key));
+  const CookiePartitionKeyCollection collection(key);
+  EXPECT_EQ("session=https", GetCookies(cm.get(), https, collection));
+  EXPECT_EQ("session=httpps", GetCookies(cm.get(), httpps, collection));
+  ASSERT_TRUE(SetCookie(cm.get(), httpps,
+                        "session=; Secure; Partitioned; Max-Age=0", key));
+  EXPECT_EQ("session=https", GetCookies(cm.get(), https, collection));
+  EXPECT_EQ("", GetCookies(cm.get(), httpps, collection));
+}
+
+TEST_F(CookieMonsterTest, HttppsRetainsHttpOnlyAndPrefixRules) {
+  auto cm = std::make_unique<CookieMonster>(nullptr, net::NetLog::Get());
+  const GURL httpps("httpps://example.test/");
+  auto script_options = CookieOptions::MakeAllInclusive();
+  script_options.set_exclude_httponly();
+  auto network_options = CookieOptions::MakeAllInclusive();
+  ASSERT_TRUE(CreateAndSetCookie(
+      cm.get(), httpps, "__Host-session=private; Secure; HttpOnly; Path=/",
+      network_options));
+  EXPECT_EQ("", GetCookiesWithOptions(cm.get(), httpps, script_options));
+  EXPECT_EQ("__Host-session=private",
+            GetCookiesWithOptions(cm.get(), httpps, network_options));
+  EXPECT_FALSE(CreateAndSetCookie(cm.get(), httpps,
+                                  "__Host-session=script; Secure; Path=/",
+                                  script_options));
+  EXPECT_FALSE(CreateAndSetCookie(cm.get(), httpps, "__Secure-insecure=value",
+                                  network_options));
+  EXPECT_FALSE(CreateAndSetCookie(
+      cm.get(), httpps,
+      "__Host-domain=value; Secure; Path=/; Domain=example.test",
+      network_options));
+  EXPECT_FALSE(CreateAndSetCookie(
+      cm.get(), httpps, "none=insecure; SameSite=None", network_options));
+}
+
+TEST_F(CookieMonsterTest, HttppsSecureCookiesCannotShadowOrdinaryHttpCookies) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndDisableFeature(features::kEnableSchemeBoundCookies);
+  auto cm = std::make_unique<CookieMonster>(nullptr, net::NetLog::Get());
+  const GURL http("http://www.example.test/path/");
+  const GURL httpps("httpps://www.example.test/path/");
+  ASSERT_TRUE(SetCookie(cm.get(), httpps,
+                        "a=httpps; Secure; Domain=example.test; Path=/"));
+  // Secure-cookie shadowing protection only applies within the namespace.
+  ASSERT_TRUE(SetCookie(cm.get(), http, "a=http; Path=/path/"));
+  EXPECT_EQ("a=http", GetCookies(cm.get(), http));
+  EXPECT_EQ("a=httpps", GetCookies(cm.get(), httpps));
+}
+
+TEST_F(CookieMonsterTest, HttppsCookieNotificationsAndUrlDeletionAreIsolated) {
+  auto cm = std::make_unique<CookieMonster>(nullptr, net::NetLog::Get());
+  const GURL https("https://example.test:343/");
+  const GURL httpps("httpps://example.test/");
+  int https_changes = 0;
+  int httpps_changes = 0;
+  auto https_subscription = cm->GetChangeDispatcher().AddCallbackForUrl(
+      https, std::nullopt,
+      base::BindLambdaForTesting(
+          [&](const CookieChangeInfo&) { ++https_changes; }));
+  auto httpps_subscription = cm->GetChangeDispatcher().AddCallbackForUrl(
+      httpps, std::nullopt,
+      base::BindLambdaForTesting(
+          [&](const CookieChangeInfo&) { ++httpps_changes; }));
+  ASSERT_TRUE(SetCookie(cm.get(), https, "a=https; Secure"));
+  base::RunLoop().RunUntilIdle();
+  EXPECT_EQ(1, https_changes);
+  EXPECT_EQ(0, httpps_changes);
+  ASSERT_TRUE(SetCookie(cm.get(), httpps, "a=httpps; Secure"));
+  base::RunLoop().RunUntilIdle();
+  EXPECT_EQ(1, https_changes);
+  EXPECT_EQ(1, httpps_changes);
+
+  CookieDeletionInfo deletion;
+  deletion.url = httpps;
+  EXPECT_EQ(1u, DeleteAllMatchingInfo(cm.get(), std::move(deletion)));
+  base::RunLoop().RunUntilIdle();
+  EXPECT_EQ(1, https_changes);
+  EXPECT_EQ(2, httpps_changes);
+  EXPECT_EQ("a=https", GetCookies(cm.get(), https));
+  EXPECT_EQ("", GetCookies(cm.get(), httpps));
 }
 
 TEST_F(CookieMonsterTest, SetCookieableSchemes) {
@@ -6602,9 +6791,10 @@ TEST_F(CookieMonsterTest, SetCanonicalCookieDoesNotBlockForLoadAll) {
   // Now go through the store commands, and execute individual loads.
   const auto& commands = persistent_store->commands();
   for (size_t i = 0; i < commands.size(); ++i) {
-    if (commands[i].type == CookieStoreCommand::LOAD_COOKIES_FOR_KEY)
+    if (commands[i].type == CookieStoreCommand::LOAD_COOKIES_FOR_KEY) {
       persistent_store->TakeCallbackAt(i).Run(
           std::vector<std::unique_ptr<CanonicalCookie>>());
+    }
   }
 
   // This should be enough for both individual commands.
@@ -6613,9 +6803,10 @@ TEST_F(CookieMonsterTest, SetCanonicalCookieDoesNotBlockForLoadAll) {
 
   // Now execute full-store loads as well.
   for (size_t i = 0; i < commands.size(); ++i) {
-    if (commands[i].type == CookieStoreCommand::LOAD)
+    if (commands[i].type == CookieStoreCommand::LOAD) {
       persistent_store->TakeCallbackAt(i).Run(
           std::vector<std::unique_ptr<CanonicalCookie>>());
+    }
   }
 }
 
@@ -6991,8 +7182,9 @@ void RecordCookieChanges(std::vector<CanonicalCookie>* out_cookies,
                          const CookieChangeInfo& change) {
   DCHECK(out_cookies);
   out_cookies->push_back(change.cookie);
-  if (out_causes)
+  if (out_causes) {
     out_causes->push_back(change.cause);
+  }
 }
 
 // Tests that there are no changes emitted for cookie loading, but there are
@@ -7509,6 +7701,7 @@ TEST_F(CookieMonsterTest, CookieSourceSchemeNameHistogram) {
   // care).
   const TestCase kTestCases[] = {
       {CookieSourceSchemeName::kHttpsScheme, url::kHttpsScheme},
+      {CookieSourceSchemeName::kHttppsScheme, url::kHttppsScheme},
       {CookieSourceSchemeName::kHttpScheme, url::kHttpScheme},
       {CookieSourceSchemeName::kWssScheme, url::kWssScheme},
       {CookieSourceSchemeName::kWsScheme, url::kWsScheme},
@@ -8016,41 +8209,39 @@ TEST_F(CookieMonsterTest, FilterCookiesWithOptionsWarnShadowingDomains) {
 
   // Confirms that of all the cookies in `actual` only the ones also in
   // `expected` have WARN_SHADOWING_DOMAIN.
-  auto DomainCookiesHaveWarnings =
-      [](const CookieAccessResultList& actual,
-         const std::vector<CanonicalCookie>& expected) {
-        std::map<CanonicalCookie, CookieInclusionStatus> cookie_result_map;
-        for (const auto& cookie_result : actual) {
-          cookie_result_map.insert(
-              {cookie_result.cookie, cookie_result.access_result.status});
-        }
+  auto DomainCookiesHaveWarnings = [](const CookieAccessResultList& actual,
+                                      const std::vector<CanonicalCookie>&
+                                          expected) {
+    std::map<CanonicalCookie, CookieInclusionStatus> cookie_result_map;
+    for (const auto& cookie_result : actual) {
+      cookie_result_map.insert(
+          {cookie_result.cookie, cookie_result.access_result.status});
+    }
 
-        for (const auto& cookie : expected) {
-          // This is a touch hacky but will always work because if the
-          // cookie_result_map doesn't contain `cookie` it'll create a default
-          // entry with an empty status which will always fail the check. I.e.:
-          // return false.
-          if (!cookie_result_map[cookie].HasWarningReason(
-                  CookieInclusionStatus::WarningReason::
-                      WARN_SHADOWING_DOMAIN)) {
-            return false;
-          }
+    for (const auto& cookie : expected) {
+      // This is a touch hacky but will always work because if the
+      // cookie_result_map doesn't contain `cookie` it'll create a default
+      // entry with an empty status which will always fail the check. I.e.:
+      // return false.
+      if (!cookie_result_map[cookie].HasWarningReason(
+              CookieInclusionStatus::WarningReason::WARN_SHADOWING_DOMAIN)) {
+        return false;
+      }
 
-          // Remove cookies that were part of `expected`.
-          cookie_result_map.erase(cookie);
-        }
+      // Remove cookies that were part of `expected`.
+      cookie_result_map.erase(cookie);
+    }
 
-        // If any of the remaining cookies have the warning, return false.
-        for (const auto& item : cookie_result_map) {
-          if (item.second.HasWarningReason(
-                  CookieInclusionStatus::WarningReason::
-                      WARN_SHADOWING_DOMAIN)) {
-            return false;
-          }
-        }
+    // If any of the remaining cookies have the warning, return false.
+    for (const auto& item : cookie_result_map) {
+      if (item.second.HasWarningReason(
+              CookieInclusionStatus::WarningReason::WARN_SHADOWING_DOMAIN)) {
+        return false;
+      }
+    }
 
-        return true;
-      };
+    return true;
+  };
 
   // We only apply warnings to shadowing domain cookies when scheme binding is
   // disabled.

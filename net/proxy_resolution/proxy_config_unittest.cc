@@ -977,6 +977,47 @@ TEST(ProxyConfigTest, ProxyRulesSetBypassFlag) {
   EXPECT_FALSE(result.did_bypass_proxy());
 }
 
+TEST(ProxyConfigTest, HttppsUsesHttpsListWithoutChangingBypassScheme) {
+  ProxyConfig::ProxyRules rules;
+  rules.ParseFromString(
+      "http=plain.test:80;https=secure.test:8080;socks=fallback.test");
+  rules.bypass_rules.AddRuleFromString("https://example.test");
+  ProxyInfo result;
+  rules.Apply(GURL("httpps://example.test/private"), &result);
+  EXPECT_EQ("PROXY secure.test:8080", result.ToDebugString());
+  EXPECT_FALSE(result.did_bypass_proxy());
+  rules.Apply(GURL("https://example.test/private"), &result);
+  EXPECT_TRUE(result.is_direct_only());
+  EXPECT_TRUE(result.did_bypass_proxy());
+
+  rules.bypass_rules.AddRuleFromString("httpps://example.test");
+  rules.Apply(GURL("httpps://example.test/private"), &result);
+  EXPECT_TRUE(result.is_direct_only());
+  EXPECT_TRUE(result.did_bypass_proxy());
+}
+
+TEST(ProxyConfigTest, HttppsUsesSingleAndFallbackProxyLists) {
+  ProxyConfig::ProxyRules rules;
+  ProxyInfo result;
+  rules.ParseFromString("proxy.test:8080");
+  rules.Apply(GURL("httpps://example.test"), &result);
+  EXPECT_EQ("PROXY proxy.test:8080", result.ToDebugString());
+
+  rules.ParseFromString("http=plain.test:80;socks=socks5://fallback.test:1080");
+  rules.Apply(GURL("httpps://example.test"), &result);
+  EXPECT_EQ("SOCKS5 fallback.test:1080", result.ToDebugString());
+}
+
+TEST(ProxyConfigTest, HttppsSelectorDoesNotOverwriteHttpsParserEntry) {
+  ProxyConfig::ProxyRules rules;
+  rules.ParseFromString("https=secure.test:8080;httpps=other.test:9000");
+  ProxyInfo result;
+  rules.Apply(GURL("https://example.test"), &result);
+  EXPECT_EQ("PROXY secure.test:8080", result.ToDebugString());
+  rules.Apply(GURL("httpps://example.test"), &result);
+  EXPECT_EQ("PROXY secure.test:8080", result.ToDebugString());
+}
+
 static const char kWsUrl[] = "ws://example.com/echo";
 static const char kWssUrl[] = "wss://example.com/echo";
 

@@ -198,6 +198,12 @@ GURL GetURLFromCanonicalCookie(const net::CanonicalCookie& cookie) {
   // Android, and hopefully not for much longer (see crbug.com/41237577).
   DCHECK(!cookie.Domain().empty());
 
+  // A permission for HTTPS must not grant access to the separate HTTPPS cookie
+  // namespace just because its Secure attribute is set.
+  if (cookie.SourceScheme() == net::CookieSourceScheme::kHttpps) {
+    return net::cookie_util::CookieDomainAndPathToURL(cookie.Domain(), "/",
+                                                      cookie.SourceScheme());
+  }
   return net::cookie_util::CookieOriginToURL(cookie.Domain(),
                                              cookie.SecureAttribute());
 }

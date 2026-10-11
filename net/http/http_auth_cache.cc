@@ -48,6 +48,7 @@ void CheckSchemeHostPortIsValid(const url::SchemeHostPort& scheme_host_port) {
   DCHECK(scheme_host_port.IsValid());
   DCHECK(scheme_host_port.scheme() == url::kHttpScheme ||
          scheme_host_port.scheme() == url::kHttpsScheme ||
+         scheme_host_port.scheme() == url::kHttppsScheme ||
          scheme_host_port.scheme() == url::kWsScheme ||
          scheme_host_port.scheme() == url::kWssScheme);
 }
@@ -61,8 +62,8 @@ void CheckPathIsValid(const std::string& path) {
 
 // Functor used by std::erase_if.
 struct IsEnclosedBy {
-  explicit IsEnclosedBy(const std::string& path) : path(path) { }
-  bool operator() (const std::string& x) const {
+  explicit IsEnclosedBy(const std::string& path) : path(path) {}
+  bool operator()(const std::string& x) const {
     return IsEnclosingPath(*path, x);
   }
   const raw_ref<const std::string> path;
@@ -104,8 +105,9 @@ HttpAuthCache::Entry* HttpAuthCache::Lookup(
     const NetworkAnonymizationKey& network_anonymization_key) {
   EntryMap::iterator entry_it = LookupEntryIt(
       scheme_host_port, target, realm, scheme, network_anonymization_key);
-  if (entry_it == entries_.end())
+  if (entry_it == entries_.end()) {
     return nullptr;
+  }
   return &(entry_it->second);
 }
 
@@ -224,21 +226,27 @@ void HttpAuthCache::Entry::UpdateStaleChallenge(
 }
 
 bool HttpAuthCache::Entry::IsEqualForTesting(const Entry& other) const {
-  if (scheme_host_port() != other.scheme_host_port())
+  if (scheme_host_port() != other.scheme_host_port()) {
     return false;
-  if (realm() != other.realm())
+  }
+  if (realm() != other.realm()) {
     return false;
-  if (scheme() != other.scheme())
+  }
+  if (scheme() != other.scheme()) {
     return false;
-  if (auth_challenge() != other.auth_challenge())
+  }
+  if (auth_challenge() != other.auth_challenge()) {
     return false;
-  if (!credentials().Equals(other.credentials()))
+  }
+  if (!credentials().Equals(other.credentials())) {
     return false;
+  }
   base::flat_set<std::string> lhs_paths(paths_.begin(), paths_.end());
   base::flat_set<std::string> rhs_paths(other.paths_.begin(),
                                         other.paths_.end());
-  if (lhs_paths != rhs_paths)
+  if (lhs_paths != rhs_paths) {
     return false;
+  }
   return true;
 }
 
@@ -274,12 +282,14 @@ bool HttpAuthCache::Entry::HasEnclosingPath(const std::string& dir,
       // Therefore this path is the tightest bound.  Important because
       // the length returned is used to determine the cache entry that
       // has the closest enclosing path in LookupByPath().
-      if (path_len)
+      if (path_len) {
         *path_len = it->length();
+      }
       // Move the found path up by one place so that more frequently used paths
       // migrate towards the beginning of the list of paths.
-      if (it != paths_.begin())
+      if (it != paths_.begin()) {
         std::iter_swap(it, std::prev(it));
+      }
       return true;
     }
   }
@@ -295,8 +305,9 @@ bool HttpAuthCache::Remove(
     const AuthCredentials& credentials) {
   EntryMap::iterator entry_it = LookupEntryIt(
       scheme_host_port, target, realm, scheme, network_anonymization_key);
-  if (entry_it == entries_.end())
+  if (entry_it == entries_.end()) {
     return false;
+  }
   Entry& entry = entry_it->second;
   if (credentials.Equals(entry.credentials())) {
     entries_.erase(entry_it);
@@ -341,8 +352,9 @@ bool HttpAuthCache::UpdateStaleChallenge(
     const std::string& auth_challenge) {
   HttpAuthCache::Entry* entry = Lookup(scheme_host_port, target, realm, scheme,
                                        network_anonymization_key);
-  if (!entry)
+  if (!entry) {
     return false;
+  }
   entry->UpdateStaleChallenge(auth_challenge);
   entry->last_use_time_ticks_ = tick_clock_->NowTicks();
   return true;
@@ -353,8 +365,9 @@ void HttpAuthCache::CopyProxyEntriesFrom(const HttpAuthCache& other) {
     const Entry& e = it->second;
 
     // Skip non-proxy entries.
-    if (it->first.target != HttpAuth::AUTH_PROXY)
+    if (it->first.target != HttpAuth::AUTH_PROXY) {
       continue;
+    }
 
     // Sanity check - proxy entries should have an empty
     // NetworkAnonymizationKey.
@@ -366,8 +379,10 @@ void HttpAuthCache::CopyProxyEntriesFrom(const HttpAuthCache& other) {
                        e.scheme(), it->first.network_anonymization_key,
                        e.auth_challenge(), e.credentials(), e.paths_.back());
     // Copy all other paths.
-    for (auto it2 = std::next(e.paths_.rbegin()); it2 != e.paths_.rend(); ++it2)
+    for (auto it2 = std::next(e.paths_.rbegin()); it2 != e.paths_.rend();
+         ++it2) {
       entry->AddPath(*it2);
+    }
     // Copy nonce count (for digest authentication).
     entry->nonce_count_ = e.nonce_count_;
   }

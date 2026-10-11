@@ -1,0 +1,10 @@
+HTTPPS cookie namespaces survive DevTools set/get/delete operations.
+Set https: true
+Set httpps: true
+HTTPS: https/Secure
+HTTPPS: httpps/Httpps
+Both: httpps/Httpps, https/Secure
+Reject relabel: true
+After HTTPPS delete: https/Secure
+After HTTPS delete: httpps/Httpps
+

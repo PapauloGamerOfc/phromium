@@ -58,8 +58,9 @@ bool IsUrlPotentiallySecure(const GURL& url) {
 // This method should return the same results as
 // `blink::SchemeRegistry::ShouldTreatURLSchemeAsRestrictingMixedContent()`.
 bool DoesOriginSchemeRestrictMixedContent(const url::Origin& origin) {
-  return origin.GetTupleOrPrecursorTupleIfOpaque().scheme() ==
-         url::kHttpsScheme;
+  const std::string& scheme =
+      origin.GetTupleOrPrecursorTupleIfOpaque().scheme();
+  return scheme == url::kHttpsScheme || scheme == url::kHttppsScheme;
 }
 
 

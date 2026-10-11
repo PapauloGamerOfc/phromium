@@ -329,7 +329,7 @@ std::string GetDirectLaunchUrlScheme() {
       return "google-chrome";
   }
 #else
-  return "chromium";
+  return "phromium";
 #endif
 }
 

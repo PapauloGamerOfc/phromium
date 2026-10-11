@@ -31,6 +31,32 @@ TEST(ProxyChainTest, DefaultConstructor) {
   EXPECT_FALSE(proxy_chain.IsValid());
 }
 
+TEST(ProxyChainTest, HttppsSingleProxyOnly) {
+  const auto httpps =
+      ProxyUriToProxyServer("httpps://proxy.test", ProxyServer::SCHEME_HTTP);
+  const auto https =
+      ProxyUriToProxyServer("https://proxy.test:343", ProxyServer::SCHEME_HTTP);
+  const ProxyChain chain(httpps);
+  ASSERT_TRUE(chain.IsValid());
+  EXPECT_TRUE(chain.is_single_proxy());
+  EXPECT_FALSE(chain.is_get_to_proxy_allowed());
+  EXPECT_NE(chain, ProxyChain(https));
+  EXPECT_EQ("[httpps://proxy.test:343]", chain.ToDebugString());
+  EXPECT_EQ("HTTPPS", chain.GetHistogramSuffix());
+
+  // Mixed/multiple HTTPPS proxy hops are not part of the draft integration.
+  EXPECT_FALSE(ProxyChain({httpps, https}).IsValid());
+  EXPECT_FALSE(ProxyChain({https, httpps}).IsValid());
+  EXPECT_FALSE(ProxyChain({httpps, httpps}).IsValid());
+
+  base::Pickle pickle;
+  chain.Persist(&pickle);
+  base::PickleIterator iter(pickle);
+  const auto restored = ProxyChain::InitFromPickle(iter);
+  ASSERT_TRUE(restored);
+  EXPECT_EQ(chain, *restored);
+}
+
 TEST(ProxyChainTest, ConstructorsAndAssignmentOperators) {
   std::vector proxy_servers = {
       ProxyUriToProxyServer("foo:555", ProxyServer::SCHEME_HTTPS),

@@ -133,6 +133,10 @@ HttpProxyTimeoutExperiments* GetProxyTimeoutExperiments() {
 
 // Make a URL for a proxy, for use in proxy auth challenges.
 GURL MakeProxyUrl(const HttpProxySocketParams& params) {
+  if (params.proxy_server().is_httpps()) {
+    return GURL("httpps://" +
+                params.proxy_server().host_port_pair().ToString());
+  }
   const bool is_https = params.is_over_ssl() || params.is_over_quic();
   return GURL((is_https ? "https://" : "http://") +
               params.proxy_server().host_port_pair().ToString());
@@ -358,7 +362,8 @@ base::TimeDelta HttpProxyConnectJob::AlternateNestedConnectionTimeout(
   default_alternate_timeout = kHttpProxyConnectJobTunnelTimeout;
 #endif  // !BUILDFLAG(IS_ANDROID) && !BUILDFLAG(IS_IOS)
 
-  bool is_https = params.proxy_server().is_https();
+  bool is_https =
+      params.proxy_server().is_https() || params.proxy_server().is_httpps();
 
   if (!network_quality_estimator) {
     return default_alternate_timeout;
@@ -491,6 +496,7 @@ int HttpProxyConnectJob::DoBeginConnect() {
       break;
     case ProxyServer::SCHEME_HTTP:
     case ProxyServer::SCHEME_HTTPS:
+    case ProxyServer::SCHEME_HTTPPS:
       next_state_ = STATE_TRANSPORT_CONNECT;
       break;
     default:
@@ -506,10 +512,11 @@ int HttpProxyConnectJob::DoTransportConnect() {
         priority(), socket_tag(), common_connect_job_params(),
         params_->transport_params(), this, &net_log());
   } else {
-    DCHECK_EQ(scheme, ProxyServer::SCHEME_HTTPS);
+    DCHECK(scheme == ProxyServer::SCHEME_HTTPS ||
+           scheme == ProxyServer::SCHEME_HTTPPS);
     DCHECK(params_->is_over_ssl());
     // Skip making a new connection if we have an existing HTTP/2 session.
-    if (params_->tunnel() &&
+    if (scheme == ProxyServer::SCHEME_HTTPS && params_->tunnel() &&
         common_connect_job_params()->spdy_session_pool->FindAvailableSession(
             CreateSpdySessionKey(), /*enable_ip_based_pooling_for_h2=*/false,
             /*is_websocket=*/false, net_log())) {
@@ -539,8 +546,11 @@ int HttpProxyConnectJob::DoTransportConnectComplete(int result) {
                          base::TimeTicks::Now() - connect_start_time_);
     }
 
-    if (IsCertificateError(result)) {
-      DCHECK_EQ(ProxyServer::SCHEME_HTTPS, scheme);
+    if (IsCertificateError(result) ||
+        (scheme == ProxyServer::SCHEME_HTTPPS &&
+         result == ERR_SSL_SERVER_CERT_BAD_FORMAT)) {
+      DCHECK(scheme == ProxyServer::SCHEME_HTTPS ||
+             scheme == ProxyServer::SCHEME_HTTPPS);
       // TODO(rch): allow the user to deal with proxy cert errors in the
       // same way as server cert errors.
       return ERR_PROXY_CERTIFICATE_INVALID;
@@ -587,6 +597,11 @@ int HttpProxyConnectJob::DoTransportConnectComplete(int result) {
   }
 
   NextProto next_proto = nested_connect_job_->socket()->GetNegotiatedProtocol();
+  if (scheme == ProxyServer::SCHEME_HTTPPS &&
+      next_proto != NextProto::kProtoHTTP11) {
+    // HTTPPS proxies cannot be confused with a conventional TLS/H2 proxy.
+    return ERR_ALPN_NEGOTIATION_FAILED;
+  }
   // Only record latency for connections to the first proxy in a chain.
   if (params_->proxy_chain_index() == 0) {
     EmitConnectLatency(next_proto, params_->proxy_server().scheme(),
@@ -970,6 +985,9 @@ void HttpProxyConnectJob::EmitConnectLatency(NextProto http_version,
       break;
     case ProxyServer::SCHEME_HTTPS:
       scheme_piece = "Https";
+      break;
+    case ProxyServer::SCHEME_HTTPPS:
+      scheme_piece = "Httpps";
       break;
     case ProxyServer::SCHEME_QUIC:
       scheme_piece = "Quic";

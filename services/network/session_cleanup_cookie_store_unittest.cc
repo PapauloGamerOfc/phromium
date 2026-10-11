@@ -259,5 +259,47 @@ TEST_F(SessionCleanupCookieStoreTest, ForceKeepSessionState) {
   cookies.clear();
 }
 
+TEST_F(SessionCleanupCookieStoreTest, HttppsSessionPolicyIsSeparate) {
+  CreateAndLoad();
+  auto https = net::CanonicalCookie::CreateForTesting(
+      GURL("https://example.com:443/"), "session=https; Secure; Max-Age=3600",
+      base::Time::Now(), net::CookieSourceType::kHTTP);
+  auto httpps = net::CanonicalCookie::CreateForTesting(
+      GURL("httpps://example.com:443/"), "session=httpps; Secure; Max-Age=3600",
+      base::Time::Now(), net::CookieSourceType::kHTTP);
+  auto httpps_no_secure = net::CanonicalCookie::CreateForTesting(
+      GURL("httpps://example.com:443/"), "plain=httpps; Max-Age=3600",
+      base::Time::Now(), net::CookieSourceType::kHTTP);
+  ASSERT_TRUE(https);
+  ASSERT_TRUE(httpps);
+  ASSERT_TRUE(httpps_no_secure);
+  store_->AddCookie(*https);
+  store_->AddCookie(*httpps);
+  store_->AddCookie(*httpps_no_secure);
+  DestroyStore();
+  ASSERT_EQ(3u, CreateAndLoad().size());
+
+  store_->DeleteSessionCookies(base::BindRepeating(
+      [](std::string_view domain, net::CookieSourceScheme scheme) {
+        return scheme == net::CookieSourceScheme::kSecure;
+      }));
+  DestroyStore();
+  auto cookies = CreateAndLoad();
+  ASSERT_EQ(2u, cookies.size());
+  for (const auto& cookie : cookies) {
+    EXPECT_EQ(net::CookieSourceScheme::kHttpps, cookie->SourceScheme());
+  }
+
+  store_->AddCookie(*https);
+  store_->DeleteSessionCookies(base::BindRepeating(
+      [](std::string_view domain, net::CookieSourceScheme scheme) {
+        return scheme == net::CookieSourceScheme::kHttpps;
+      }));
+  DestroyStore();
+  cookies = CreateAndLoad();
+  ASSERT_EQ(1u, cookies.size());
+  EXPECT_EQ(net::CookieSourceScheme::kSecure, cookies[0]->SourceScheme());
+}
+
 }  // namespace
 }  // namespace network

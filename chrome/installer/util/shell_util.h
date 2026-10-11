@@ -27,6 +27,7 @@
 #include "base/memory/ref_counted.h"
 #include "base/strings/cstring_view.h"
 #include "base/win/windows_types.h"
+#include "build/branding_buildflags.h"
 #include "chrome/installer/util/work_item_list.h"
 
 class RegistryEntry;
@@ -343,6 +344,10 @@ class ShellUtil {
       std::to_array<std::wstring_view>({
           L"http",
           L"https",
+#if !BUILDFLAG(GOOGLE_CHROME_BRANDING) && \
+    !BUILDFLAG(GOOGLE_CHROME_FOR_TESTING_BRANDING)
+          L"httpps",
+#endif
       });
 
   // Protocols that Chrome registers itself as being capable of handling.
@@ -350,6 +355,10 @@ class ShellUtil {
       std::to_array<std::wstring_view>({
           L"http",
           L"https",
+#if !BUILDFLAG(GOOGLE_CHROME_BRANDING) && \
+    !BUILDFLAG(GOOGLE_CHROME_FOR_TESTING_BRANDING)
+          L"httpps",
+#endif
           L"irc",
           L"mailto",
           L"mms",

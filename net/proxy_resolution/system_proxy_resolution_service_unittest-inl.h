@@ -139,12 +139,32 @@ class SystemProxyResolutionServiceTest : public TestWithTaskEnvironment {
 TYPED_TEST_SUITE_P(SystemProxyResolutionServiceTest);
 
 // --------------------------------------------------------------------------
-// 16 shared typed tests
+// Shared typed tests
 // --------------------------------------------------------------------------
 
 TYPED_TEST_P(SystemProxyResolutionServiceTest, CreateWithNullResolver) {
   auto proxy_resolution_service = TypeParam::CreateServiceWithNullResolver();
   EXPECT_FALSE(proxy_resolution_service);
+}
+
+TYPED_TEST_P(SystemProxyResolutionServiceTest,
+             HttppsFailsBeforeNativeResolution) {
+  this->resolver()->AddServerToProxyList(
+      PacResultElementToProxyServer("HTTPS proxy.test:8443"));
+  ProxyInfo info;
+  TestCompletionCallback callback;
+  std::unique_ptr<ProxyResolutionRequest> request;
+  EXPECT_THAT(
+      this->service()->ResolveProxy(
+          GURL("httpps://example.test/"), "GET", NetworkAnonymizationKey(),
+          handles::kInvalidNetworkHandle, &info, callback.callback(), &request,
+          NetLogWithSource(), DEFAULT_PRIORITY),
+      IsError(ERR_NOT_IMPLEMENTED));
+  EXPECT_FALSE(request);
+  EXPECT_TRUE(info.is_empty());
+  EXPECT_FALSE(info.is_direct());
+  base::RunLoop().RunUntilIdle();
+  EXPECT_FALSE(callback.have_result());
 }
 
 TYPED_TEST_P(SystemProxyResolutionServiceTest, ResolveProxyCancelled) {
@@ -620,6 +640,7 @@ TYPED_TEST_P(SystemProxyResolutionServiceTest,
 REGISTER_TYPED_TEST_SUITE_P(
     SystemProxyResolutionServiceTest,
     CreateWithNullResolver,
+    HttppsFailsBeforeNativeResolution,
     ResolveProxyCancelled,
     ResolveProxyEmptyResults,
     MultipleProxyResolutionRequests,

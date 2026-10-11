@@ -37,7 +37,7 @@ char* ProductDirNameForBundle(NSBundle* chrome_bundle) {
 #elif BUILDFLAG(GOOGLE_CHROME_BRANDING)
       product_dir_name = "Google/Chrome";
 #else
-      product_dir_name = "Chromium";
+      product_dir_name = "Phromium";
 #endif
     }
 
@@ -51,7 +51,7 @@ char* ProductDirNameForBundle(NSBundle* chrome_bundle) {
 // ~/Library/Application Support that should hold the product application
 // data. This can be overridden by setting the CrProductDirName key in the
 // outer browser .app's Info.plist. The default is "Google/Chrome" for
-// officially-branded builds, and "Chromium" for unbranded builds. For the
+// officially-branded builds, and "Phromium" for unbranded builds. For the
 // official canary channel, the Info.plist will have CrProductDirName set
 // to "Google/Chrome Canary".
 std::string ProductDirName() {

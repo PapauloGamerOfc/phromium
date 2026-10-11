@@ -77,6 +77,14 @@ TEST(ProxySpecificationUtilTest, ProxyUriToProxyServer) {
        "https://1.2.3.4:10", ProxyServer::SCHEME_HTTPS, "1.2.3.4", 10,
        "HTTPS 1.2.3.4:10"},
 
+      // HTTPPS is a distinct encrypted proxy transport, defaulting to 343.
+      {"httpps://foopy", "httpps://foopy:343", ProxyServer::SCHEME_HTTPPS,
+       "foopy", 343, "HTTPPS foopy:343"},
+      {"HtTpPs://FoOpY:8443", "httpps://foopy:8443", ProxyServer::SCHEME_HTTPPS,
+       "foopy", 8443, "HTTPPS foopy:8443"},
+      {"httpps://[::1]", "httpps://[::1]:343", ProxyServer::SCHEME_HTTPPS,
+       "::1", 343, "HTTPPS [::1]:343"},
+
 #if BUILDFLAG(ENABLE_QUIC_PROXY_SUPPORT)
       // QUIC proxy URIs:
       {"quic://foopy",  // no port
@@ -185,12 +193,17 @@ TEST(ProxySpecificationUtilTest, InvalidProxyUriToProxyServer) {
   const char* const tests[] = {
       "",
       "   ",
-      "dddf:",         // not a valid port
-      "dddd:d",        // not a valid port
-      "http://",       // not a valid host/port.
-      "direct://",     // direct is not a valid proxy server.
-      "http:/",        // ambiguous, but will fail because of bad port.
-      "http:",         // ambiguous, but will fail because of bad port.
+      "dddf:",      // not a valid port
+      "dddd:d",     // not a valid port
+      "http://",    // not a valid host/port.
+      "direct://",  // direct is not a valid proxy server.
+      "http:/",     // ambiguous, but will fail because of bad port.
+      "http:",      // ambiguous, but will fail because of bad port.
+      "httpps://",  // missing host.
+      "httpps://proxy.test:",
+      "httpps://proxy.test:65536",
+      "httpps://user:secret@proxy.test:343",  // Credentials are not a proxy
+                                              // URI.
       "foopy.111",     // Interpreted as invalid IPv4 address.
       "foo.test/"      // Paths disallowed.
       "foo.test:123/"  // Paths disallowed.
@@ -266,6 +279,9 @@ TEST(ProxySpecificationUtilTest, PacResultElementToProxyServer) {
           "https foopy:10",
           "https://foopy:10",
       },
+      {"HTTPPS foopy", "httpps://foopy:343"},
+      {"hTtPpS FoOpY:8443", "httpps://foopy:8443"},
+      {"HTTPPS [::1]", "httpps://[::1]:343"},
       {"PROXY [FEDC:BA98:7654:3210:FEDC:BA98:7654:3210]:10",
        "[fedc:ba98:7654:3210:fedc:ba98:7654:3210]:10"},
       {"PROXY f\u00fcpy:85", "xn--fpy-hoa:85"},
@@ -288,13 +304,16 @@ TEST(ProxySpecificationUtilTest, PacResultElementToProxyServer) {
 // Test parsing a ProxyServer from an invalid PAC representation.
 TEST(ProxySpecificationUtilTest, InvalidPacResultElementToProxyServer) {
   const char* const tests[] = {
-      "PROXY",                   // missing host/port.
-      "HTTPS",                   // missing host/port.
-      "SOCKS",                   // missing host/port.
-      "DIRECT foopy:10",         // direct cannot have host/port.
-      "INVALIDSCHEME",           // unrecognized scheme.
-      "INVALIDSCHEME foopy:10",  // unrecognized scheme.
-      "HTTP foopy:10",           // http scheme should be "PROXY"
+      "PROXY",                     // missing host/port.
+      "HTTPS",                     // missing host/port.
+      "HTTPPS",                    // missing host/port.
+      "HTTPPS foopy:65536",        // invalid port.
+      "HTTPPS user:secret@foopy",  // credentials are not a PAC endpoint.
+      "SOCKS",                     // missing host/port.
+      "DIRECT foopy:10",           // direct cannot have host/port.
+      "INVALIDSCHEME",             // unrecognized scheme.
+      "INVALIDSCHEME foopy:10",    // unrecognized scheme.
+      "HTTP foopy:10",             // http scheme should be "PROXY"
   };
 
   for (const char* test : tests) {

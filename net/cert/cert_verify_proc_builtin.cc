@@ -4,6 +4,8 @@
 
 #include "net/cert/cert_verify_proc_builtin.h"
 
+#include <algorithm>
+#include <array>
 #include <cstdint>
 #include <memory>
 #include <optional>
@@ -51,9 +53,11 @@
 #include "net/log/net_log_values.h"
 #include "net/log/net_log_with_source.h"
 #include "net/net_buildflags.h"
+#include "third_party/boringssl/src/include/openssl/evp.h"
 #include "third_party/boringssl/src/pki/cert_errors.h"
 #include "third_party/boringssl/src/pki/cert_issuer_source_static.h"
 #include "third_party/boringssl/src/pki/common_cert_errors.h"
+#include "third_party/boringssl/src/pki/extended_key_usage.h"
 #include "third_party/boringssl/src/pki/name_constraints.h"
 #include "third_party/boringssl/src/pki/parsed_certificate.h"
 #include "third_party/boringssl/src/pki/path_builder.h"
@@ -101,6 +105,36 @@ DEFINE_CERT_ERROR_ID(kPathLacksQwacPolicy, "Path does not have QWAC policies");
 DEFINE_CERT_ERROR_ID(kChromeRootConstraintsFailed,
                      "Path does not satisfy CRS constraints");
 DEFINE_CERT_ERROR_ID(kCertValidityTooLong, "Cert validity too long");
+
+// HTTPPS changes the leaf key profile, not the trust policy. In particular,
+// public roots retain the same constraints, CT, distrust, and revocation checks
+// used below for HTTPS. Require canonical RFC 8410 X25519 SPKI encoding.
+constexpr uint8_t kHttppsX25519SpkiPrefix[] = {
+    0x30, 0x2a, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x6e, 0x03, 0x21, 0x00};
+
+bool HasHttppsLeafProfile(const bssl::ParsedCertificate& cert) {
+  const auto spki = cert.tbs().spki_tlv;
+  bssl::ParsedExtension usage_extension;
+  bssl::ParsedExtension constraints_extension;
+  return spki.size() == sizeof(kHttppsX25519SpkiPrefix) + 32 &&
+         std::equal(std::begin(kHttppsX25519SpkiPrefix),
+                    std::end(kHttppsX25519SpkiPrefix), spki.data()) &&
+         cert.tbs().version == bssl::CertificateVersion::V3 &&
+         cert.has_basic_constraints() && !cert.basic_constraints().is_ca &&
+         !cert.basic_constraints().has_path_len &&
+         cert.GetExtension(bssl::der::Input(bssl::kBasicConstraintsOid),
+                           &constraints_extension) &&
+         constraints_extension.critical && cert.has_key_usage() &&
+         cert.key_usage().bytes().size() == 1 &&
+         cert.key_usage().bytes()[0] == 0x08 &&
+         cert.key_usage().unused_bits() == 3 &&
+         cert.GetExtension(bssl::der::Input(bssl::kKeyUsageOid),
+                           &usage_extension) &&
+         usage_extension.critical && cert.has_extended_key_usage() &&
+         std::ranges::find(cert.extended_key_usage(),
+                           bssl::der::Input(bssl::kServerAuth)) !=
+             cert.extended_key_usage().end();
+}
 
 base::DictValue NetLogCertParams(const CRYPTO_BUFFER* cert_handle,
                                  const bssl::CertErrors& errors) {
@@ -508,6 +542,27 @@ class PathBuilderDelegateImpl : public bssl::SimplePathBuilderDelegate {
         current_time_(current_time),
         checked_revocation_for_some_path_(checked_revocation_for_some_path),
         net_log_(net_log) {}
+
+  bool IsPublicKeyAcceptable(EVP_PKEY* public_key,
+                             bssl::CertErrors* errors) override {
+    if (EVP_PKEY_id(public_key) == EVP_PKEY_X25519) {
+      // Only an explicitly requested HTTPPS leaf may use X25519. Do not relax
+      // issuer-key or ordinary TLS verification. X25519 cannot sign a chain.
+      std::array<uint8_t, 32> encoded_key;
+      size_t encoded_length = encoded_key.size();
+      return (flags_ & CertVerifyProc::VERIFY_HTTPPS_SERVER) &&
+             HasHttppsLeafProfile(*target_) &&
+             EVP_PKEY_get_raw_public_key(public_key, encoded_key.data(),
+                                         &encoded_length) == 1 &&
+             encoded_length == encoded_key.size() &&
+             std::equal(encoded_key.begin(), encoded_key.end(),
+                        target_->tbs().spki_tlv
+                            .subspan(sizeof(kHttppsX25519SpkiPrefix))
+                            .begin());
+    }
+    return bssl::SimplePathBuilderDelegate::IsPublicKeyAcceptable(public_key,
+                                                                  errors);
+  }
 
   // This is called for each built chain, including ones which failed. It is
   // responsible for adding errors to the built chain if it is not acceptable.
@@ -1776,6 +1831,11 @@ int CertVerifyProcBuiltin::VerifyInternal(X509Certificate* input_cert,
       verify_result->cert_status |= CERT_STATUS_INVALID;
       return ERR_CERT_INVALID;
     }
+  }
+
+  if ((flags & VERIFY_HTTPPS_SERVER) && !HasHttppsLeafProfile(*target)) {
+    verify_result->cert_status |= CERT_STATUS_INVALID;
+    return ERR_CERT_INVALID;
   }
 
   // Parse the provided intermediates.

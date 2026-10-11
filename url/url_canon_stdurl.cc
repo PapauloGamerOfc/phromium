@@ -131,6 +131,11 @@ int DefaultPortForScheme(std::string_view scheme) {
         return 443;
       }
       break;
+    case 6:
+      if (scheme == kHttppsScheme) {
+        return 343;
+      }
+      break;
     case 3:
       if (scheme == kFtpScheme) {
         return 21;

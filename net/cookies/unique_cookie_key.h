@@ -50,12 +50,14 @@ class NET_EXPORT UniqueCookieKey {
       std::optional<CookieSourceScheme> source_scheme);
 
   // Same as Host but for use with Legacy Scoped cookies, which do
-  // not consider the source_port or source_scheme.
+  // not consider the source_port or source_scheme, except that HTTPPS remains
+  // an independent namespace even for legacy-scoped cookies.
   static UniqueCookieKey Legacy(base::PassKey<CookieBase>,
                                 std::optional<CookiePartitionKey> partition_key,
                                 std::string name,
                                 std::string domain,
-                                std::string path);
+                                std::string path,
+                                bool is_httpps);
 
   UniqueCookieKey(UniqueCookieKey&& other);
   UniqueCookieKey(const UniqueCookieKey& other);
@@ -100,7 +102,8 @@ class NET_EXPORT UniqueCookieKey {
   std::string name_;
   std::string domain_;
   std::string path_;
-  // Nullopt in kLegacy keys; may be nullopt in kDomain and kHost keys.
+  // Nullopt in non-HTTPPS kLegacy keys; may be nullopt in kDomain and kHost
+  // keys.
   std::optional<CookieSourceScheme> source_scheme_;
   // Nullopt in kLegacy and kDomain keys; may be nullopt in kHost keys.
   std::optional<int> port_;

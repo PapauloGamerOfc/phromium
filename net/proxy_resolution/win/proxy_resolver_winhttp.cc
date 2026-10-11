@@ -18,6 +18,7 @@
 #include "net/proxy_resolution/proxy_resolver.h"
 #include "net/proxy_resolution/win/proxy_resolver_winhttp_test_hooks.h"
 #include "url/gurl.h"
+#include "url/url_constants.h"
 
 using base::TimeTicks;
 
@@ -102,6 +103,11 @@ int ProxyResolverWinHttp::GetProxyForURL(
     CompletionOnceCallback /*callback*/,
     std::unique_ptr<Request>* /*request*/,
     const NetLogWithSource& /*net_log*/) {
+  // Do not let an unsupported scheme become a successful DIRECT fallback.
+  if (query_url.SchemeIs(url::kHttppsScheme)) {
+    return ERR_NOT_IMPLEMENTED;
+  }
+
   // If we don't have a WinHTTP session, then create a new one.
   if (!session_handle_ && !OpenWinHttpSession())
     return ERR_FAILED;

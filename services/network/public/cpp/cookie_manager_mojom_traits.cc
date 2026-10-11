@@ -162,6 +162,8 @@ EnumTraits<network::mojom::CookieSourceScheme,
       return network::mojom::CookieSourceScheme::kNonSecure;
     case net::CookieSourceScheme::kSecure:
       return network::mojom::CookieSourceScheme::kSecure;
+    case net::CookieSourceScheme::kHttpps:
+      return network::mojom::CookieSourceScheme::kHttpps;
   }
   NOTREACHED();
 }
@@ -176,6 +178,8 @@ EnumTraits<network::mojom::CookieSourceScheme, net::CookieSourceScheme>::
       return net::CookieSourceScheme::kNonSecure;
     case network::mojom::CookieSourceScheme::kSecure:
       return net::CookieSourceScheme::kSecure;
+    case network::mojom::CookieSourceScheme::kHttpps:
+      return net::CookieSourceScheme::kHttpps;
   }
   NOTREACHED();
 }

@@ -89,6 +89,27 @@ class HttpsFirstModeSettingsTrackerTest : public testing::Test {
   base::test::ScopedFeatureList feature_list_;
 };
 
+TEST_F(HttpsFirstModeSettingsTrackerTest,
+       PhromiumDefaultRequiresExplicitHttpsFirstChoice) {
+  HttpsFirstModeService* service =
+      HttpsFirstModeServiceFactory::GetForProfile(profile());
+  ASSERT_TRUE(service);
+  EXPECT_EQ(HttpsFirstModeSetting::kDisabled, service->GetCurrentSetting());
+
+  // Enabling Safe Browsing does not implicitly change transport preferences.
+  safe_browsing::SetEnhancedProtectionPref(profile()->GetPrefs(), true);
+  EXPECT_EQ(HttpsFirstModeSetting::kDisabled, service->GetCurrentSetting());
+
+  // Both existing user choices still work; only automatic enablement is off.
+  EXPECT_TRUE(service->UpdatePrefs(HttpsFirstModeSetting::kEnabledBalanced));
+  EXPECT_EQ(HttpsFirstModeSetting::kEnabledBalanced,
+            service->GetCurrentSetting());
+  EXPECT_TRUE(service->UpdatePrefs(HttpsFirstModeSetting::kEnabledFull));
+  EXPECT_EQ(HttpsFirstModeSetting::kEnabledFull, service->GetCurrentSetting());
+  EXPECT_TRUE(service->UpdatePrefs(HttpsFirstModeSetting::kDisabled));
+  EXPECT_EQ(HttpsFirstModeSetting::kDisabled, service->GetCurrentSetting());
+}
+
 class HttpsFirstModeSettingsTrackerSiteEngagementHeuristicTest
     : public HttpsFirstModeSettingsTrackerTest {
  public:

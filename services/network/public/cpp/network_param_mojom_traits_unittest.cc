@@ -29,6 +29,8 @@ TEST(ProxyChain, SerializeAndDeserialize) {
       net::ProxyChain::Direct(),
       net::ProxyChain(net::ProxyServer::FromSchemeHostAndPort(
           net::ProxyServer::SCHEME_HTTPS, "foo1", 80)),
+      net::ProxyChain(net::ProxyServer::FromSchemeHostAndPort(
+          net::ProxyServer::SCHEME_HTTPPS, "proxy.test", 343)),
       net::ProxyChain::ForIpProtection({
           net::ProxyServer::FromSchemeHostAndPort(
               net::ProxyServer::SCHEME_HTTPS, "foo1", 80),

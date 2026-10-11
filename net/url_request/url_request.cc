@@ -89,10 +89,13 @@ void ConvertRealLoadTimesToBlockingTimes(LoadTimingInfo* load_timing_info) {
     DCHECK(!load_timing_info->proxy_resolve_end.is_null());
 
     // Make sure the proxy times are after request start.
-    if (load_timing_info->proxy_resolve_start < load_timing_info->request_start)
+    if (load_timing_info->proxy_resolve_start <
+        load_timing_info->request_start) {
       load_timing_info->proxy_resolve_start = load_timing_info->request_start;
-    if (load_timing_info->proxy_resolve_end < load_timing_info->request_start)
+    }
+    if (load_timing_info->proxy_resolve_end < load_timing_info->request_start) {
       load_timing_info->proxy_resolve_end = load_timing_info->request_start;
+    }
 
     // Connect times must also be after the proxy times.
     block_on_connect = load_timing_info->proxy_resolve_end;
@@ -115,26 +118,32 @@ void ConvertRealLoadTimesToBlockingTimes(LoadTimingInfo* load_timing_info) {
       &load_timing_info->connect_timing;
   if (!connect_timing->domain_lookup_start.is_null()) {
     DCHECK(!connect_timing->domain_lookup_end.is_null());
-    if (connect_timing->domain_lookup_start < block_on_connect)
+    if (connect_timing->domain_lookup_start < block_on_connect) {
       connect_timing->domain_lookup_start = block_on_connect;
-    if (connect_timing->domain_lookup_end < block_on_connect)
+    }
+    if (connect_timing->domain_lookup_end < block_on_connect) {
       connect_timing->domain_lookup_end = block_on_connect;
+    }
   }
 
   if (!connect_timing->connect_start.is_null()) {
     DCHECK(!connect_timing->connect_end.is_null());
-    if (connect_timing->connect_start < block_on_connect)
+    if (connect_timing->connect_start < block_on_connect) {
       connect_timing->connect_start = block_on_connect;
-    if (connect_timing->connect_end < block_on_connect)
+    }
+    if (connect_timing->connect_end < block_on_connect) {
       connect_timing->connect_end = block_on_connect;
+    }
   }
 
   if (!connect_timing->ssl_start.is_null()) {
     DCHECK(!connect_timing->ssl_end.is_null());
-    if (connect_timing->ssl_start < block_on_connect)
+    if (connect_timing->ssl_start < block_on_connect) {
       connect_timing->ssl_start = block_on_connect;
-    if (connect_timing->ssl_end < block_on_connect)
+    }
+    if (connect_timing->ssl_end < block_on_connect) {
       connect_timing->ssl_end = block_on_connect;
+    }
   }
 }
 
@@ -217,8 +226,9 @@ URLRequest::~URLRequest() {
 
   if (network_delegate()) {
     network_delegate()->NotifyURLRequestDestroyed(this);
-    if (job_.get())
+    if (job_.get()) {
       job_->NotifyURLRequestDestroyed();
+    }
   }
 
   // Delete job before |this|, since subclasses may do weird things, like depend
@@ -231,8 +241,9 @@ URLRequest::~URLRequest() {
   int net_error = OK;
   // Log error only on failure, not cancellation, as even successful requests
   // are "cancelled" on destruction.
-  if (status_ != ERR_ABORTED)
+  if (status_ != ERR_ABORTED) {
     net_error = status_;
+  }
   net_log_.EndEventWithNetErrorCode(NetLogEventType::REQUEST_ALIVE, net_error);
 }
 
@@ -353,8 +364,9 @@ base::DictValue URLRequest::GetStateAsValue(
 
   dict.Set("traffic_annotation", traffic_annotation_.unique_id_hash_code);
 
-  if (status_ != OK)
+  if (status_ != OK) {
     dict.Set("net_error", status_);
+  }
   return dict;
 }
 
@@ -363,8 +375,9 @@ void URLRequest::LogBlockedBy(std::string_view blocked_by) {
 
   // Only log information to NetLog during startup and certain deferring calls
   // to delegates.  For all reads but the first, do nothing.
-  if (!calling_delegate_ && !response_info_.request_time.is_null())
+  if (!calling_delegate_ && !response_info_.request_time.is_null()) {
     return;
+  }
 
   LogUnblocked();
   blocked_by_ = std::string(blocked_by);
@@ -380,8 +393,9 @@ void URLRequest::LogAndReportBlockedBy(std::string_view source) {
 }
 
 void URLRequest::LogUnblocked() {
-  if (blocked_by_.empty())
+  if (blocked_by_.empty()) {
     return;
+  }
 
   net_log_.EndEvent(NetLogEventType::DELEGATE_INFO);
   blocked_by_.clear();
@@ -400,8 +414,9 @@ UploadProgress URLRequest::GetUploadProgress() const {
     return final_upload_progress_;
   }
 
-  if (upload_data_stream_)
+  if (upload_data_stream_) {
     return upload_data_stream_->GetUploadProgress();
+  }
 
   return UploadProgress();
 }
@@ -437,14 +452,16 @@ LoadTimingInternalInfo URLRequest::GetLoadTimingInternalInfo() const {
 }
 
 void URLRequest::PopulateNetErrorDetails(NetErrorDetails* details) const {
-  if (!job_)
+  if (!job_) {
     return;
+  }
   return job_->PopulateNetErrorDetails(details);
 }
 
 bool URLRequest::GetTransactionRemoteEndpoint(IPEndPoint* endpoint) const {
-  if (!job_)
+  if (!job_) {
     return false;
+  }
 
   return job_->GetTransactionRemoteEndpoint(endpoint);
 }
@@ -511,8 +528,9 @@ void URLRequest::SetURLChain(const std::vector<GURL>& url_chain) {
   DCHECK(!is_pending_);
   DCHECK_EQ(url_chain_.size(), 1u);
 
-  if (url_chain.size() < 2)
+  if (url_chain.size() < 2) {
     return;
+  }
 
   // In most cases the current request URL will match the last URL in the
   // explicitly set URL chain.  In some cases, however, a throttle will modify
@@ -605,8 +623,9 @@ void URLRequest::Start() {
             NetworkIsolationPartition::kGeneral ||
         !allow_credentials());
 
-  if (status_ != OK)
+  if (status_ != OK) {
     return;
+  }
 
   if (context_->require_network_anonymization_key()) {
     DCHECK(!isolation_info_.IsEmpty() ||
@@ -637,8 +656,9 @@ void URLRequest::Start() {
         &delegate_redirect_url_);
     // If ERR_IO_PENDING is returned, the delegate will invoke
     // |BeforeRequestComplete| later.
-    if (error != ERR_IO_PENDING)
+    if (error != ERR_IO_PENDING) {
       BeforeRequestComplete(error);
+    }
     return;
   }
 
@@ -737,8 +757,9 @@ void URLRequest::StartJob(std::unique_ptr<URLRequestJob> job) {
     job_->SetSharedDictionaryGetter(shared_dictionary_getter_);
   }
 
-  if (upload_data_stream_.get())
+  if (upload_data_stream_.get()) {
     job_->SetUpload(upload_data_stream_.get());
+  }
 
   is_pending_ = true;
   is_redirecting_ = false;
@@ -827,8 +848,9 @@ int URLRequest::DoCancel(int error, const SSLInfo& ssl_info) {
     }
   }
 
-  if (is_pending_ && job_.get())
+  if (is_pending_ && job_.get()) {
     job_->Kill();
+  }
 
   // We need to notify about the end of this job here synchronously. The
   // Job sends an asynchronous notification but by the time this is processed,
@@ -851,14 +873,16 @@ int URLRequest::Read(IOBuffer* dest, int dest_size) {
   OnCallToDelegateComplete();
 
   // If the request has failed, Read() will return actual network error code.
-  if (status_ != OK)
+  if (status_ != OK) {
     return status_;
+  }
 
   // This handles reads after the request already completed successfully.
   // TODO(ahendrickson): DCHECK() that it is not done after
   // http://crbug.com/115705 is fixed.
-  if (job_->is_done())
+  if (job_->is_done()) {
     return status_;
+  }
 
   if (dest_size == 0) {
     // Caller is not too bright.  I guess we've done what they asked.
@@ -901,8 +925,9 @@ int URLRequest::NotifyConnected(const TransportInfo& info,
             std::move(callback).Run(result);
           },
           this, std::move(callback)));
-  if (result != ERR_IO_PENDING)
+  if (result != ERR_IO_PENDING) {
     OnCallToDelegateComplete(result);
+  }
   return result;
 }
 
@@ -939,8 +964,9 @@ void URLRequest::NotifyResponseStarted(int net_error) {
   DCHECK_LE(net_error, 0);
 
   // Change status if there was an error.
-  if (net_error != OK)
+  if (net_error != OK) {
     set_status(net_error);
+  }
 
   // |status_| should not be ERR_IO_PENDING when calling into the
   // URLRequest::Delegate().
@@ -952,13 +978,15 @@ void URLRequest::NotifyResponseStarted(int net_error) {
   // In some cases (e.g. an event was canceled), we might have sent the
   // completion event and receive a NotifyResponseStarted() later.
   if (!has_notified_completion_ && net_error == OK) {
-    if (network_delegate())
+    if (network_delegate()) {
       network_delegate()->NotifyResponseStarted(this, net_error);
+    }
   }
 
   // Notify in case the entire URL Request has been finished.
-  if (!has_notified_completion_ && net_error != OK)
+  if (!has_notified_completion_ && net_error != OK) {
     NotifyRequestCompleted();
+  }
 
   OnCallToDelegate(NetLogEventType::URL_REQUEST_DELEGATE_RESPONSE_STARTED);
   delegate_->OnResponseStarted(this, net_error);
@@ -1097,19 +1125,22 @@ void URLRequest::Redirect(
         redirect_info.new_url.possibly_invalid_spec());
   }
 
-  if (network_delegate())
+  if (network_delegate()) {
     network_delegate()->NotifyBeforeRedirect(this, redirect_info.new_url);
+  }
 
-  if (!final_upload_progress_.position() && upload_data_stream_)
+  if (!final_upload_progress_.position() && upload_data_stream_) {
     final_upload_progress_ = upload_data_stream_->GetUploadProgress();
+  }
   PrepareToRestart();
 
   bool clear_body = false;
   net::RedirectUtil::UpdateHttpRequest(url(), method_, redirect_info,
                                        removed_headers, modified_headers,
                                        &extra_request_headers_, &clear_body);
-  if (clear_body)
+  if (clear_body) {
     upload_data_stream_.reset();
+  }
 
   method_ = redirect_info.new_method;
   referrer_ = redirect_info.new_referrer;
@@ -1187,8 +1218,9 @@ NetworkDelegate* URLRequest::network_delegate() const {
 
 int64_t URLRequest::GetExpectedContentSize() const {
   int64_t expected_content_size = -1;
-  if (job_.get())
+  if (job_.get()) {
     expected_content_size = job_->expected_content_size();
+  }
 
   return expected_content_size;
 }
@@ -1201,15 +1233,17 @@ void URLRequest::SetPriority(RequestPriority priority) {
     NOTREACHED();
   }
 
-  if (priority_ == priority)
+  if (priority_ == priority) {
     return;
+  }
 
   priority_ = priority;
   net_log_.AddEventWithStringParams(NetLogEventType::URL_REQUEST_SET_PRIORITY,
                                     "priority",
                                     RequestPriorityToString(priority_));
-  if (job_.get())
+  if (job_.get()) {
     job_->SetPriority(priority_);
+  }
 }
 
 void URLRequest::SetPriorityIncremental(bool priority_incremental) {
@@ -1251,27 +1285,29 @@ void URLRequest::NotifySSLCertificateError(int net_error,
   delegate_->OnSSLCertificateError(this, net_error, ssl_info, fatal);
 }
 
-bool URLRequest::CanSetCookie(
-    const net::CanonicalCookie& cookie,
-    CookieOptions* options,
-    CookieInclusionStatus* inclusion_status) const {
+bool URLRequest::CanSetCookie(const net::CanonicalCookie& cookie,
+                              CookieOptions* options,
+                              CookieInclusionStatus* inclusion_status) const {
   DCHECK(!(load_flags() & LOAD_DO_NOT_SAVE_COOKIES));
   bool can_set_cookies = g_default_can_use_cookies;
   if (network_delegate()) {
     can_set_cookies = network_delegate()->CanSetCookie(*this, cookie, options,
                                                        inclusion_status);
   }
-  if (!can_set_cookies)
+  if (!can_set_cookies) {
     net_log_.AddEvent(NetLogEventType::COOKIE_SET_BLOCKED_BY_NETWORK_DELEGATE);
+  }
   return can_set_cookies;
 }
 
 void URLRequest::NotifyReadCompleted(int bytes_read) {
-  if (bytes_read > 0)
+  if (bytes_read > 0) {
     set_status(OK);
+  }
   // Notify in case the entire URL Request has been finished.
-  if (bytes_read <= 0)
+  if (bytes_read <= 0) {
     NotifyRequestCompleted();
+  }
 
   // When URLRequestJob notices there was an error in URLRequest's |status_|,
   // it calls this method with |bytes_read| set to -1. Set it to a real error
@@ -1320,15 +1356,17 @@ void URLRequest::OnHeadersComplete() {
 void URLRequest::NotifyRequestCompleted() {
   // TODO(battre): Get rid of this check, according to willchan it should
   // not be needed.
-  if (has_notified_completion_)
+  if (has_notified_completion_) {
     return;
+  }
 
   is_pending_ = false;
   is_redirecting_ = false;
   deferred_redirect_info_.reset();
   has_notified_completion_ = true;
-  if (network_delegate())
+  if (network_delegate()) {
     network_delegate()->NotifyCompleted(this, job_.get() != nullptr, status_);
+  }
 }
 
 void URLRequest::OnCallToDelegate(NetLogEventType type) {
@@ -1342,8 +1380,9 @@ void URLRequest::OnCallToDelegate(NetLogEventType type) {
 void URLRequest::OnCallToDelegateComplete(int error) {
   // This should have been cleared before resuming the request.
   DCHECK(blocked_by_.empty());
-  if (!calling_delegate_)
+  if (!calling_delegate_) {
     return;
+  }
   calling_delegate_ = false;
   net_log_.EndEventWithNetErrorCode(delegate_event_type_, error);
   delegate_event_type_ = NetLogEventType::FAILED;
@@ -1404,8 +1443,9 @@ IsolationInfo URLRequest::CreateIsolationInfoFromNetworkAnonymizationKey(
 }
 
 ConnectionAttempts URLRequest::GetConnectionAttempts() const {
-  if (job_)
+  if (job_) {
     return job_->GetConnectionAttempts();
+  }
   return {};
 }
 
@@ -1443,7 +1483,7 @@ void URLRequest::SetDeviceBoundSessionAccessCallback(
 
 void URLRequest::set_socket_tag(const SocketTag& socket_tag) {
   DCHECK(!is_pending_);
-  DCHECK(url().SchemeIsHTTPOrHTTPS());
+  DCHECK(url().SchemeIsHTTPOrHTTPSOrHTTPPS());
   socket_tag_ = socket_tag;
 }
 

@@ -4,17 +4,22 @@
 
 #include "chrome/browser/net/system_network_context_manager.h"
 
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <vector>
 
+#include "base/base64.h"
+#include "base/command_line.h"
 #include "base/files/file_path.h"
 #include "base/functional/bind.h"
 #include "base/process/process.h"
 #include "base/run_loop.h"
 #include "base/strings/strcat.h"
+#include "base/strings/string_number_conversions.h"
 #include "base/test/bind.h"
 #include "base/test/run_until.h"
+#include "base/test/scoped_command_line.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/test_future.h"
 #include "base/test/values_test_util.h"
@@ -23,6 +28,7 @@
 #include "build/build_config.h"
 #include "build/chromeos_buildflags.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/net/httpps_builtin_root.h"
 #include "chrome/browser/net/stub_resolver_config_reader.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/browser_window/public/browser_window_interface.h"
@@ -49,6 +55,7 @@
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/content_browser_test_utils.h"
 #include "content/public/test/test_utils.h"
+#include "crypto/sha2.h"
 #include "mojo/public/cpp/bindings/sync_call_restrictions.h"
 #include "net/base/features.h"
 #include "net/base/schemeful_site.h"
@@ -60,6 +67,7 @@
 #include "net/first_party_sets/first_party_set_metadata.h"
 #include "net/first_party_sets/first_party_sets_context_config.h"
 #include "net/net_buildflags.h"
+#include "net/test/cert_builder.h"
 #include "sandbox/policy/features.h"
 #include "services/network/public/cpp/features.h"
 #include "services/network/public/cpp/network_service_buildflags.h"
@@ -92,6 +100,74 @@ using SystemNetworkContextManagerBrowsertest = InProcessBrowserTest;
 const char* kCookieName = "Cookie";
 const char* kHostA = "a.test";
 const char* kHostB = "b.test";
+
+IN_PROC_BROWSER_TEST_F(SystemNetworkContextManagerBrowsertest,
+                       HttppsBuiltinOriginRootIsAdditiveAndRoleScoped) {
+  std::string builtin_der;
+  ASSERT_TRUE(
+      base::Base64Decode(phromium::kHttppsOriginRootBase64, &builtin_der));
+  EXPECT_EQ("14B07FF9D677B070863C54DB0EEE1F6B5C879274068775DB2519D327FC39A9BB",
+            base::HexEncode(crypto::SHA256HashString(builtin_der)));
+  const std::vector<uint8_t> builtin_root(builtin_der.begin(),
+                                          builtin_der.end());
+
+  const std::string origin_der =
+      net::CertBuilder::CreateSimpleChain2()[1]->GetDER();
+  const std::string proxy_der =
+      net::CertBuilder::CreateSimpleChain2()[1]->GetDER();
+  const std::vector<uint8_t> additional_origin(origin_der.begin(),
+                                               origin_der.end());
+  const std::vector<uint8_t> additional_proxy(proxy_der.begin(),
+                                              proxy_der.end());
+  const std::string origin_base64 = base::Base64Encode(origin_der);
+  const std::string proxy_base64 = base::Base64Encode(proxy_der);
+  ASSERT_NE(builtin_root, additional_origin);
+  ASSERT_NE(additional_origin, additional_proxy);
+
+  const struct {
+    const char* description;
+    const char* origin_flag;
+    const char* proxy_flag;
+    bool has_additional_origin;
+    bool has_proxy;
+  } kCases[] = {
+      {"default origin only", nullptr, nullptr, false, false},
+      {"additional origin", origin_base64.c_str(), nullptr, true, false},
+      {"empty origin flag", "", nullptr, false, false},
+      {"malformed origin flag", "not valid base64!", nullptr, false, false},
+      {"malformed proxy flag", nullptr, "not valid base64!", false, false},
+      {"explicit proxy only", nullptr, proxy_base64.c_str(), false, true},
+      {"independent additions", origin_base64.c_str(), proxy_base64.c_str(),
+       true, true},
+  };
+
+  for (const auto& test : kCases) {
+    SCOPED_TRACE(test.description);
+    base::test::ScopedCommandLine scoped_command_line;
+    auto* command_line = scoped_command_line.GetProcessCommandLine();
+    command_line->RemoveSwitch("httpps-trust-anchor");
+    command_line->RemoveSwitch("httpps-proxy-trust-anchor");
+    if (test.origin_flag) {
+      command_line->AppendSwitchASCII("httpps-trust-anchor", test.origin_flag);
+    }
+    if (test.proxy_flag) {
+      command_line->AppendSwitchASCII("httpps-proxy-trust-anchor",
+                                      test.proxy_flag);
+    }
+    const auto params = g_browser_process->system_network_context_manager()
+                            ->CreateDefaultNetworkContextParams();
+    std::vector<std::vector<uint8_t>> expected_origins = {builtin_root};
+    if (test.has_additional_origin) {
+      expected_origins.push_back(additional_origin);
+    }
+    EXPECT_EQ(expected_origins, params->httpps_trust_anchors);
+    std::vector<std::vector<uint8_t>> expected_proxies;
+    if (test.has_proxy) {
+      expected_proxies.push_back(additional_proxy);
+    }
+    EXPECT_EQ(expected_proxies, params->httpps_proxy_trust_anchors);
+  }
+}
 
 IN_PROC_BROWSER_TEST_F(SystemNetworkContextManagerBrowsertest,
                        StaticAuthParams) {

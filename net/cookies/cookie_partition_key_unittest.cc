@@ -23,6 +23,23 @@ using enum CookiePartitionKey::AncestorChainBit;
 
 class CookiePartitionKeyTest : public ::testing::Test {};
 
+TEST(CookiePartitionKeyTest, HttppsStorageKeepsAnIndependentPartition) {
+  for (bool cross_site : {false, true}) {
+    const auto parsed =
+        CookiePartitionKey::FromStorage("httpps://example.com", cross_site);
+    ASSERT_TRUE(parsed.has_value());
+    ASSERT_TRUE(parsed->has_value());
+    EXPECT_EQ("httpps://example.com", parsed->value().site().Serialize());
+    EXPECT_NE(
+        CookiePartitionKey::FromURLForTesting(
+            GURL("https://example.com"), cross_site ? kCrossSite : kSameSite),
+        parsed->value());
+    const auto serialized = CookiePartitionKey::Serialize(parsed.value());
+    ASSERT_TRUE(serialized.has_value());
+    EXPECT_EQ("httpps://example.com", serialized->TopLevelSite());
+    EXPECT_EQ(cross_site, serialized->has_cross_site_ancestor());
+  }
+}
 
 TEST(CookiePartitionKeyTest, TestFromStorage) {
   struct {

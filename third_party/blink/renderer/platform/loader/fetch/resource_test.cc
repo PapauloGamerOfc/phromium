@@ -469,6 +469,18 @@ TEST_F(ResourceTest, StaleWhileRevalidateCacheControlWithRedirect) {
   EXPECT_TRUE(resource->StaleRevalidationRequested());
 }
 
+TEST_F(ResourceTest, HttppsHonorsCacheFreshness) {
+  const KURL url("httpps://example.test/resource");
+  ResourceResponse response(url);
+  response.SetHttpHeaderField(http_names::kCacheControl,
+                              AtomicString("max-age=50"));
+  response.SetHttpStatusCode(200);
+  auto* resource = MakeGarbageCollected<MockResource>(url);
+  resource->ResponseReceived(response);
+  resource->FinishForTest();
+  EXPECT_EQ(resource->FreshnessLifetime(), base::Seconds(50));
+}
+
 TEST_F(ResourceTest, FreshnessLifetime) {
   const KURL url("http://127.0.0.1:8000/foo.html");
   const KURL redirect_target_url("http://127.0.0.1:8000/food.html");

@@ -30,6 +30,7 @@
 #include "content/public/browser/browser_task_traits.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/browsing_data_remover.h"
+#include "content/public/browser/clear_site_data_utils.h"
 #include "content/public/browser/content_browser_client.h"
 #include "content/public/browser/navigation_throttle.h"
 #include "content/public/browser/navigation_throttle_registry.h"
@@ -150,14 +151,18 @@ class TestBrowsingDataRemoverDelegate : public MockBrowsingDataRemoverDelegate {
     if (cookies) {
       uint64_t data_type_mask =
           BrowsingDataRemover::DATA_TYPE_COOKIES |
-          BrowsingDataRemover::DATA_TYPE_AVOID_CLOSING_CONNECTIONS |
-          BrowsingDataRemover::DATA_TYPE_DEVICE_BOUND_SESSIONS;
+          BrowsingDataRemover::DATA_TYPE_AVOID_CLOSING_CONNECTIONS;
+      if (origin.scheme() != url::kHttppsScheme) {
+        data_type_mask |= BrowsingDataRemover::DATA_TYPE_DEVICE_BOUND_SESSIONS;
+      }
       net::CookiePartitionKey::AncestorChainBit ancestor_chain_bit =
           net::CookiePartitionKey::BoolToAncestorChainBit(
               partition_key_cross_site);
       BrowsingDataFilterBuilderImpl filter_builder(
           BrowsingDataFilterBuilder::Mode::kDelete);
       filter_builder.AddRegisterableDomain(origin.host());
+      filter_builder.SetCookieHttppsNamespace(origin.scheme() ==
+                                              url::kHttppsScheme);
       filter_builder.SetStoragePartitionConfig(storage_partition_config);
       filter_builder.SetCookiePartitionKeyCollection(
           net::CookiePartitionKeyCollection(
@@ -182,6 +187,9 @@ class TestBrowsingDataRemoverDelegate : public MockBrowsingDataRemoverDelegate {
           ~BrowsingDataRemover::DATA_TYPE_PRIVACY_SANDBOX_INTERNAL;
       data_type_mask &=
           ~BrowsingDataRemover::DATA_TYPE_INTEREST_GROUPS_USER_CLEAR;
+      if (origin.scheme() == url::kHttppsScheme) {
+        data_type_mask &= ~BrowsingDataRemover::DATA_TYPE_DEVICE_BOUND_SESSIONS;
+      }
 
       BrowsingDataFilterBuilderImpl filter_builder(
           BrowsingDataFilterBuilder::Mode::kDelete);
@@ -449,6 +457,32 @@ class ClearSiteDataHandlerBrowserTest : public ContentBrowserTest {
 // Tests that the header is recognized on the beginning, in the middle, and on
 // the end of a navigation redirect chain. Each of the three parts of the chain
 // may or may not send the header, so there are 8 configurations to test.
+
+IN_PROC_BROWSER_TEST_F(ClearSiteDataHandlerBrowserTest,
+                       CookieDeletionKeepsOtherProtocolNamespace) {
+  for (const char* source : {"httpps://example.com", "https://example.com"}) {
+    AddCookie(GURL("httpps://example.com"));
+    AddCookie(GURL("https://example.com"));
+    ASSERT_EQ(2u, GetCookies().size());
+    const auto origin = url::Origin::Create(GURL(source));
+    delegate()->ExpectClearSiteDataCookiesCall(storage_partition_config(),
+                                               origin);
+    base::RunLoop run_loop;
+    ClearSiteData(
+        browser_context()->GetWeakPtr(), storage_partition_config(), origin,
+        {ClearSiteDataType::kCookies}, {}, /*avoid_closing_connections=*/true,
+        net::CookiePartitionKey::FromURLForTesting(
+            origin.GetURL(),
+            net::CookiePartitionKey::AncestorChainBit::kSameSite),
+        /*storage_key=*/std::nullopt, /*partitioned_state_allowed_only=*/false,
+        run_loop.QuitClosure());
+    run_loop.Run();
+    const auto remaining = GetCookies();
+    ASSERT_EQ(1u, remaining.size());
+    EXPECT_EQ(origin.scheme() != url::kHttppsScheme,
+              remaining[0].SourceScheme() == net::CookieSourceScheme::kHttpps);
+  }
+}
 
 // Crashes on Win only. https://crbug.com/741189
 #if BUILDFLAG(IS_WIN)

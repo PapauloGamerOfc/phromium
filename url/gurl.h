@@ -252,6 +252,11 @@ class COMPONENT_EXPORT(URL) GURL {
   // the Finch scaffolding and compile-size rationale).
   bool SchemeIsHTTPOrHTTPS() const;
 
+  // HTTP-family dispatch that explicitly opts into Phromium's experimental
+  // transport. Keep SchemeIsHTTPOrHTTPS() strict: many legacy callers assume
+  // its only encrypted member is HTTPS, which would route HTTPPS incorrectly.
+  bool SchemeIsHTTPOrHTTPSOrHTTPPS() const;
+
   // Returns true is the scheme is "ws" or "wss".
   bool SchemeIsWSOrWSS() const;
 

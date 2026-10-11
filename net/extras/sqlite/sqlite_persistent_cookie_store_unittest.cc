@@ -2159,6 +2159,79 @@ TEST_F(SQLitePersistentCookieStoreTest, ShortHash) {
   }
 }
 
+class SQLitePersistentCookieStoreHttppsTest
+    : public SQLitePersistentCookieStoreTest,
+      public testing::WithParamInterface<bool> {};
+
+TEST_P(SQLitePersistentCookieStoreHttppsTest,
+       ReloadUpdateDeleteRemainIsolated) {
+  base::test::ScopedFeatureList scoped_features;
+  scoped_features.InitWithFeatures({}, {features::kEnableSchemeBoundCookies,
+                                        features::kEnablePortBoundCookies});
+  CreateAndLoad(/*crypt_cookies=*/GetParam(),
+                /*restore_old_session_cookies=*/false);
+  const base::Time now = base::Time::Now();
+  auto https = CanonicalCookie::CreateForTesting(
+      GURL("https://example.com:443/"), "session=https; Max-Age=86400; Secure",
+      now, CookieSourceType::kHTTP);
+  auto httpps = CanonicalCookie::CreateForTesting(
+      GURL("httpps://example.com:443/"),
+      "session=httpps; Max-Age=86400; Secure", now, CookieSourceType::kHTTP);
+  ASSERT_TRUE(https);
+  ASSERT_TRUE(httpps);
+  store_->AddCookie(*https);
+  store_->AddCookie(*httpps);
+  DestroyStore();
+
+  auto cookies = CreateAndLoad(GetParam(), false);
+  EXPECT_THAT(cookies,
+              testing::UnorderedElementsAre(MatchesEveryCookieField(*https),
+                                            MatchesEveryCookieField(*httpps)));
+  httpps->SetLastAccessDate(now + base::Hours(1));
+  store_->UpdateCookieAccessTime(*httpps);
+  DestroyStore();
+  cookies = CreateAndLoad(GetParam(), false);
+  EXPECT_THAT(cookies,
+              testing::UnorderedElementsAre(MatchesEveryCookieField(*https),
+                                            MatchesEveryCookieField(*httpps)));
+  store_->DeleteCookie(*httpps);
+  DestroyStore();
+  cookies = CreateAndLoad(GetParam(), false);
+  EXPECT_THAT(cookies, testing::ElementsAre(MatchesEveryCookieField(*https)));
+}
+
+// The bool selects the direction of the attempted ciphertext replay.
+TEST_P(SQLitePersistentCookieStoreHttppsTest,
+       EncryptedNamespaceCannotBeRelabeled) {
+  CreateAndLoad(/*crypt_cookies=*/true,
+                /*restore_old_session_cookies=*/false);
+  auto cookie = CanonicalCookie::CreateForTesting(
+      GURL(GetParam() ? "httpps://example.com:443/"
+                      : "https://example.com:443/"),
+      "session=secret; Max-Age=86400; Secure", base::Time::Now(),
+      CookieSourceType::kHTTP);
+  ASSERT_TRUE(cookie);
+  store_->AddCookie(*cookie);
+  DestroyStore();
+  {
+    sql::Database connection(sql::test::kTestTag);
+    ASSERT_TRUE(connection.Open(temp_dir_.GetPath().Append(kCookieFilename)));
+    sql::Statement relabel(
+        connection.GetUniqueStatement("UPDATE cookies SET source_scheme=?"));
+    relabel.BindInt(0,
+                    static_cast<int>(GetParam() ? CookieSourceScheme::kSecure
+                                                : CookieSourceScheme::kHttpps));
+    ASSERT_TRUE(relabel.Run());
+  }
+  base::HistogramTester histograms;
+  EXPECT_TRUE(CreateAndLoad(true, false).empty());
+  histograms.ExpectBucketCount("Cookie.LoadProblem", /*kHashFailed=*/6, 1);
+}
+
+INSTANTIATE_TEST_SUITE_P(All,
+                         SQLitePersistentCookieStoreHttppsTest,
+                         testing::Bool());
+
 class SQLitePersistentCookieStoreTest_OriginBoundCookies
     : public SQLitePersistentCookieStoreTest {
  public:

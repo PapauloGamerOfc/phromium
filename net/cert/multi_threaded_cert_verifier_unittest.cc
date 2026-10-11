@@ -309,6 +309,8 @@ TEST_F(MultiThreadedCertVerifierTest, ConvertsFlagsToFlags) {
        CertVerifyProc::VERIFY_DISABLE_NETWORK_FETCHES},
       {CertVerifier::VERIFY_SXG_CT_REQUIREMENTS,
        CertVerifyProc::VERIFY_SXG_CT_REQUIREMENTS},
+      {CertVerifier::VERIFY_HTTPPS_SERVER,
+       CertVerifyProc::VERIFY_HTTPPS_SERVER},
   };
   for (const auto& test_config : kTestConfig) {
     SCOPED_TRACE(absl::StrFormat("verifier_flag=%i expected_proc_flag=%i",

@@ -34,6 +34,7 @@ bool IsValidSchemeInt(int scheme_int) {
     case ProxyServer::SCHEME_SOCKS5:
     case ProxyServer::SCHEME_HTTPS:
     case ProxyServer::SCHEME_QUIC:
+    case ProxyServer::SCHEME_HTTPPS:
       return true;
     default:
       return false;
@@ -165,6 +166,8 @@ int ProxyServer::GetDefaultPortForScheme(Scheme scheme) {
     case SCHEME_HTTPS:
     case SCHEME_QUIC:
       return 443;
+    case SCHEME_HTTPPS:
+      return 343;
     case SCHEME_INVALID:
       break;
   }

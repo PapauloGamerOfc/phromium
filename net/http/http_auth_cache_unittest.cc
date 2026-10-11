@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "net/http/http_auth_cache.h"
+
 #include <string>
 
 #include "base/strings/string_util.h"
@@ -14,7 +16,6 @@
 #include "net/base/network_anonymization_key.h"
 #include "net/base/registry_controlled_domains/registry_controlled_domain.h"
 #include "net/base/schemeful_site.h"
-#include "net/http/http_auth_cache.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "url/gurl.h"
 #include "url/scheme_host_port.h"
@@ -59,6 +60,49 @@ bool DoesUrlMatchFilter(const std::set<std::string>& domains, const GURL& url) {
 }
 
 }  // namespace
+
+TEST(HttpAuthCacheTest, HttppsDoesNotReuseHttpsCredentials) {
+  HttpAuthCache cache(false);
+  const url::SchemeHostPort https(GURL("https://example.test:343/"));
+  const url::SchemeHostPort httpps(GURL("httpps://example.test/"));
+  cache.Add(https, HttpAuth::AUTH_SERVER, kRealm1, HttpAuth::AUTH_SCHEME_BASIC,
+            NetworkAnonymizationKey(), "Basic realm=Realm1",
+            CreateASCIICredentials("user", "password"), "/");
+  EXPECT_TRUE(cache.Lookup(https, HttpAuth::AUTH_SERVER, kRealm1,
+                           HttpAuth::AUTH_SCHEME_BASIC,
+                           NetworkAnonymizationKey()));
+  EXPECT_FALSE(cache.Lookup(httpps, HttpAuth::AUTH_SERVER, kRealm1,
+                            HttpAuth::AUTH_SCHEME_BASIC,
+                            NetworkAnonymizationKey()));
+  EXPECT_FALSE(cache.LookupByPath(httpps, HttpAuth::AUTH_SERVER,
+                                  NetworkAnonymizationKey(), "/"));
+}
+
+TEST(HttpAuthCacheTest, HttppsProxyCredentialsAreSeparateFromHttpsProxy) {
+  HttpAuthCache cache(false);
+  const url::SchemeHostPort https(GURL("https://proxy.test:343/"));
+  const url::SchemeHostPort httpps(GURL("httpps://proxy.test/"));
+  cache.Add(https, HttpAuth::AUTH_PROXY, kRealm1, HttpAuth::AUTH_SCHEME_BASIC,
+            NetworkAnonymizationKey(), "Basic realm=Realm1",
+            CreateASCIICredentials("tls-user", "tls-password"), "");
+  EXPECT_FALSE(cache.Lookup(httpps, HttpAuth::AUTH_PROXY, kRealm1,
+                            HttpAuth::AUTH_SCHEME_BASIC,
+                            NetworkAnonymizationKey()));
+  cache.Add(httpps, HttpAuth::AUTH_PROXY, kRealm1, HttpAuth::AUTH_SCHEME_BASIC,
+            NetworkAnonymizationKey(), "Basic realm=Realm1",
+            CreateASCIICredentials("draft-user", "draft-password"), "");
+  auto* tls =
+      cache.Lookup(https, HttpAuth::AUTH_PROXY, kRealm1,
+                   HttpAuth::AUTH_SCHEME_BASIC, NetworkAnonymizationKey());
+  auto* draft =
+      cache.Lookup(httpps, HttpAuth::AUTH_PROXY, kRealm1,
+                   HttpAuth::AUTH_SCHEME_BASIC, NetworkAnonymizationKey());
+  ASSERT_TRUE(tls);
+  ASSERT_TRUE(draft);
+  EXPECT_NE(tls, draft);
+  EXPECT_EQ(u"tls-user", tls->credentials().username());
+  EXPECT_EQ(u"draft-user", draft->credentials().username());
+}
 
 // Test adding and looking-up cache entries (both by realm and by path).
 TEST(HttpAuthCacheTest, Basic) {
@@ -1146,9 +1190,7 @@ class HttpAuthCacheEvictionTest : public testing::Test {
     return base::StringPrintf("/%d/%d/x/y", realm_i, path_i);
   }
 
-  void AddRealm(int realm_i) {
-    AddPathToRealm(realm_i, 0);
-  }
+  void AddRealm(int realm_i) { AddPathToRealm(realm_i, 0); }
 
   void AddPathToRealm(int realm_i, int path_i) {
     cache_.Add(scheme_host_port_, HttpAuth::AUTH_SERVER, GenerateRealm(realm_i),
@@ -1229,23 +1271,29 @@ TEST_F(HttpAuthCacheEvictionTest, RealmEntryEviction) {
 // paths should be retrievable. Next add 3 more paths -- since the cache is
 // full this causes FIFO eviction of the first three paths.
 TEST_F(HttpAuthCacheEvictionTest, RealmPathEviction) {
-  for (int i = 0; i < kMaxPaths; ++i)
+  for (int i = 0; i < kMaxPaths; ++i) {
     AddPathToRealm(0, i);
+  }
 
-  for (int i = 1; i < kMaxRealms; ++i)
+  for (int i = 1; i < kMaxRealms; ++i) {
     AddRealm(i);
+  }
 
-  for (int i = 0; i < 3; ++i)
+  for (int i = 0; i < 3; ++i) {
     AddPathToRealm(0, i + kMaxPaths);
+  }
 
-  for (int i = 0; i < 3; ++i)
+  for (int i = 0; i < 3; ++i) {
     CheckPathExistence(0, i, false);
+  }
 
-  for (int i = 0; i < kMaxPaths; ++i)
+  for (int i = 0; i < kMaxPaths; ++i) {
     CheckPathExistence(0, i + 3, true);
+  }
 
-  for (int i = 0; i < kMaxRealms; ++i)
+  for (int i = 0; i < kMaxRealms; ++i) {
     CheckRealmExistence(i, true);
+  }
 }
 
 }  // namespace net

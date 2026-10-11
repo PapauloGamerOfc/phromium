@@ -44,6 +44,7 @@
 #include "net/proxy_resolution/proxy_resolution_url_sanitizer.h"
 #include "net/proxy_resolution/proxy_resolver_factory.h"
 #include "net/url_request/url_request_context.h"
+#include "url/gurl.h"
 
 #if BUILDFLAG(IS_WIN)
 #include "net/proxy_resolution/win/proxy_resolver_winhttp.h"
@@ -1329,8 +1330,8 @@ int ConfiguredProxyResolutionService::DidFinishResolvingProxy(
                                           method, proxy_retry_info_, result);
         }
       } else {
-        // Mandatory PAC: surface mandatory failure (unless original was a
-        // crash that triggers reset; mapping still needed for callers).
+        // Only explicitly mandatory PAC fails closed, including when the
+        // resolver does not support the destination scheme.
         result_code = ERR_MANDATORY_PROXY_CONFIGURATION_FAILED;
       }
     }

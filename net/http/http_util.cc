@@ -41,12 +41,14 @@ constexpr std::string_view kBytesUnit = "bytes";
 template <typename ConstIterator>
 void TrimLWSImplementation(ConstIterator* begin, ConstIterator* end) {
   // leading whitespace
-  while (*begin < *end && HttpUtil::IsLWS((*begin)[0]))
+  while (*begin < *end && HttpUtil::IsLWS((*begin)[0])) {
     ++(*begin);
+  }
 
   // trailing whitespace
-  while (*begin < *end && HttpUtil::IsLWS((*end)[-1]))
+  while (*begin < *end && HttpUtil::IsLWS((*end)[-1])) {
     --(*end);
+  }
 }
 
 // Helper class that builds the list of languages for the Accept-Language
@@ -108,7 +110,7 @@ std::string HttpUtil::GenerateRequestLine(std::string_view method,
 // static
 std::string HttpUtil::SpecForRequest(const GURL& url) {
   DCHECK(url.is_valid() &&
-         (url.SchemeIsHTTPOrHTTPS() || url.SchemeIsWSOrWSS()));
+         (url.SchemeIsHTTPOrHTTPSOrHTTPPS() || url.SchemeIsWSOrWSS()));
   return SimplifyUrlForRequest(url).spec();
 }
 
@@ -125,8 +127,9 @@ void HttpUtil::ParseContentType(std::string_view content_type_str,
   // Also, reject a mime-type if it does not include a slash.
   // Some servers give junk after the charset parameter, which may
   // include a comma, so this check makes us a bit more tolerant.
-  if (!result || content_type_str == "*/*")
+  if (!result || content_type_str == "*/*") {
     return;
+  }
 
   std::string charset_value;
   bool type_has_charset = false;
@@ -382,8 +385,9 @@ bool HttpUtil::ParseRetryAfterHeader(const std::string& retry_after_string,
     return false;
   }
 
-  if (interval < base::Seconds(0))
+  if (interval < base::Seconds(0)) {
     return false;
+  }
 
   *retry_after = interval;
   return true;
@@ -468,12 +472,14 @@ bool HttpUtil::IsMethodIdempotent(std::string_view method) {
 // static
 bool HttpUtil::IsSafeHeader(std::string_view name, std::string_view value) {
   if (base::StartsWith(name, "proxy-", base::CompareCase::INSENSITIVE_ASCII) ||
-      base::StartsWith(name, "sec-", base::CompareCase::INSENSITIVE_ASCII))
+      base::StartsWith(name, "sec-", base::CompareCase::INSENSITIVE_ASCII)) {
     return false;
+  }
 
   for (const char* field : kForbiddenHeaderFields) {
-    if (base::EqualsCaseInsensitiveASCII(name, field))
+    if (base::EqualsCaseInsensitiveASCII(name, field)) {
       return false;
+    }
   }
 
   bool is_forbidden_header_fields_with_forbidden_method = false;
@@ -488,8 +494,9 @@ bool HttpUtil::IsSafeHeader(std::string_view name, std::string_view value) {
     while (method_iterator.GetNext()) {
       std::string_view method = method_iterator.value();
       for (const char* forbidden_method : kForbiddenMethods) {
-        if (base::EqualsCaseInsensitiveASCII(method, forbidden_method))
+        if (base::EqualsCaseInsensitiveASCII(method, forbidden_method)) {
           return false;
+        }
       }
     }
   }
@@ -506,8 +513,9 @@ bool HttpUtil::IsValidHeaderName(std::string_view name) {
 bool HttpUtil::IsValidHeaderValue(std::string_view value) {
   // Just a sanity check: disallow NUL, CR and LF.
   for (char c : value) {
-    if (c == '\0' || c == '\r' || c == '\n')
+    if (c == '\0' || c == '\r' || c == '\n') {
       return false;
+    }
   }
   return true;
 }
@@ -586,22 +594,26 @@ bool HttpUtil::IsTokenChar(char c) {
 
 // See RFC 7230 Sec 3.2.6 for the definition of |token|.
 bool HttpUtil::IsToken(std::string_view string) {
-  if (string.empty())
+  if (string.empty()) {
     return false;
+  }
   for (char c : string) {
-    if (!IsTokenChar(c))
+    if (!IsTokenChar(c)) {
       return false;
+    }
   }
   return true;
 }
 
 // See RFC 5987 Sec 3.2.1 for the definition of |parmname|.
 bool HttpUtil::IsParmName(std::string_view str) {
-  if (str.empty())
+  if (str.empty()) {
     return false;
+  }
   for (char c : str) {
-    if (!IsTokenChar(c) || c == '*' || c == '\'' || c == '%')
+    if (!IsTokenChar(c) || c == '*' || c == '\'' || c == '%') {
       return false;
+    }
   }
   return true;
 }
@@ -613,16 +625,19 @@ bool IsQuote(char c) {
 }
 
 bool UnquoteImpl(std::string_view str, bool strict_quotes, std::string* out) {
-  if (str.empty())
+  if (str.empty()) {
     return false;
+  }
 
   // Nothing to unquote.
-  if (!IsQuote(str[0]))
+  if (!IsQuote(str[0])) {
     return false;
+  }
 
   // No terminal quote mark.
-  if (str.size() < 2 || str.front() != str.back())
+  if (str.size() < 2 || str.front() != str.back()) {
     return false;
+  }
 
   // Strip quotemarks
   str.remove_prefix(1);
@@ -636,15 +651,17 @@ bool UnquoteImpl(std::string_view str, bool strict_quotes, std::string* out) {
       prev_escape = true;
       continue;
     }
-    if (strict_quotes && !prev_escape && IsQuote(c))
+    if (strict_quotes && !prev_escape && IsQuote(c)) {
       return false;
+    }
     prev_escape = false;
     unescaped.push_back(c);
   }
 
   // Terminal quote is escaped.
-  if (strict_quotes && prev_escape)
+  if (strict_quotes && prev_escape) {
     return false;
+  }
 
   *out = std::move(unescaped);
   return true;
@@ -655,8 +672,9 @@ bool UnquoteImpl(std::string_view str, bool strict_quotes, std::string* out) {
 // static
 std::string HttpUtil::Unquote(std::string_view str) {
   std::string result;
-  if (!UnquoteImpl(str, false, &result))
+  if (!UnquoteImpl(str, false, &result)) {
     return std::string(str);
+  }
 
   return result;
 }
@@ -675,8 +693,9 @@ std::string HttpUtil::Quote(std::string_view str) {
   // then surround with quotes.
   escaped.push_back('"');
   for (char c : str) {
-    if (c == '"' || c == '\\')
+    if (c == '"' || c == '\\') {
       escaped.push_back('\\');
+    }
     escaped.push_back(c);
   }
   escaped.push_back('"');
@@ -718,8 +737,9 @@ static size_t LocateEndOfHeadersHelper(base::span<const uint8_t> buf,
   for (; i < buf.size(); ++i) {
     char c = buf[i];
     if (c == '\n') {
-      if (was_lf)
+      if (was_lf) {
         return i + 1;
+      }
       was_lf = true;
     } else if (c != '\r' || last_c != '\n') {
       was_lf = false;
@@ -742,8 +762,9 @@ size_t HttpUtil::LocateEndOfHeaders(base::span<const uint8_t> buf, size_t i) {
 // non-blank header-name. Line continuations are specifically for
 // header values -- do not allow headers names to span lines.
 static bool IsLineSegmentContinuable(std::string_view line) {
-  if (line.empty())
+  if (line.empty()) {
     return false;
+  }
 
   size_t colon = line.find(':');
   if (colon == std::string_view::npos) {
@@ -753,12 +774,14 @@ static bool IsLineSegmentContinuable(std::string_view line) {
   std::string_view name = line.substr(0, colon);
 
   // Name can't be empty.
-  if (name.empty())
+  if (name.empty()) {
     return false;
+  }
 
   // Can't start with LWS (this would imply the segment is a continuation)
-  if (HttpUtil::IsLWS(name[0]))
+  if (HttpUtil::IsLWS(name[0])) {
     return false;
+  }
 
   return true;
 }
@@ -775,8 +798,9 @@ static size_t FindStatusLineEnd(std::string_view str) {
 // Helper used by AssembleRawHeaders, to skip past leading LWS.
 static std::string_view RemoveLeadingNonLWS(std::string_view str) {
   for (size_t i = 0; i < str.size(); i++) {
-    if (!HttpUtil::IsLWS(str[i]))
+    if (!HttpUtil::IsLWS(str[i])) {
       return str.substr(i);
+    }
   }
   return std::string_view();  // Remove everything.
 }
@@ -789,8 +813,9 @@ std::string HttpUtil::AssembleRawHeaders(std::string_view input) {
   // (HttpResponseHeaders) don't deal with it.
   size_t status_begin_offset =
       LocateStartOfStatusLine(base::as_byte_span(input));
-  if (status_begin_offset != std::string::npos)
+  if (status_begin_offset != std::string::npos) {
     input.remove_prefix(status_begin_offset);
+  }
 
   // Copy the status line.
   size_t status_line_end = FindStatusLineEnd(input);
@@ -849,8 +874,9 @@ std::string HttpUtil::ExpandLanguageList(std::string_view language_prefs) {
   const std::vector<std::string_view> languages = base::SplitStringPiece(
       language_prefs, ",", base::TRIM_WHITESPACE, base::SPLIT_WANT_ALL);
 
-  if (languages.empty())
+  if (languages.empty()) {
     return "";
+  }
 
   AcceptLanguageBuilder builder;
 
@@ -863,8 +889,9 @@ std::string HttpUtil::ExpandLanguageList(std::string_view language_prefs) {
     const std::string_view base_language = GetBaseLanguageCode(language);
 
     // Skip 'x' and 'i' as a primary language subtag per RFC 5646 section 2.1.1.
-    if (base_language == "x" || base_language == "i")
+    if (base_language == "x" || base_language == "i") {
       continue;
+    }
 
     // Look ahead and add the primary language subtag as a language if the next
     // language is not part of the same family. This may not be perfect because
@@ -903,8 +930,9 @@ std::string HttpUtil::GenerateAcceptLanguageHeader(
                           qvalue10);
     }
     // It does not make sense to have 'q=0'.
-    if (qvalue10 > kQvalueDecrement10)
+    if (qvalue10 > kQvalueDecrement10) {
       qvalue10 -= kQvalueDecrement10;
+    }
   }
   return lang_list_with_q;
 }
@@ -914,8 +942,9 @@ bool HttpUtil::HasStrongValidators(
     std::optional<std::string_view> etag_header,
     std::optional<std::string_view> last_modified_header,
     std::optional<std::string_view> date_header) {
-  if (version < HttpVersion(1, 1))
+  if (version < HttpVersion(1, 1)) {
     return false;
+  }
 
   if (etag_header && !etag_header->empty()) {
     size_t slash = etag_header->find('/');
@@ -951,8 +980,9 @@ bool HttpUtil::HasValidators(
     HttpVersion version,
     std::optional<std::string_view> etag_header,
     std::optional<std::string_view> last_modified_header) {
-  if (version < HttpVersion(1, 0))
+  if (version < HttpVersion(1, 0)) {
     return false;
+  }
 
   base::Time last_modified;
   // Have to construct a C-style string here, since that's what
@@ -982,20 +1012,22 @@ enum {
 // static
 std::vector<int> HttpUtil::GetStatusCodesForHistogram() {
   std::vector<int> codes;
-  codes.reserve(
-      HISTOGRAM_MAX_HTTP_STATUS_CODE - HISTOGRAM_MIN_HTTP_STATUS_CODE + 2);
+  codes.reserve(HISTOGRAM_MAX_HTTP_STATUS_CODE -
+                HISTOGRAM_MIN_HTTP_STATUS_CODE + 2);
   codes.push_back(0);
   for (int i = HISTOGRAM_MIN_HTTP_STATUS_CODE;
-       i <= HISTOGRAM_MAX_HTTP_STATUS_CODE; ++i)
+       i <= HISTOGRAM_MAX_HTTP_STATUS_CODE; ++i) {
     codes.push_back(i);
+  }
   return codes;
 }
 
 // static
 int HttpUtil::MapStatusCodeForHistogram(int code) {
   if (HISTOGRAM_MIN_HTTP_STATUS_CODE <= code &&
-      code <= HISTOGRAM_MAX_HTTP_STATUS_CODE)
+      code <= HISTOGRAM_MAX_HTTP_STATUS_CODE) {
     return code;
+  }
   return 0;
 }
 
@@ -1208,8 +1240,9 @@ bool HttpUtil::NameValuePairsIterator::ParseNameValuePair(
 bool HttpUtil::ParseAcceptEncoding(const std::string& accept_encoding,
                                    std::set<std::string>* allowed_encodings) {
   DCHECK(allowed_encodings);
-  if (accept_encoding.find_first_of("\"") != std::string::npos)
+  if (accept_encoding.find_first_of("\"") != std::string::npos) {
     return false;
+  }
   allowed_encodings->clear();
 
   base::StringTokenizer tokenizer(accept_encoding.begin(),
@@ -1238,12 +1271,14 @@ bool HttpUtil::ParseAcceptEncoding(const std::string& accept_encoding,
     }
     std::string_view param_name = params.substr(0, equals_pos);
     param_name = TrimLWS(param_name);
-    if (!base::EqualsCaseInsensitiveASCII(param_name, "q"))
+    if (!base::EqualsCaseInsensitiveASCII(param_name, "q")) {
       return false;
+    }
     std::string_view qvalue = params.substr(equals_pos + 1);
     qvalue = TrimLWS(qvalue);
-    if (qvalue.empty())
+    if (qvalue.empty()) {
       return false;
+    }
     if (qvalue[0] == '1') {
       if (std::string_view("1.000").starts_with(qvalue)) {
         allowed_encodings->insert(base::ToLowerASCII(encoding));
@@ -1251,23 +1286,30 @@ bool HttpUtil::ParseAcceptEncoding(const std::string& accept_encoding,
       }
       return false;
     }
-    if (qvalue[0] != '0')
+    if (qvalue[0] != '0') {
       return false;
-    if (qvalue.length() == 1)
+    }
+    if (qvalue.length() == 1) {
       continue;
-    if (qvalue.length() <= 2 || qvalue.length() > 5)
+    }
+    if (qvalue.length() <= 2 || qvalue.length() > 5) {
       return false;
-    if (qvalue[1] != '.')
+    }
+    if (qvalue[1] != '.') {
       return false;
+    }
     bool nonzero_number = false;
     for (size_t i = 2; i < qvalue.length(); ++i) {
-      if (!base::IsAsciiDigit(qvalue[i]))
+      if (!base::IsAsciiDigit(qvalue[i])) {
         return false;
-      if (qvalue[i] != '0')
+      }
+      if (qvalue[i] != '0') {
         nonzero_number = true;
+      }
     }
-    if (nonzero_number)
+    if (nonzero_number) {
       allowed_encodings->insert(base::ToLowerASCII(encoding));
+    }
   }
 
   // RFC 7231 5.3.4 "A request without an Accept-Encoding header field implies
@@ -1281,24 +1323,29 @@ bool HttpUtil::ParseAcceptEncoding(const std::string& accept_encoding,
   allowed_encodings->insert("identity");
 
   // RFC says gzip == x-gzip; mirror it here for easier matching.
-  if (allowed_encodings->find("gzip") != allowed_encodings->end())
+  if (allowed_encodings->find("gzip") != allowed_encodings->end()) {
     allowed_encodings->insert("x-gzip");
-  if (allowed_encodings->find("x-gzip") != allowed_encodings->end())
+  }
+  if (allowed_encodings->find("x-gzip") != allowed_encodings->end()) {
     allowed_encodings->insert("gzip");
+  }
 
   // RFC says compress == x-compress; mirror it here for easier matching.
-  if (allowed_encodings->find("compress") != allowed_encodings->end())
+  if (allowed_encodings->find("compress") != allowed_encodings->end()) {
     allowed_encodings->insert("x-compress");
-  if (allowed_encodings->find("x-compress") != allowed_encodings->end())
+  }
+  if (allowed_encodings->find("x-compress") != allowed_encodings->end()) {
     allowed_encodings->insert("compress");
+  }
   return true;
 }
 
 bool HttpUtil::ParseContentEncoding(const std::string& content_encoding,
                                     std::set<std::string>* used_encodings) {
   DCHECK(used_encodings);
-  if (content_encoding.find_first_of("\"=;*") != std::string::npos)
+  if (content_encoding.find_first_of("\"=;*") != std::string::npos) {
     return false;
+  }
   used_encodings->clear();
 
   base::StringTokenizer encoding_tokenizer(content_encoding.begin(),
@@ -1326,8 +1373,9 @@ bool HttpUtil::HeadersContainMultipleCopiesOfField(
   // such headers, and if so, return true if they have different values.
   std::optional<std::string_view> field_value2;
   while ((field_value2 = headers.EnumerateHeader(&it, field_name))) {
-    if (field_value != field_value2)
+    if (field_value != field_value2) {
       return true;
+    }
   }
   return false;
 }

@@ -64,6 +64,17 @@ TEST(CookiesHelperUnittest, CookieConversionWithInfiniteExpirationDate) {
   EXPECT_EQ(std::numeric_limits<double>::max(), *expiration_time);
 }
 
+TEST(CookiesHelperUnittest, HttppsPermissionUrlPreservesCookieNamespace) {
+  for (bool secure : {false, true}) {
+    auto cookie = net::CanonicalCookie::CreateForTesting(
+        GURL("httpps://example.com/"), secure ? "a=b; Secure" : "a=b",
+        base::Time::Now(), net::CookieSourceType::kOther);
+    ASSERT_TRUE(cookie);
+    EXPECT_EQ(GURL("httpps://example.com/"),
+              cookies_helpers::GetURLFromCanonicalCookie(*cookie));
+  }
+}
+
 TEST(CookiesHelperUnittest, ValidateCrossSiteAncestorErrorCases) {
   std::string site = "https://example.com";
   std::string invalid_site = "invalid";

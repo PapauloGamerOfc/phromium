@@ -30,8 +30,8 @@ const wchar_t kPolicyRegistryKey[] = L"SOFTWARE\\Policies\\Chromium";
 const wchar_t kUserDataDirNameSuffix[] =
     L"\\Google\\Chrome for Testing\\User Data";
 #else
-const wchar_t kPolicyRegistryKey[] = L"SOFTWARE\\Policies\\Chromium";
-const wchar_t kUserDataDirNameSuffix[] = L"\\Chromium\\User Data";
+const wchar_t kPolicyRegistryKey[] = L"SOFTWARE\\Policies\\Phromium";
+const wchar_t kUserDataDirNameSuffix[] = L"\\Phromium\\User Data";
 #endif
 
 const wchar_t kUserDataDirRegistryKey[] = L"UserDataDir";

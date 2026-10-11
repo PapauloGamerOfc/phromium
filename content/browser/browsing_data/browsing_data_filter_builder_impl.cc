@@ -232,7 +232,7 @@ bool BrowsingDataFilterBuilderImpl::MatchesAllOriginsAndDomains() {
 
 bool BrowsingDataFilterBuilderImpl::MatchesMostOriginsAndDomains() {
   return mode_ == Mode::kPreserve && !partitioned_cookies_only_ &&
-         !HasStorageKey();
+         !HasStorageKey() && !cookie_httpps_namespace_.has_value();
 }
 
 bool BrowsingDataFilterBuilderImpl::MatchesNothing() {
@@ -245,6 +245,11 @@ void BrowsingDataFilterBuilderImpl::SetPartitionedCookiesOnly(bool value) {
 
 bool BrowsingDataFilterBuilderImpl::PartitionedCookiesOnly() const {
   return partitioned_cookies_only_;
+}
+
+void BrowsingDataFilterBuilderImpl::SetCookieHttppsNamespace(
+    std::optional<bool> value) {
+  cookie_httpps_namespace_ = value;
 }
 
 void BrowsingDataFilterBuilderImpl::SetStoragePartitionConfig(
@@ -316,6 +321,7 @@ BrowsingDataFilterBuilderImpl::BuildCookieDeletionFilter() {
       cookie_partition_key_collection_;
 
   deletion_filter->partitioned_state_only = partitioned_cookies_only_;
+  deletion_filter->httpps_namespace = cookie_httpps_namespace_;
 
   switch (mode_) {
     case Mode::kDelete:
@@ -374,6 +380,7 @@ BrowsingDataFilterBuilderImpl::Copy() {
   copy->cookie_partition_key_collection_ = cookie_partition_key_collection_;
   copy->storage_key_ = storage_key_;
   copy->partitioned_cookies_only_ = partitioned_cookies_only_;
+  copy->cookie_httpps_namespace_ = cookie_httpps_namespace_;
   copy->storage_partition_config_ = storage_partition_config_;
   return std::move(copy);
 }
@@ -392,6 +399,7 @@ bool BrowsingDataFilterBuilderImpl::IsEqual(
              other_impl->cookie_partition_key_collection_ &&
          storage_key_ == other_impl->storage_key_ &&
          partitioned_cookies_only_ == other_impl->partitioned_cookies_only_ &&
+         cookie_httpps_namespace_ == other_impl->cookie_httpps_namespace_ &&
          storage_partition_config_ == other_impl->storage_partition_config_;
 }
 

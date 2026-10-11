@@ -1,0 +1,1532 @@
+// Copyright 2026 The Phromium Authors
+// Use of this source code is governed by a BSD-style license that can be
+// found in the LICENSE file.
+
+#include "net/socket/httpps_client_socket.h"
+
+#include <algorithm>
+#include <array>
+#include <optional>
+#include <string>
+#include <utility>
+#include <vector>
+
+#include "base/functional/callback.h"
+#include "base/functional/callback_helpers.h"
+#include "base/test/bind.h"
+#include "base/test/task_environment.h"
+#include "base/time/time_override.h"
+#include "net/base/address_list.h"
+#include "net/base/auth.h"
+#include "net/base/ip_address.h"
+#include "net/base/network_anonymization_key.h"
+#include "net/base/proxy_chain.h"
+#include "net/base/test_completion_callback.h"
+#include "net/cert/mock_cert_verifier.h"
+#include "net/dns/mock_host_resolver.h"
+#include "net/http/http_auth_cache.h"
+#include "net/http/http_auth_controller.h"
+#include "net/http/http_auth_handler_factory.h"
+#include "net/http/http_proxy_client_socket.h"
+#include "net/http/http_response_headers.h"
+#include "net/http/transport_security_state.h"
+#include "net/socket/socket_test_util.h"
+#include "net/socket/socks5_client_socket.h"
+#include "net/ssl/ssl_config.h"
+#include "net/test/cert_builder.h"
+#include "net/traffic_annotation/network_traffic_annotation_test_helper.h"
+#include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/boringssl/src/include/openssl/curve25519.h"
+#include "third_party/boringssl/src/include/openssl/evp.h"
+#include "third_party/boringssl/src/pki/parse_certificate.h"
+#include "url/gurl.h"
+
+namespace net {
+namespace {
+
+using httpps::Bytes;
+using httpps::ByteSpan;
+using httpps::Secret;
+
+void Append(Bytes& out, ByteSpan bytes) {
+  out.insert(out.end(), bytes.begin(), bytes.end());
+}
+ByteSpan Octets(std::string_view input) {
+  return httpps::StringBytes(input);
+}
+void U24(Bytes& out, size_t length) {
+  out.push_back(static_cast<uint8_t>(length >> 16));
+  out.push_back(static_cast<uint8_t>(length >> 8));
+  out.push_back(static_cast<uint8_t>(length));
+}
+void U16(Bytes& out, size_t length) {
+  out.push_back(static_cast<uint8_t>(length >> 8));
+  out.push_back(static_cast<uint8_t>(length));
+}
+Bytes HelloExtension(ByteSpan hello, uint16_t wanted, bool* found = nullptr) {
+  if (found) {
+    *found = false;
+  }
+  auto extensions = hello.subspan(47u);
+  while (extensions.size() >= 4) {
+    uint16_t type = (extensions[0] << 8) | extensions[1];
+    size_t length = (extensions[2] << 8) | extensions[3];
+    if (length > extensions.size() - 4) {
+      return {};
+    }
+    if (type == wanted) {
+      if (found) {
+        *found = true;
+      }
+      auto value = extensions.subspan(4u, length);
+      return Bytes(value.begin(), value.end());
+    }
+    extensions = extensions.subspan(4 + length);
+  }
+  return {};
+}
+Bytes Frame(uint8_t type, ByteSpan body) {
+  Bytes output{type};
+  U24(output, body.size());
+  Append(output, body);
+  return output;
+}
+
+// A scripted peer which derives its own server-side keys from the client's
+// fresh CH. This exercises partial asynchronous transport I/O, not just the
+// portable crypto engine. Test keys never leave this in-memory mock.
+class Peer : public SocketDataProvider {
+ public:
+  explicit Peer(uint8_t key_offset = 0) {
+    set_connect_data(MockConnect(SYNCHRONOUS, OK));
+    chain_ = CertBuilder::CreateSimpleChain2();
+    // The private-CA verifier uses BoringSSL's system wall clock, not the
+    // TaskEnvironment clock. Keep the certificates valid on that clock while
+    // retaining MOCK_TIME for handshake deadlines and asynchronous I/O tests.
+    const base::Time now = base::subtle::TimeNowIgnoringOverride();
+    for (const auto& certificate : chain_) {
+      certificate->SetValidity(now - base::Days(7), now + base::Days(7));
+    }
+    for (size_t i = 0; i < static_private_.size(); ++i) {
+      static_private_[i] = static_cast<uint8_t>(i + 1 + key_offset);
+    }
+    chain_[0]->SetKey(bssl::UniquePtr<EVP_PKEY>(EVP_PKEY_new_raw_private_key(
+        EVP_PKEY_X25519, nullptr, static_private_.data(),
+        static_private_.size())));
+    chain_[0]->SetSubjectAltName("localhost");
+    chain_[0]->SetBasicConstraints(false, -1);
+    chain_[0]->SetKeyUsages({bssl::KEY_USAGE_BIT_KEY_AGREEMENT});
+    // The default test leaf already carries serverAuth EKU.
+    root = chain_[1]->GetDER();
+    Secret verified_key;
+    EXPECT_TRUE(httpps::VerifyLabChain({chain_[0]->GetDER()}, {root},
+                                       "localhost", &verified_key));
+  }
+
+  MockRead OnRead() override {
+    if (stall || server_bytes_.empty()) {
+      return MockRead(ASYNC, eof ? 0 : ERR_IO_PENDING);
+    }
+    server_flight_read_ = true;
+    read_storage_ = server_bytes_.substr(0, read_chunk);
+    server_bytes_.erase(0, read_storage_.size());
+    return MockRead(mode, std::string_view(read_storage_));
+  }
+
+  MockWriteResult OnWrite(const std::string& bytes) override {
+    if (fail_writes) {
+      return MockWriteResult(SYNCHRONOUS, ERR_CONNECTION_RESET);
+    }
+    if (hold_writes) {
+      return MockWriteResult(ASYNC, ERR_IO_PENDING);
+    }
+    size_t length = std::min(write_chunk, bytes.size());
+    input_.insert(input_.end(), bytes.begin(), bytes.begin() + length);
+    if (hello_) {
+      constexpr size_t prefix = httpps::kPreface.size();
+      if (input_.size() >= prefix + 5) {
+        size_t frame_length =
+            (size_t(input_[prefix + 3]) << 8) | input_[prefix + 4];
+        if (input_.size() >= prefix + 5 + frame_length) {
+          BuildFlight(ByteSpan(input_).subspan(prefix + 5, frame_length));
+          input_.erase(input_.begin(),
+                       input_.begin() + prefix + 5 + frame_length);
+          hello_ = false;
+        }
+      }
+    }
+    while (!hello_ && input_.size() >= 5) {
+      size_t record_length = 5 + (size_t(input_[3]) << 8) + input_[4];
+      if (input_.size() < record_length) {
+        break;
+      }
+      ConsumeRecord(ByteSpan(input_).first(record_length));
+      input_.erase(input_.begin(), input_.begin() + record_length);
+    }
+    return MockWriteResult(mode, static_cast<int>(length));
+  }
+
+  bool AllReadDataConsumed() const override { return server_bytes_.empty(); }
+  bool AllWriteDataConsumed() const override { return input_.empty(); }
+
+  void Application(std::string_view data, bool close = false) {
+    Bytes encrypted;
+    ASSERT_TRUE(sender_->Seal(Octets(data), 23, &encrypted));
+    server_bytes_.append(encrypted.begin(), encrypted.end());
+    if (close) {
+      ASSERT_TRUE(sender_->Seal(std::array<uint8_t, 2>{1, 0}, 21, &encrypted));
+      server_bytes_.append(encrypted.begin(), encrypted.end());
+    }
+  }
+
+  bool stall = false;
+  bool eof = false;
+  bool hold_writes = false;
+  bool fail_writes = false;
+  bool tamper = false;
+  bool accept_early_data = true;
+  bool reject_ticket = false;
+  std::optional<httpps::SessionTicket> resume_ticket;
+  IoMode mode = ASYNC;
+  size_t read_chunk = 1;
+  size_t write_chunk = 7;
+  std::string root;
+  std::string received_application;
+  std::string received_early;
+  std::string application_after_finished;
+  size_t discarded_early_bytes = 0;
+  int client_hellos = 0;
+  int client_finished = 0;
+  int end_of_early_data = 0;
+
+  httpps::SessionTicket Ticket() {
+    httpps::SessionTicket ticket;
+    ticket.identity = {0x71, 0x72, 0x73, 0x74};
+    ticket.psk.fill(0x37);
+    ticket.lifetime = 3600;
+    ticket.age_add = 123;
+    ticket.max_early_data = 4096;
+    ticket.received_milliseconds = httpps::MonotonicMilliseconds();
+    ticket.hostname = "localhost";
+    ticket.certificates = {chain_[0]->GetDER()};
+    return ticket;
+  }
+
+  scoped_refptr<X509Certificate> certificate() {
+    return chain_[0]->GetX509Certificate();
+  }
+
+ protected:
+  virtual void OnApplication(std::string_view plaintext) {}
+
+  void Reset() override {
+    // SocketDataProvider calls this when a socket is attached. Preserve the
+    // test's configured fault/fragmentation settings, but never reuse a prior
+    // connection's transcript, record counters or traffic keys.
+    sender_.reset();
+    receiver_.reset();
+    early_receiver_.reset();
+    root_secret_.fill(0);
+    c_hs_.fill(0);
+    input_.clear();
+    transcript_.clear();
+    read_storage_.clear();
+    server_bytes_.clear();
+    received_application.clear();
+    received_early.clear();
+    discarded_early_bytes = 0;
+    client_hellos = 0;
+    client_finished = 0;
+    end_of_early_data = 0;
+    early_offered_ = early_accepted_ = server_flight_read_ = false;
+    hello_ = true;
+    finished_ = true;
+  }
+
+ private:
+  void ConsumeRecord(ByteSpan record) {
+    Bytes plaintext;
+    uint8_t type = 0;
+    // This peer's resumed Connect returns after CH, before any server flight
+    // read. Rejected early bytes may arrive only before the client reads SH.
+    const bool early_epoch =
+        finished_ && early_receiver_ &&
+        (early_accepted_ ? end_of_early_data == 0 : !server_flight_read_);
+    if (early_epoch) {
+      ASSERT_TRUE(early_receiver_->Open(record, &type, &plaintext));
+      if (type == 22) {
+        ASSERT_TRUE(early_accepted_);
+        EXPECT_EQ(plaintext, Frame(5, {}));
+        Append(transcript_, plaintext);
+        ++end_of_early_data;
+      } else {
+        ASSERT_EQ(type, 23);
+        if (early_accepted_) {
+          received_early.append(plaintext.begin(), plaintext.end());
+        } else {
+          discarded_early_bytes += plaintext.size();
+        }
+      }
+      return;
+    }
+    ASSERT_TRUE(receiver_->Open(record, &type, &plaintext));
+    if (finished_) {
+      ASSERT_EQ(type, 22);
+      auto expected = httpps::Mac(httpps::Label(c_hs_, "finished", {}, 32),
+                                  httpps::Hash(transcript_));
+      EXPECT_EQ(plaintext, Frame(20, expected));
+      Append(transcript_, plaintext);
+      sender_ = std::make_unique<httpps::RecordCipher>(s_app_);
+      receiver_ = std::make_unique<httpps::RecordCipher>(c_app_);
+      finished_ = false;
+      ++client_finished;
+      if (!application_after_finished.empty()) {
+        Application(application_after_finished);
+      }
+    } else if (type == 23) {
+      received_application.append(plaintext.begin(), plaintext.end());
+      OnApplication(std::string_view(
+          reinterpret_cast<const char*>(plaintext.data()), plaintext.size()));
+    }
+  }
+
+  void BuildFlight(ByteSpan hello) {
+    ++client_hellos;
+    Secret ephemeral_private{}, ephemeral_public{}, shared{};
+    X25519_keypair(ephemeral_public.data(), ephemeral_private.data());
+    auto key_share = HelloExtension(hello, 51);
+    auto auth_share = HelloExtension(hello, 0xff02);
+    ASSERT_EQ(key_share.size(), 38u);
+    ASSERT_EQ(auth_share.size(), 32u);
+    ASSERT_TRUE(X25519(shared.data(), ephemeral_private.data(),
+                       ByteSpan(key_share).subspan(6u).data()));
+    auto psk_extension = HelloExtension(hello, 41);
+    HelloExtension(hello, 42, &early_offered_);
+    const bool resumed =
+        resume_ticket && !psk_extension.empty() && !reject_ticket;
+    early_accepted_ = resumed && early_offered_ && accept_early_data;
+    if (resume_ticket && !psk_extension.empty()) {
+      ASSERT_GT(hello.size(), 35u);
+      Bytes binder_transcript;
+      Append(binder_transcript, Octets(httpps::kPreface));
+      Append(binder_transcript, hello.first(hello.size() - 35));
+      auto binder_key = httpps::Label(httpps::Mac(Secret{}, resume_ticket->psk),
+                                      "res binder", httpps::Hash({}), 32);
+      auto binder = httpps::Mac(httpps::Label(binder_key, "finished", {}, 32),
+                                httpps::Hash(binder_transcript));
+      EXPECT_TRUE(std::equal(binder.begin(), binder.end(), hello.end() - 32));
+      if (early_offered_) {
+        Bytes early_transcript;
+        Append(early_transcript, Octets(httpps::kPreface));
+        Append(early_transcript, hello);
+        early_receiver_ = std::make_unique<httpps::RecordCipher>(
+            httpps::Label(httpps::Mac(Secret{}, resume_ticket->psk),
+                          "c e traffic", httpps::Hash(early_transcript), 32));
+      }
+    }
+    auto early = httpps::Mac(Secret{}, resumed ? resume_ticket->psk : Secret{});
+    root_secret_ = httpps::Mac(
+        httpps::Label(early, "derived", httpps::Hash({}), 32), shared);
+    Bytes body(38);
+    body[0] = body[1] = 3;
+    body[35] = 0x13;
+    body[36] = 1;
+    Bytes extensions_body{0, 43, 0, 2, 4, 0, 0, 51, 0, 36, 0, 29, 0, 32};
+    Append(extensions_body, ephemeral_public);
+    if (resumed) {
+      extensions_body.insert(extensions_body.end(), {0, 41, 0, 2, 0, 0});
+    }
+    U16(body, extensions_body.size());
+    Append(body, extensions_body);
+    Bytes server_hello = Frame(2, body);
+    Append(transcript_, Octets(httpps::kPreface));
+    Append(transcript_, hello);
+    Append(transcript_, server_hello);
+    auto client_secret = httpps::Label(root_secret_, "c hs traffic",
+                                       httpps::Hash(transcript_), 32);
+    std::copy(client_secret.begin(), client_secret.end(), c_hs_.begin());
+    auto server_secret = httpps::Label(root_secret_, "s hs traffic",
+                                       httpps::Hash(transcript_), 32);
+    receiver_ = std::make_unique<httpps::RecordCipher>(client_secret);
+    sender_ = std::make_unique<httpps::RecordCipher>(server_secret);
+    Bytes wire{22, 3, 3, 0, static_cast<uint8_t>(server_hello.size())};
+    Append(wire, server_hello);
+    server_bytes_.append(wire.begin(), wire.end());
+
+    Bytes extensions = {0, 19, 0,   0,   0,   0,   0,   16,  0,   11, 0,
+                        9, 8,  'h', 't', 't', 'p', '/', '1', '.', '1'};
+    if (early_accepted_) {
+      extensions[1] += 4;
+      extensions.insert(extensions.end(), {0, 42, 0, 0});
+    }
+    Bytes flight = Frame(8, extensions);
+    Append(transcript_, flight);
+    if (!resumed) {
+      std::string certificate = chain_[0]->GetDER();
+      Bytes entry;
+      U24(entry, certificate.size());
+      Append(entry, Octets(certificate));
+      entry.insert(entry.end(), {0, 0});
+      Bytes cert_body{0};
+      U24(cert_body, entry.size());
+      Append(cert_body, entry);
+      auto cert_frame = Frame(11, cert_body);
+      Append(transcript_, cert_frame);
+      Append(flight, cert_frame);
+      ASSERT_TRUE(
+          X25519(shared.data(), static_private_.data(), auth_share.data()));
+      auto salt = httpps::Label(root_secret_, "auth salt",
+                                httpps::Hash(transcript_), 32);
+      auto auth_root = httpps::Mac(salt, shared);
+      auto proof_key = httpps::Label(auth_root, "server mac", {}, 32);
+      Bytes proof_context(64, 0x20);
+      Append(proof_context, Octets("TLS 2.0, server CertificateVerify"));
+      proof_context.push_back(0);
+      Append(proof_context, httpps::Hash(transcript_));
+      Bytes proof_body{0xfe, 0, 0, 32};
+      Append(proof_body, httpps::Mac(proof_key, proof_context));
+      auto proof = Frame(15, proof_body);
+      Append(transcript_, proof);
+      Append(flight, proof);
+    }
+    auto finished =
+        Frame(20, httpps::Mac(httpps::Label(server_secret, "finished", {}, 32),
+                              httpps::Hash(transcript_)));
+    Append(transcript_, finished);
+    Append(flight, finished);
+    auto master = httpps::Mac(
+        httpps::Label(root_secret_, "derived", httpps::Hash({}), 32), Secret{});
+    c_app_ =
+        httpps::Label(master, "c ap traffic", httpps::Hash(transcript_), 32);
+    s_app_ =
+        httpps::Label(master, "s ap traffic", httpps::Hash(transcript_), 32);
+    ASSERT_TRUE(sender_->Seal(flight, 22, &wire));
+    if (tamper) {
+      wire.back() ^= 1;
+    }
+    server_bytes_.append(wire.begin(), wire.end());
+  }
+
+  std::array<std::unique_ptr<CertBuilder>, 2> chain_;
+  Secret static_private_{}, root_secret_{}, c_hs_{};
+  Bytes c_app_, s_app_;
+  Bytes input_, transcript_;
+  bool hello_ = true;
+  bool finished_ = true;
+  bool early_offered_ = false;
+  bool early_accepted_ = false;
+  bool server_flight_read_ = false;
+  std::string read_storage_, server_bytes_;
+  std::unique_ptr<httpps::RecordCipher> sender_, receiver_;
+  std::unique_ptr<httpps::RecordCipher> early_receiver_;
+};
+
+// The underlying TCP peer first acts as a proxy, then forwards opaque bytes to
+// Peer. The real Chromium proxy sockets must finish their tunnel negotiation
+// before HttppsClientSocket can emit a ClientHello or any HTTP application
+// data.
+class TunnelPeer : public Peer {
+ public:
+  enum class Kind { kHttp, kSocks5 };
+
+  explicit TunnelPeer(Kind kind) : kind_(kind) {}
+
+  MockRead OnRead() override {
+    if (close_before_response) {
+      return MockRead(ASYNC, 0);
+    }
+    if (!response_.empty()) {
+      proxy_read_storage_ = response_.substr(0, read_chunk);
+      response_.erase(0, proxy_read_storage_.size());
+      return MockRead(mode, std::string_view(proxy_read_storage_));
+    }
+    if (stage_ != 2) {
+      return MockRead(ASYNC, ERR_IO_PENDING);
+    }
+    return Peer::OnRead();
+  }
+
+  MockWriteResult OnWrite(const std::string& bytes) override {
+    if (stage_ == 2) {
+      ++tunneled_writes;
+      return Peer::OnWrite(bytes);
+    }
+    size_t length = std::min(write_chunk, bytes.size());
+    request_.append(bytes.data(), length);
+    if (kind_ == Kind::kHttp && request_.ends_with("\r\n\r\n")) {
+      requests.push_back(request_);
+      EXPECT_TRUE(request_.starts_with("CONNECT localhost:343 HTTP/1.1\r\n"));
+      EXPECT_NE(std::string::npos,
+                request_.find("\r\nHost: localhost:343\r\n"));
+      request_.clear();
+      response_ = http_response;
+      if (response_.starts_with("HTTP/1.1 200 ")) {
+        stage_ = 2;
+      }
+    } else if (kind_ == Kind::kSocks5 && stage_ == 0 && request_.size() == 3) {
+      EXPECT_EQ(std::string("\x05\x01\x00", 3), request_);
+      requests.push_back(request_);
+      request_.clear();
+      response_.assign("\x05\x00", 2);
+      stage_ = 1;
+    } else if (kind_ == Kind::kSocks5 && stage_ == 1 && request_.size() == 16) {
+      // SOCKS5 forwards the hostname to the proxy, including the experimental
+      // default port 343 (0x0157), instead of resolving the origin locally.
+      EXPECT_EQ(std::string("\x05\x01\x00\x03\x09localhost\x01\x57", 16),
+                request_);
+      requests.push_back(request_);
+      request_.clear();
+      response_.assign("\x05\x00\x00\x01\x7f\x00\x00\x01\x01\x57", 10);
+      response_[1] = socks_reply;
+      stage_ = socks_reply == 0 ? 2 : 3;
+    }
+    return MockWriteResult(mode, static_cast<int>(length));
+  }
+
+  bool AllReadDataConsumed() const override {
+    return response_.empty() && Peer::AllReadDataConsumed();
+  }
+
+  bool AllWriteDataConsumed() const override {
+    return request_.empty() && Peer::AllWriteDataConsumed();
+  }
+
+  std::string http_response = "HTTP/1.1 200 Connection Established\r\n\r\n";
+  uint8_t socks_reply = 0;
+  bool close_before_response = false;
+  int tunneled_writes = 0;
+  std::vector<std::string> requests;
+
+ private:
+  void Reset() override {
+    Peer::Reset();
+    stage_ = 0;
+    tunneled_writes = 0;
+    request_.clear();
+    response_.clear();
+    proxy_read_storage_.clear();
+    requests.clear();
+  }
+
+  const Kind kind_;
+  int stage_ = 0;
+  std::string request_, response_, proxy_read_storage_;
+};
+
+// A real HTTPPS proxy peer: decrypt the outer channel, process CONNECT, then
+// relay the inner encrypted channel without interpreting its application data.
+// The proxy and origin have independent certificates, keys and record counters.
+class SecureProxyPeer : public Peer {
+ public:
+  SecureProxyPeer() : Peer(/*key_offset=*/64) {
+    origin.mode = SYNCHRONOUS;
+    origin.read_chunk = 20000;
+    origin.write_chunk = 20000;
+  }
+
+  TunnelPeer origin{TunnelPeer::Kind::kHttp};
+
+  void FlushOrigin() {
+    while (!origin.AllReadDataConsumed()) {
+      MockRead next = origin.OnRead();
+      ASSERT_FALSE(next.data.empty());
+      Application(next.data);
+    }
+  }
+
+ private:
+  void OnApplication(std::string_view plaintext) override {
+    size_t offset = 0;
+    while (offset < plaintext.size()) {
+      MockWriteResult written =
+          origin.OnWrite(std::string(plaintext.substr(offset)));
+      ASSERT_GT(written.result, 0);
+      offset += written.result;
+    }
+    FlushOrigin();
+  }
+};
+
+// Holds a verifier result until a test explicitly completes or cancels it.
+// The request lifetime has the same cancellation semantics as CertVerifier.
+class DeferredCertVerifier : public MockCertVerifier {
+ public:
+  int Verify(const RequestParams& params,
+             CertVerifyResult* result,
+             CompletionOnceCallback callback,
+             std::unique_ptr<Request>* request,
+             const NetLogWithSource& net_log) override {
+    EXPECT_FALSE(active);
+    active = true;
+    result->verified_cert = params.certificate();
+    result->cert_status = 0;
+    callback_ = std::move(callback);
+    *request = std::make_unique<PendingRequest>(base::BindOnce(
+        &DeferredCertVerifier::Cancel, weak_factory_.GetWeakPtr()));
+    return ERR_IO_PENDING;
+  }
+
+  void Complete(int result) {
+    ASSERT_TRUE(active);
+    std::move(callback_).Run(result);
+  }
+
+  bool active = false;
+
+ private:
+  class PendingRequest : public Request {
+   public:
+    explicit PendingRequest(base::OnceClosure cancellation)
+        : cancellation_(std::move(cancellation)) {}
+
+   private:
+    base::ScopedClosureRunner cancellation_;
+  };
+  void Cancel() {
+    active = false;
+    callback_.Reset();
+  }
+  CompletionOnceCallback callback_;
+  base::WeakPtrFactory<DeferredCertVerifier> weak_factory_{this};
+};
+
+class HttppsClientSocketTest : public testing::Test {
+ protected:
+  std::unique_ptr<HttppsClientSocket> Make(
+      bool trust = true,
+      CertVerifier* verifier = nullptr,
+      std::optional<httpps::SessionTicket> session = std::nullopt,
+      bool early_data = false) {
+    auto tcp = std::make_unique<MockTCPClientSocket>(
+        AddressList::CreateFromIPAddress(IPAddress::IPv4Localhost(), 343),
+        nullptr, &peer_);
+    TestCompletionCallback connected;
+    EXPECT_EQ(OK, tcp->Connect(connected.callback()));
+    return std::make_unique<HttppsClientSocket>(
+        std::move(tcp), HostPortPair("localhost", 343),
+        trust ? std::vector<std::string>{peer_.root}
+              : std::vector<std::string>{},
+        verifier, std::move(session),
+        base::RepeatingCallback<void(httpps::SessionTicket)>(), early_data);
+  }
+  base::test::TaskEnvironment tasks_{
+      base::test::TaskEnvironment::TimeSource::MOCK_TIME};
+  Peer peer_;
+};
+
+class HttppsClientSocketProxyTest : public testing::Test {
+ protected:
+  std::unique_ptr<StreamSocket> MakeTransport(Peer& peer) {
+    auto tcp = std::make_unique<MockTCPClientSocket>(
+        AddressList::CreateFromIPAddress(IPAddress::IPv4Localhost(), 8080),
+        nullptr, &peer);
+    TestCompletionCallback connected;
+    EXPECT_EQ(OK, tcp->Connect(connected.callback()));
+    return tcp;
+  }
+
+  std::unique_ptr<HttpProxyClientSocket> MakeHttpTunnel(TunnelPeer& peer) {
+    auto auth = base::MakeRefCounted<HttpAuthController>(
+        HttpAuth::AUTH_PROXY, GURL("http://proxy.test:8080"),
+        NetworkAnonymizationKey(), &auth_cache_, auth_factory_.get(),
+        &resolver_);
+    return std::make_unique<HttpProxyClientSocket>(
+        MakeTransport(peer), /*user_agent=*/"", HostPortPair("localhost", 343),
+        ProxyChain(ProxyServer::SCHEME_HTTP, HostPortPair("proxy.test", 8080)),
+        /*proxy_chain_index=*/0, std::move(auth), /*proxy_delegate=*/nullptr,
+        TRAFFIC_ANNOTATION_FOR_TESTS);
+  }
+
+  std::unique_ptr<HttppsClientSocket> WrapTunnel(
+      std::unique_ptr<StreamSocket> tunnel,
+      const TunnelPeer& peer) {
+    return std::make_unique<HttppsClientSocket>(
+        std::move(tunnel), HostPortPair("localhost", 343),
+        std::vector<std::string>{peer.root});
+  }
+
+  void ExchangeApplication(HttppsClientSocket& socket,
+                           TunnelPeer& peer,
+                           base::RepeatingClosure flush_peer = {}) {
+    TestCompletionCallback connect;
+    ASSERT_EQ(OK, connect.GetResult(socket.Connect(connect.callback())));
+    EXPECT_EQ(1, peer.client_hellos);
+    EXPECT_EQ(NextProto::kProtoHTTP11, socket.GetNegotiatedProtocol());
+    auto request = base::MakeRefCounted<StringIOBuffer>(
+        "GET / HTTP/1.1\r\nHost: localhost:343\r\n\r\n");
+    TestCompletionCallback write;
+    ASSERT_EQ(request->size(),
+              write.GetResult(socket.Write(request.get(), request->size(),
+                                           write.callback(),
+                                           TRAFFIC_ANNOTATION_FOR_TESTS)));
+    EXPECT_EQ(std::string(request->data(), request->size()),
+              peer.received_application);
+    constexpr std::string_view kResponse =
+        "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nOK";
+    peer.Application(kResponse, /*close=*/true);
+    if (flush_peer) {
+      flush_peer.Run();
+    }
+    auto buffer = base::MakeRefCounted<IOBufferWithSize>(100);
+    TestCompletionCallback read;
+    int result = socket.Read(buffer.get(), buffer->size(), read.callback());
+    ASSERT_EQ(static_cast<int>(kResponse.size()), read.GetResult(result));
+    EXPECT_EQ(kResponse, std::string_view(buffer->data(), kResponse.size()));
+    result = socket.Read(buffer.get(), buffer->size(), read.callback());
+    EXPECT_EQ(0, read.GetResult(result));
+  }
+
+  base::test::TaskEnvironment tasks_;
+  HttpAuthCache auth_cache_{false};
+  std::unique_ptr<HttpAuthHandlerRegistryFactory> auth_factory_ =
+      HttpAuthHandlerFactory::CreateDefault();
+  MockHostResolver resolver_;
+};
+
+TEST_F(HttppsClientSocketProxyTest, ContextDoesNotFallBackToOtherRoleTrust) {
+  for (SessionUsage usage :
+       {SessionUsage::kDestination, SessionUsage::kProxy}) {
+    SCOPED_TRACE(static_cast<int>(usage));
+    Peer peer;
+    MockCertVerifier verifier;
+    verifier.set_default_result(ERR_CERT_AUTHORITY_INVALID);
+    TransportSecurityState security_state;
+    SSLClientContext context(/*ssl_config_service=*/nullptr, &verifier,
+                             &security_state,
+                             /*ssl_client_session_cache=*/nullptr,
+                             /*sct_auditing_delegate=*/nullptr);
+    // Only the opposite role trusts this peer. The selected role must ask the
+    // shared HTTPS verifier, whose rejection must not fall back to that CA.
+    if (usage == SessionUsage::kDestination) {
+      context.SetHttppsProxyTrustAnchors({peer.root});
+    } else {
+      context.SetHttppsTrustAnchors({peer.root});
+    }
+    SSLConfig config;
+    config.is_httpps = true;
+    config.session_usage = usage;
+    auto socket = context.CreateSSLClientSocket(
+        MakeTransport(peer), HostPortPair("localhost", 343), config);
+    TestCompletionCallback connect;
+    EXPECT_EQ(ERR_SSL_SERVER_CERT_BAD_FORMAT,
+              connect.GetResult(socket->Connect(connect.callback())));
+    EXPECT_EQ(1, peer.client_hellos);
+    EXPECT_EQ(0, peer.client_finished);
+    EXPECT_FALSE(socket->IsConnected());
+    EXPECT_TRUE(peer.received_application.empty());
+  }
+}
+
+TEST_F(HttppsClientSocketProxyTest, ContextSelectsIndependentRoleTrustStores) {
+  struct TestCase {
+    const char* description;
+    SessionUsage usage;
+    bool proxy_peer;
+    int expected;
+  };
+  const TestCase cases[] = {
+      {"origin trusts origin CA", SessionUsage::kDestination, false, OK},
+      {"proxy trusts proxy CA", SessionUsage::kProxy, true, OK},
+      {"origin rejects proxy CA", SessionUsage::kDestination, true,
+       ERR_SSL_SERVER_CERT_BAD_FORMAT},
+      {"proxy rejects origin CA", SessionUsage::kProxy, false,
+       ERR_SSL_SERVER_CERT_BAD_FORMAT},
+  };
+  for (const TestCase& test : cases) {
+    SCOPED_TRACE(test.description);
+    Peer origin;
+    Peer proxy(/*key_offset=*/64);
+    Peer& peer = test.proxy_peer ? proxy : origin;
+    MockCertVerifier verifier;
+    verifier.set_default_result(ERR_CERT_AUTHORITY_INVALID);
+    TransportSecurityState security_state;
+    SSLClientContext context(/*ssl_config_service=*/nullptr, &verifier,
+                             &security_state,
+                             /*ssl_client_session_cache=*/nullptr,
+                             /*sct_auditing_delegate=*/nullptr);
+    context.SetHttppsTrustAnchors({origin.root});
+    context.SetHttppsProxyTrustAnchors({proxy.root});
+    SSLConfig config;
+    config.is_httpps = true;
+    config.session_usage = test.usage;
+    // Every case uses exactly the same host and port: role alone determines
+    // which trust store is allowed to authenticate the peer.
+    auto socket = context.CreateSSLClientSocket(
+        MakeTransport(peer), HostPortPair("localhost", 343), config);
+    TestCompletionCallback connect;
+    EXPECT_EQ(test.expected,
+              connect.GetResult(socket->Connect(connect.callback())));
+    EXPECT_EQ(1, peer.client_hellos);
+    EXPECT_EQ(test.expected == OK ? 1 : 0, peer.client_finished);
+    EXPECT_EQ(test.expected == OK, socket->IsConnected());
+  }
+}
+
+TEST_F(HttppsClientSocketProxyTest, CertificateExceptionsCannotBypassBrowser) {
+  for (SessionUsage usage :
+       {SessionUsage::kDestination, SessionUsage::kProxy}) {
+    Peer peer;
+    ParamRecordingMockCertVerifier verifier;
+    verifier.set_async(true);
+    verifier.set_default_result(ERR_CERT_AUTHORITY_INVALID);
+    TransportSecurityState security_state;
+    SSLClientContext context(nullptr, &verifier, &security_state, nullptr,
+                             nullptr);
+    SSLConfig config;
+    config.is_httpps = true;
+    config.session_usage = usage;
+    config.ignore_certificate_errors = true;
+    config.allowed_bad_certs.emplace_back(peer.certificate(),
+                                          CERT_STATUS_AUTHORITY_INVALID);
+    auto socket = context.CreateSSLClientSocket(
+        MakeTransport(peer), HostPortPair("localhost", 343), config);
+    TestCompletionCallback connect;
+    EXPECT_EQ(ERR_SSL_SERVER_CERT_BAD_FORMAT,
+              connect.GetResult(socket->Connect(connect.callback())));
+    EXPECT_EQ(1u, verifier.GetVerifyParams().size());
+    EXPECT_EQ(0, peer.client_finished);
+    EXPECT_FALSE(socket->IsConnected());
+    EXPECT_TRUE(peer.received_application.empty());
+  }
+}
+
+TEST_F(HttppsClientSocketProxyTest, HttpConnectCarriesEncryptedApplication) {
+  TunnelPeer peer(TunnelPeer::Kind::kHttp);
+  auto tunnel = MakeHttpTunnel(peer);
+  TestCompletionCallback connect;
+  ASSERT_EQ(OK, connect.GetResult(tunnel->Connect(connect.callback())));
+  ASSERT_EQ(1u, peer.requests.size());
+  EXPECT_EQ(0, peer.client_hellos);
+  EXPECT_EQ(0, peer.tunneled_writes);
+  auto socket = WrapTunnel(std::move(tunnel), peer);
+  ExchangeApplication(*socket, peer);
+}
+
+TEST_F(HttppsClientSocketProxyTest, Socks5ConnectCarriesEncryptedApplication) {
+  TunnelPeer peer(TunnelPeer::Kind::kSocks5);
+  auto tunnel = std::make_unique<SOCKS5ClientSocket>(
+      MakeTransport(peer), HostPortPair("localhost", 343),
+      TRAFFIC_ANNOTATION_FOR_TESTS);
+  TestCompletionCallback connect;
+  ASSERT_EQ(OK, connect.GetResult(tunnel->Connect(connect.callback())));
+  ASSERT_EQ(2u, peer.requests.size());
+  EXPECT_EQ(0, peer.client_hellos);
+  EXPECT_EQ(0, peer.tunneled_writes);
+  auto socket = WrapTunnel(std::move(tunnel), peer);
+  ExchangeApplication(*socket, peer);
+}
+
+TEST_F(HttppsClientSocketProxyTest,
+       HttppsProxyAndOriginUseIndependentChannels) {
+  SecureProxyPeer peer;
+  auto proxy_channel = std::make_unique<HttppsClientSocket>(
+      MakeTransport(peer), HostPortPair("localhost", 343),
+      std::vector<std::string>{peer.root});
+  TestCompletionCallback connect;
+  ASSERT_EQ(OK, connect.GetResult(proxy_channel->Connect(connect.callback())));
+  EXPECT_EQ(1, peer.client_hellos);
+  EXPECT_EQ(0, peer.origin.client_hellos);
+  EXPECT_TRUE(peer.received_application.empty());
+
+  auto auth = base::MakeRefCounted<HttpAuthController>(
+      HttpAuth::AUTH_PROXY, GURL("httpps://localhost:343"),
+      NetworkAnonymizationKey(), &auth_cache_, auth_factory_.get(), &resolver_);
+  auto tunnel = std::make_unique<HttpProxyClientSocket>(
+      std::move(proxy_channel), /*user_agent=*/"",
+      HostPortPair("localhost", 343),
+      ProxyChain(ProxyServer::SCHEME_HTTPPS, HostPortPair("localhost", 343)),
+      /*proxy_chain_index=*/0, std::move(auth), /*proxy_delegate=*/nullptr,
+      TRAFFIC_ANNOTATION_FOR_TESTS);
+  ASSERT_EQ(OK, connect.GetResult(tunnel->Connect(connect.callback())));
+  ASSERT_EQ(1u, peer.origin.requests.size());
+  EXPECT_EQ(0, peer.origin.client_hellos);
+  auto origin_channel = WrapTunnel(std::move(tunnel), peer.origin);
+  ExchangeApplication(*origin_channel, peer.origin,
+                      base::BindLambdaForTesting([&] { peer.FlushOrigin(); }));
+  EXPECT_EQ(1, peer.client_hellos);
+  EXPECT_EQ(1, peer.origin.client_hellos);
+  EXPECT_EQ(std::string::npos,
+            peer.received_application.find("GET / HTTP/1.1"));
+}
+
+TEST_F(HttppsClientSocketProxyTest, UntrustedHttppsProxyNeverReceivesConnect) {
+  SecureProxyPeer peer;
+  auto proxy_channel = std::make_unique<HttppsClientSocket>(
+      MakeTransport(peer), HostPortPair("localhost", 343),
+      // Trusting the origin does not implicitly trust the proxy's certificate.
+      std::vector<std::string>{peer.origin.root});
+  TestCompletionCallback connect;
+  EXPECT_EQ(ERR_SSL_SERVER_CERT_BAD_FORMAT,
+            connect.GetResult(proxy_channel->Connect(connect.callback())));
+  EXPECT_FALSE(proxy_channel->IsConnected());
+  EXPECT_EQ(1, peer.client_hellos);
+  EXPECT_EQ(0, peer.origin.client_hellos);
+  EXPECT_TRUE(peer.received_application.empty());
+  EXPECT_TRUE(peer.origin.requests.empty());
+}
+
+TEST_F(HttppsClientSocketProxyTest, ProxyAuthCompletesBeforeHttppsHandshake) {
+  TunnelPeer peer(TunnelPeer::Kind::kHttp);
+  peer.http_response =
+      "HTTP/1.1 407 Proxy Authentication Required\r\n"
+      "Proxy-Authenticate: Basic realm=\"tunnel\"\r\n"
+      "Content-Length: 0\r\n\r\n";
+  auto tunnel = MakeHttpTunnel(peer);
+  TestCompletionCallback connect;
+  ASSERT_EQ(ERR_PROXY_AUTH_REQUESTED,
+            connect.GetResult(tunnel->Connect(connect.callback())));
+  EXPECT_FALSE(tunnel->IsConnected());
+  ASSERT_EQ(1u, peer.requests.size());
+  EXPECT_EQ(std::string::npos, peer.requests[0].find("Proxy-Authorization:"));
+  EXPECT_EQ(0, peer.client_hellos);
+  EXPECT_EQ(0, peer.tunneled_writes);
+
+  peer.http_response = "HTTP/1.1 200 Connection Established\r\n\r\n";
+  tunnel->GetAuthController()->ResetAuth(AuthCredentials(u"user", u"password"));
+  ASSERT_EQ(OK, connect.GetResult(tunnel->RestartWithAuth(connect.callback())));
+  ASSERT_EQ(2u, peer.requests.size());
+  EXPECT_NE(std::string::npos,
+            peer.requests[1].find(
+                "Proxy-Authorization: Basic dXNlcjpwYXNzd29yZA==\r\n"));
+  EXPECT_EQ(0, peer.client_hellos);
+  auto socket = WrapTunnel(std::move(tunnel), peer);
+  ExchangeApplication(*socket, peer);
+  EXPECT_EQ(std::string::npos,
+            peer.received_application.find("Proxy-Authorization"));
+}
+
+TEST_F(HttppsClientSocketProxyTest, RejectedHttpTunnelNeverStartsHttpps) {
+  TunnelPeer peer(TunnelPeer::Kind::kHttp);
+  peer.http_response = "HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n";
+  auto tunnel = MakeHttpTunnel(peer);
+  TestCompletionCallback connect;
+  EXPECT_EQ(ERR_TUNNEL_CONNECTION_FAILED,
+            connect.GetResult(tunnel->Connect(connect.callback())));
+  auto socket = WrapTunnel(std::move(tunnel), peer);
+  EXPECT_EQ(ERR_SOCKET_NOT_CONNECTED, socket->Connect(connect.callback()));
+  EXPECT_EQ(0, peer.client_hellos);
+  EXPECT_EQ(0, peer.tunneled_writes);
+  EXPECT_TRUE(peer.received_application.empty());
+}
+
+TEST_F(HttppsClientSocketProxyTest, ClosedHttpTunnelNeverStartsHttpps) {
+  TunnelPeer peer(TunnelPeer::Kind::kHttp);
+  peer.close_before_response = true;
+  auto tunnel = MakeHttpTunnel(peer);
+  TestCompletionCallback connect;
+  EXPECT_LT(connect.GetResult(tunnel->Connect(connect.callback())), OK);
+  auto socket = WrapTunnel(std::move(tunnel), peer);
+  EXPECT_EQ(ERR_SOCKET_NOT_CONNECTED, socket->Connect(connect.callback()));
+  EXPECT_EQ(0, peer.client_hellos);
+  EXPECT_EQ(0, peer.tunneled_writes);
+}
+
+TEST_F(HttppsClientSocketProxyTest, RejectedSocksTunnelNeverStartsHttpps) {
+  TunnelPeer peer(TunnelPeer::Kind::kSocks5);
+  peer.socks_reply = 2;  // Connection not allowed by the proxy's ruleset.
+  auto tunnel = std::make_unique<SOCKS5ClientSocket>(
+      MakeTransport(peer), HostPortPair("localhost", 343),
+      TRAFFIC_ANNOTATION_FOR_TESTS);
+  TestCompletionCallback connect;
+  EXPECT_EQ(ERR_SOCKS_CONNECTION_FAILED,
+            connect.GetResult(tunnel->Connect(connect.callback())));
+  auto socket = WrapTunnel(std::move(tunnel), peer);
+  EXPECT_EQ(ERR_SOCKET_NOT_CONNECTED, socket->Connect(connect.callback()));
+  EXPECT_EQ(0, peer.client_hellos);
+  EXPECT_EQ(0, peer.tunneled_writes);
+}
+
+TEST_F(HttppsClientSocketTest, PartialAsyncHandshakeAndApplication) {
+  auto socket = Make();
+  TestCompletionCallback connect;
+  EXPECT_EQ(ERR_IO_PENDING, socket->Connect(connect.callback()));
+  EXPECT_EQ(OK, connect.WaitForResult());
+  EXPECT_TRUE(socket->IsConnected());
+  EXPECT_EQ(NextProto::kProtoHTTP11, socket->GetNegotiatedProtocol());
+  SSLInfo info;
+  EXPECT_TRUE(socket->GetSSLInfo(&info));
+  EXPECT_EQ(0, info.peer_signature_algorithm);
+  EXPECT_FALSE(info.is_issued_by_known_root);
+  EXPECT_EQ(0, info.connection_status >> 20);
+  peer_.Application("hello");
+  peer_.Application("");
+  peer_.Application("world", true);
+  auto buffer = base::MakeRefCounted<IOBufferWithSize>(100);
+  TestCompletionCallback read;
+  int result = socket->Read(buffer.get(), 100, read.callback());
+  EXPECT_EQ(5, read.GetResult(result));
+  EXPECT_EQ("hello", std::string(buffer->data(), 5));
+  result = socket->Read(buffer.get(), 100, read.callback());
+  EXPECT_EQ(5, read.GetResult(result));
+  EXPECT_EQ("world", std::string(buffer->data(), 5));
+  result = socket->Read(buffer.get(), 100, read.callback());
+  EXPECT_EQ(0, read.GetResult(result));
+}
+
+TEST_F(HttppsClientSocketTest, ResumptionWithoutEarlyDataCompletesHandshake) {
+  peer_.resume_ticket = peer_.Ticket();
+  auto socket = Make(true, nullptr, peer_.resume_ticket);
+  TestCompletionCallback connect;
+  ASSERT_EQ(OK, connect.GetResult(socket->Connect(connect.callback())));
+  EXPECT_EQ(1, peer_.client_finished);
+  EXPECT_EQ(0, peer_.end_of_early_data);
+  EXPECT_TRUE(peer_.received_early.empty());
+  SSLInfo info;
+  ASSERT_TRUE(socket->GetSSLInfo(&info));
+  EXPECT_EQ(SSLInfo::HANDSHAKE_RESUME, info.handshake_type);
+  EXPECT_FALSE(info.early_data_accepted);
+}
+
+TEST_F(HttppsClientSocketTest, EarlyDataWaitsForCachedCertificateVerification) {
+  peer_.resume_ticket = peer_.Ticket();
+  DeferredCertVerifier verifier;
+  auto socket = Make(false, &verifier, peer_.resume_ticket, true);
+  TestCompletionCallback connect;
+  ASSERT_EQ(ERR_IO_PENDING, socket->Connect(connect.callback()));
+  ASSERT_TRUE(verifier.active);
+  EXPECT_EQ(0, peer_.client_hellos);
+  auto request = base::MakeRefCounted<StringIOBuffer>("GET / HTTP/1.1\r\n\r\n");
+  TestCompletionCallback write;
+  EXPECT_EQ(ERR_SOCKET_NOT_CONNECTED,
+            socket->Write(request.get(), request->size(), write.callback(),
+                          TRAFFIC_ANNOTATION_FOR_TESTS));
+  verifier.Complete(OK);
+  ASSERT_EQ(OK, connect.WaitForResult());
+  EXPECT_EQ(1, peer_.client_hellos);
+  EXPECT_EQ(0, peer_.client_finished);
+  EXPECT_TRUE(socket->IsConnectedAndIdle());
+  ASSERT_EQ(request->size(),
+            write.GetResult(socket->Write(request.get(), request->size(),
+                                          write.callback(),
+                                          TRAFFIC_ANNOTATION_FOR_TESTS)));
+  EXPECT_EQ("GET / HTTP/1.1\r\n\r\n", peer_.received_early);
+  EXPECT_TRUE(peer_.received_application.empty());
+  TestCompletionCallback confirm;
+  ASSERT_EQ(OK,
+            confirm.GetResult(socket->ConfirmHandshake(confirm.callback())));
+  EXPECT_EQ(1, peer_.end_of_early_data);
+  EXPECT_EQ(1, peer_.client_finished);
+  SSLInfo info;
+  ASSERT_TRUE(socket->GetSSLInfo(&info));
+  EXPECT_TRUE(info.early_data_accepted);
+}
+
+TEST_F(HttppsClientSocketTest, EarlyDataRejectionDoesNotReplayApplication) {
+  for (bool reject_ticket : {false, true}) {
+    SCOPED_TRACE(reject_ticket);
+    peer_.resume_ticket = peer_.Ticket();
+    peer_.accept_early_data = false;
+    peer_.reject_ticket = reject_ticket;
+    auto socket = Make(true, nullptr, peer_.resume_ticket, true);
+    TestCompletionCallback connect;
+    ASSERT_EQ(OK, connect.GetResult(socket->Connect(connect.callback())));
+    auto request = base::MakeRefCounted<StringIOBuffer>("safe request");
+    TestCompletionCallback write;
+    ASSERT_EQ(request->size(),
+              write.GetResult(socket->Write(request.get(), request->size(),
+                                            write.callback(),
+                                            TRAFFIC_ANNOTATION_FOR_TESTS)));
+    EXPECT_EQ(static_cast<size_t>(request->size()),
+              peer_.discarded_early_bytes);
+    TestCompletionCallback confirm;
+    EXPECT_EQ(ERR_EARLY_DATA_REJECTED,
+              confirm.GetResult(socket->ConfirmHandshake(confirm.callback())));
+    EXPECT_FALSE(socket->IsConnected());
+    EXPECT_TRUE(peer_.received_early.empty());
+    EXPECT_TRUE(peer_.received_application.empty());
+    EXPECT_EQ(0, peer_.end_of_early_data);
+    tasks_.RunUntilIdle();
+  }
+}
+
+TEST_F(HttppsClientSocketTest,
+       ConfirmBeforeUnsafeWriteSendsNoEarlyApplication) {
+  peer_.resume_ticket = peer_.Ticket();
+  auto socket = Make(true, nullptr, peer_.resume_ticket, true);
+  TestCompletionCallback connect;
+  ASSERT_EQ(OK, connect.GetResult(socket->Connect(connect.callback())));
+  EXPECT_EQ(0, peer_.client_finished);
+  TestCompletionCallback confirm;
+  ASSERT_EQ(OK,
+            confirm.GetResult(socket->ConfirmHandshake(confirm.callback())));
+  EXPECT_EQ(1, peer_.client_finished);
+  EXPECT_EQ(1, peer_.end_of_early_data);
+  EXPECT_TRUE(peer_.received_early.empty());
+  auto request =
+      base::MakeRefCounted<StringIOBuffer>("POST / HTTP/1.1\r\n\r\n");
+  TestCompletionCallback write;
+  EXPECT_EQ(request->size(),
+            write.GetResult(socket->Write(request.get(), request->size(),
+                                          write.callback(),
+                                          TRAFFIC_ANNOTATION_FOR_TESTS)));
+  EXPECT_EQ("POST / HTTP/1.1\r\n\r\n", peer_.received_application);
+}
+
+TEST_F(HttppsClientSocketTest, ConfirmWaitsForPendingEarlyWrite) {
+  peer_.resume_ticket = peer_.Ticket();
+  auto socket = Make(true, nullptr, peer_.resume_ticket, true);
+  TestCompletionCallback connect;
+  ASSERT_EQ(OK, connect.GetResult(socket->Connect(connect.callback())));
+  auto request = base::MakeRefCounted<StringIOBuffer>("early request");
+  TestCompletionCallback write;
+  ASSERT_EQ(ERR_IO_PENDING,
+            socket->Write(request.get(), request->size(), write.callback(),
+                          TRAFFIC_ANNOTATION_FOR_TESTS));
+  TestCompletionCallback confirm;
+  ASSERT_EQ(ERR_IO_PENDING, socket->ConfirmHandshake(confirm.callback()));
+  EXPECT_FALSE(socket->IsConnectedAndIdle());
+  EXPECT_EQ(request->size(), write.WaitForResult());
+  EXPECT_EQ(OK, confirm.WaitForResult());
+  EXPECT_EQ("early request", peer_.received_early);
+  EXPECT_EQ(1, peer_.client_finished);
+}
+
+TEST_F(HttppsClientSocketTest, ConfirmAndReadShareOnePendingHandshake) {
+  for (bool read_first : {false, true}) {
+    SCOPED_TRACE(read_first);
+    peer_.resume_ticket = peer_.Ticket();
+    peer_.application_after_finished = "reply";
+    auto socket = Make(true, nullptr, peer_.resume_ticket, true);
+    TestCompletionCallback connect;
+    ASSERT_EQ(OK, connect.GetResult(socket->Connect(connect.callback())));
+    auto response = base::MakeRefCounted<IOBufferWithSize>(100);
+    TestCompletionCallback read;
+    TestCompletionCallback confirm;
+    if (read_first) {
+      ASSERT_EQ(ERR_IO_PENDING, socket->Read(response.get(), response->size(),
+                                             read.callback()));
+      ASSERT_EQ(ERR_IO_PENDING, socket->ConfirmHandshake(confirm.callback()));
+    } else {
+      ASSERT_EQ(ERR_IO_PENDING, socket->ConfirmHandshake(confirm.callback()));
+      ASSERT_EQ(ERR_IO_PENDING, socket->Read(response.get(), response->size(),
+                                             read.callback()));
+    }
+    EXPECT_EQ(OK, confirm.WaitForResult());
+    EXPECT_EQ(5, read.WaitForResult());
+    EXPECT_EQ("reply", std::string(response->data(), 5));
+    EXPECT_EQ(1, peer_.client_finished);
+    EXPECT_TRUE(peer_.received_early.empty());
+    EXPECT_TRUE(peer_.received_application.empty());
+  }
+}
+
+TEST_F(HttppsClientSocketTest,
+       WriteDuringConfirmationDoesNotInterleaveRecords) {
+  peer_.resume_ticket = peer_.Ticket();
+  auto socket = Make(true, nullptr, peer_.resume_ticket, true);
+  TestCompletionCallback connect;
+  ASSERT_EQ(OK, connect.GetResult(socket->Connect(connect.callback())));
+  // The server flight is read much faster than a write can finish. A new user
+  // write must not overwrite a pending Finished or be overwritten by it.
+  peer_.read_chunk = 20000;
+  peer_.write_chunk = 1;
+  TestCompletionCallback confirm;
+  ASSERT_EQ(ERR_IO_PENDING, socket->ConfirmHandshake(confirm.callback()));
+  auto request = base::MakeRefCounted<StringIOBuffer>(std::string(2048, 'x'));
+  TestCompletionCallback write;
+  ASSERT_EQ(ERR_IO_PENDING,
+            socket->Write(request.get(), request->size(), write.callback(),
+                          TRAFFIC_ANNOTATION_FOR_TESTS));
+  EXPECT_EQ(OK, confirm.WaitForResult());
+  EXPECT_EQ(request->size(), write.WaitForResult());
+  EXPECT_EQ(std::string(2048, 'x'), peer_.received_application);
+  EXPECT_TRUE(peer_.received_early.empty());
+  EXPECT_EQ(1, peer_.client_finished);
+}
+
+TEST_F(HttppsClientSocketTest, EarlyRejectionCompletesReadAndConfirmOnce) {
+  peer_.resume_ticket = peer_.Ticket();
+  peer_.accept_early_data = false;
+  auto socket = Make(true, nullptr, peer_.resume_ticket, true);
+  TestCompletionCallback connect;
+  ASSERT_EQ(OK, connect.GetResult(socket->Connect(connect.callback())));
+  auto request = base::MakeRefCounted<StringIOBuffer>("safe request");
+  TestCompletionCallback write;
+  ASSERT_EQ(request->size(),
+            write.GetResult(socket->Write(request.get(), request->size(),
+                                          write.callback(),
+                                          TRAFFIC_ANNOTATION_FOR_TESTS)));
+  auto response = base::MakeRefCounted<IOBufferWithSize>(100);
+  TestCompletionCallback read;
+  TestCompletionCallback confirm;
+  ASSERT_EQ(ERR_IO_PENDING,
+            socket->Read(response.get(), response->size(), read.callback()));
+  ASSERT_EQ(ERR_IO_PENDING, socket->ConfirmHandshake(confirm.callback()));
+  EXPECT_EQ(ERR_EARLY_DATA_REJECTED, confirm.WaitForResult());
+  EXPECT_EQ(ERR_EARLY_DATA_REJECTED, read.WaitForResult());
+  EXPECT_TRUE(peer_.received_application.empty());
+  EXPECT_FALSE(socket->IsConnected());
+  tasks_.RunUntilIdle();
+}
+
+TEST_F(HttppsClientSocketTest, ConfirmCallbackCanDestroyPendingReader) {
+  peer_.resume_ticket = peer_.Ticket();
+  auto socket = Make(true, nullptr, peer_.resume_ticket, true);
+  TestCompletionCallback connect;
+  ASSERT_EQ(OK, connect.GetResult(socket->Connect(connect.callback())));
+  auto response = base::MakeRefCounted<IOBufferWithSize>(100);
+  int reads = 0;
+  int confirmations = 0;
+  ASSERT_EQ(ERR_IO_PENDING,
+            socket->Read(response.get(), response->size(),
+                         base::BindLambdaForTesting([&](int) { ++reads; })));
+  ASSERT_EQ(ERR_IO_PENDING, socket->ConfirmHandshake(
+                                base::BindLambdaForTesting([&](int result) {
+                                  EXPECT_EQ(OK, result);
+                                  ++confirmations;
+                                  socket.reset();
+                                })));
+  tasks_.RunUntilIdle();
+  EXPECT_EQ(1, confirmations);
+  EXPECT_EQ(0, reads);
+  EXPECT_FALSE(socket);
+}
+
+TEST_F(HttppsClientSocketTest, ConnectCallbackCanStartPendingApplicationRead) {
+  auto socket = Make();
+  auto response = base::MakeRefCounted<IOBufferWithSize>(100);
+  TestCompletionCallback read;
+  int confirmations = 0;
+  ASSERT_EQ(ERR_IO_PENDING,
+            socket->Connect(base::BindLambdaForTesting([&](int result) {
+              ASSERT_EQ(OK, result);
+              ++confirmations;
+              EXPECT_EQ(ERR_IO_PENDING,
+                        socket->Read(response.get(), response->size(),
+                                     read.callback()));
+            })));
+  tasks_.RunUntilIdle();
+  EXPECT_EQ(1, confirmations);
+  EXPECT_FALSE(read.have_result());
+  ASSERT_TRUE(socket->IsConnected());
+  peer_.Application("reply");
+  peer_.socket()->OnReadComplete(peer_.OnRead());
+  EXPECT_EQ(5, read.WaitForResult());
+  EXPECT_EQ("reply", std::string(response->data(), 5));
+}
+
+TEST_F(HttppsClientSocketTest, CachedVerificationSharesHandshakeDeadline) {
+  peer_.resume_ticket = peer_.Ticket();
+  DeferredCertVerifier verifier;
+  auto socket = Make(false, &verifier, peer_.resume_ticket, true);
+  TestCompletionCallback connect;
+  ASSERT_EQ(ERR_IO_PENDING, socket->Connect(connect.callback()));
+  ASSERT_TRUE(verifier.active);
+  tasks_.FastForwardBy(base::Seconds(30));
+  EXPECT_EQ(ERR_TIMED_OUT, connect.WaitForResult());
+  EXPECT_FALSE(verifier.active);
+  EXPECT_EQ(0, peer_.client_hellos);
+  EXPECT_FALSE(socket->IsConnected());
+}
+
+TEST_F(HttppsClientSocketTest, MalformedCachedChainNeverAuthorizesEarlyData) {
+  peer_.resume_ticket = peer_.Ticket();
+  auto cached = *peer_.resume_ticket;
+  cached.certificates = {"not a certificate"};
+  auto socket = Make(true, nullptr, std::move(cached), true);
+  TestCompletionCallback connect;
+  ASSERT_EQ(OK, connect.GetResult(socket->Connect(connect.callback())));
+  EXPECT_EQ(1, peer_.client_finished);
+  EXPECT_EQ(0, peer_.end_of_early_data);
+  EXPECT_TRUE(peer_.received_early.empty());
+  SSLInfo info;
+  ASSERT_TRUE(socket->GetSSLInfo(&info));
+  EXPECT_EQ(SSLInfo::HANDSHAKE_FULL, info.handshake_type);
+  EXPECT_FALSE(info.early_data_accepted);
+}
+
+TEST_F(HttppsClientSocketTest, EarlyConnectStillHasAbsoluteHandshakeDeadline) {
+  peer_.resume_ticket = peer_.Ticket();
+  auto socket = Make(true, nullptr, peer_.resume_ticket, true);
+  TestCompletionCallback connect;
+  ASSERT_EQ(OK, connect.GetResult(socket->Connect(connect.callback())));
+  EXPECT_EQ(0, peer_.client_finished);
+  tasks_.FastForwardBy(base::Seconds(30));
+  EXPECT_FALSE(socket->IsConnected());
+  TestCompletionCallback confirm;
+  EXPECT_EQ(ERR_TIMED_OUT, socket->ConfirmHandshake(confirm.callback()));
+}
+
+TEST_F(HttppsClientSocketTest, BrowserVerifierSyncAndAsyncShareTrustPolicy) {
+  for (bool asynchronous : {false, true}) {
+    SCOPED_TRACE(asynchronous);
+    peer_.mode = SYNCHRONOUS;
+    peer_.read_chunk = peer_.write_chunk = 20000;
+    ParamRecordingMockCertVerifier verifier;
+    verifier.set_async(asynchronous);
+    CertVerifyResult verified;
+    verified.verified_cert = peer_.certificate();
+    verified.is_issued_by_known_root = true;
+    verifier.AddResultForCert(verified.verified_cert, verified, OK);
+    auto socket = Make(/*trust=*/false, &verifier);
+    TestCompletionCallback callback;
+    int result = socket->Connect(callback.callback());
+    if (asynchronous) {
+      EXPECT_EQ(ERR_IO_PENDING, result);
+      EXPECT_EQ(0, peer_.client_finished);
+      EXPECT_FALSE(socket->IsConnected());
+    }
+    ASSERT_EQ(OK, callback.GetResult(result));
+    EXPECT_EQ(1, peer_.client_finished);
+    ASSERT_EQ(1u, verifier.GetVerifyParams().size());
+    const auto& params = verifier.GetVerifyParams()[0];
+    EXPECT_EQ("localhost", params.hostname());
+    EXPECT_EQ(CertVerifier::VERIFY_HTTPPS_SERVER |
+                  CertVerifier::VERIFY_DISABLE_NETWORK_FETCHES,
+              params.flags());
+    SSLInfo info;
+    ASSERT_TRUE(socket->GetSSLInfo(&info));
+    EXPECT_TRUE(info.is_issued_by_known_root);
+    EXPECT_EQ(verified.verified_cert, info.cert);
+    auto request = base::MakeRefCounted<StringIOBuffer>("request");
+    TestCompletionCallback write;
+    EXPECT_EQ(request->size(),
+              write.GetResult(socket->Write(request.get(), request->size(),
+                                            write.callback(),
+                                            TRAFFIC_ANNOTATION_FOR_TESTS)));
+    EXPECT_EQ("request", peer_.received_application);
+  }
+}
+
+TEST_F(HttppsClientSocketTest,
+       BrowserRejectionCannotSendFinishedOrApplication) {
+  for (bool asynchronous : {false, true}) {
+    SCOPED_TRACE(asynchronous);
+    ParamRecordingMockCertVerifier verifier;
+    verifier.set_async(asynchronous);
+    verifier.set_default_result(ERR_CERT_AUTHORITY_INVALID);
+    auto socket = Make(/*trust=*/false, &verifier);
+    TestCompletionCallback callback;
+    EXPECT_EQ(ERR_SSL_SERVER_CERT_BAD_FORMAT,
+              callback.GetResult(socket->Connect(callback.callback())));
+    EXPECT_EQ(1u, verifier.GetVerifyParams().size());
+    EXPECT_EQ(1, peer_.client_hellos);
+    EXPECT_EQ(0, peer_.client_finished);
+    EXPECT_FALSE(socket->IsConnected());
+    auto request = base::MakeRefCounted<StringIOBuffer>("must not leave");
+    TestCompletionCallback write;
+    EXPECT_LT(socket->Write(request.get(), request->size(), write.callback(),
+                            TRAFFIC_ANNOTATION_FOR_TESTS),
+              0);
+    EXPECT_TRUE(peer_.received_application.empty());
+    tasks_.RunUntilIdle();
+  }
+}
+
+TEST_F(HttppsClientSocketTest, PendingBrowserVerificationBlocksApplication) {
+  peer_.mode = SYNCHRONOUS;
+  peer_.read_chunk = peer_.write_chunk = 20000;
+  DeferredCertVerifier verifier;
+  auto socket = Make(/*trust=*/false, &verifier);
+  TestCompletionCallback connect;
+  ASSERT_EQ(ERR_IO_PENDING, socket->Connect(connect.callback()));
+  ASSERT_TRUE(verifier.active);
+  EXPECT_EQ(0, peer_.client_finished);
+  EXPECT_FALSE(socket->IsConnected());
+  auto request = base::MakeRefCounted<StringIOBuffer>("blocked");
+  TestCompletionCallback write;
+  EXPECT_EQ(ERR_SOCKET_NOT_CONNECTED,
+            socket->Write(request.get(), request->size(), write.callback(),
+                          TRAFFIC_ANNOTATION_FOR_TESTS));
+  EXPECT_TRUE(peer_.received_application.empty());
+  verifier.Complete(OK);
+  EXPECT_EQ(OK, connect.WaitForResult());
+  EXPECT_FALSE(verifier.active);
+  EXPECT_EQ(1, peer_.client_finished);
+  EXPECT_TRUE(socket->IsConnected());
+}
+
+TEST_F(HttppsClientSocketTest, BrowserVerificationCancelledOnDisconnect) {
+  peer_.mode = SYNCHRONOUS;
+  peer_.read_chunk = peer_.write_chunk = 20000;
+  DeferredCertVerifier verifier;
+  auto socket = Make(/*trust=*/false, &verifier);
+  int callbacks = 0;
+  ASSERT_EQ(
+      ERR_IO_PENDING,
+      socket->Connect(base::BindLambdaForTesting([&](int) { ++callbacks; })));
+  ASSERT_TRUE(verifier.active);
+  socket->Disconnect();
+  EXPECT_FALSE(verifier.active);
+  tasks_.FastForwardBy(base::Minutes(1));
+  EXPECT_EQ(0, callbacks);
+  EXPECT_EQ(0, peer_.client_finished);
+}
+
+TEST_F(HttppsClientSocketTest, BrowserVerificationSharesHandshakeDeadline) {
+  peer_.mode = SYNCHRONOUS;
+  peer_.read_chunk = peer_.write_chunk = 20000;
+  DeferredCertVerifier verifier;
+  auto socket = Make(/*trust=*/false, &verifier);
+  TestCompletionCallback callback;
+  ASSERT_EQ(ERR_IO_PENDING, socket->Connect(callback.callback()));
+  ASSERT_TRUE(verifier.active);
+  tasks_.FastForwardBy(base::Seconds(30));
+  EXPECT_EQ(ERR_TIMED_OUT, callback.WaitForResult());
+  EXPECT_FALSE(verifier.active);
+  EXPECT_EQ(0, peer_.client_finished);
+  EXPECT_FALSE(socket->IsConnected());
+}
+
+TEST_F(HttppsClientSocketTest, MissingTrustNeverSendsHandshake) {
+  auto socket = Make(false);
+  TestCompletionCallback callback;
+  EXPECT_EQ(ERR_SSL_SERVER_CERT_BAD_FORMAT,
+            socket->Connect(callback.callback()));
+  EXPECT_FALSE(socket->IsConnected());
+  EXPECT_TRUE(peer_.AllWriteDataConsumed());
+}
+
+TEST_F(HttppsClientSocketTest, TamperedServerFlightIsFatal) {
+  peer_.tamper = true;
+  auto socket = Make();
+  TestCompletionCallback callback;
+  EXPECT_EQ(ERR_SSL_PROTOCOL_ERROR,
+            callback.GetResult(socket->Connect(callback.callback())));
+  EXPECT_FALSE(socket->IsConnected());
+}
+
+TEST_F(HttppsClientSocketTest, AbsoluteHandshakeDeadline) {
+  peer_.stall = true;
+  auto socket = Make();
+  TestCompletionCallback callback;
+  EXPECT_EQ(ERR_IO_PENDING, socket->Connect(callback.callback()));
+  tasks_.FastForwardBy(base::Seconds(30));
+  EXPECT_EQ(ERR_TIMED_OUT, callback.WaitForResult());
+  EXPECT_FALSE(socket->IsConnected());
+}
+
+TEST_F(HttppsClientSocketTest, DisconnectCancelsCallbacksAndDeadline) {
+  peer_.stall = true;
+  auto cancelled = Make();
+  int count = 0;
+  EXPECT_EQ(
+      ERR_IO_PENDING,
+      cancelled->Connect(base::BindLambdaForTesting([&](int) { ++count; })));
+  cancelled->Disconnect();
+  tasks_.FastForwardBy(base::Minutes(1));
+  EXPECT_EQ(0, count);
+}
+
+TEST_F(HttppsClientSocketTest, QueuedEmptyRecordReadIsNotIdle) {
+  peer_.mode = SYNCHRONOUS;
+  peer_.read_chunk = peer_.write_chunk = 20000;
+  auto socket = Make();
+  TestCompletionCallback connect;
+  ASSERT_EQ(OK, socket->Connect(connect.callback()));
+  for (int i = 0; i < 64; ++i) {
+    peer_.Application("");
+  }
+  auto buffer = base::MakeRefCounted<IOBufferWithSize>(32);
+  TestCompletionCallback read;
+  ASSERT_EQ(ERR_IO_PENDING,
+            socket->Read(buffer.get(), buffer->size(), read.callback()));
+  // The empty-record yield has no transport read or buffered payload, but the
+  // caller still has a pending read and the socket must not be reused as idle.
+  EXPECT_FALSE(socket->IsConnectedAndIdle());
+  peer_.Application("ready");
+  EXPECT_EQ(5, read.WaitForResult());
+  EXPECT_EQ("ready", std::string(buffer->data(), 5));
+  EXPECT_TRUE(socket->IsConnectedAndIdle());
+}
+
+TEST_F(HttppsClientSocketTest, PendingWriteRetainsBufferUntilCompletion) {
+  peer_.mode = SYNCHRONOUS;
+  peer_.read_chunk = peer_.write_chunk = 20000;
+  auto socket = Make();
+  TestCompletionCallback connect;
+  ASSERT_EQ(OK, socket->Connect(connect.callback()));
+  peer_.mode = ASYNC;
+  auto buffer = base::MakeRefCounted<StringIOBuffer>("request");
+  int callbacks = 0;
+  ASSERT_EQ(ERR_IO_PENDING,
+            socket->Write(buffer.get(), buffer->size(),
+                          base::BindLambdaForTesting([&](int result) {
+                            EXPECT_EQ(buffer->size(), result);
+                            EXPECT_TRUE(buffer->HasOneRef());
+                            ++callbacks;
+                          }),
+                          TRAFFIC_ANNOTATION_FOR_TESTS));
+  EXPECT_FALSE(buffer->HasOneRef());
+  tasks_.RunUntilIdle();
+  EXPECT_EQ(1, callbacks);
+  EXPECT_TRUE(buffer->HasOneRef());
+  EXPECT_EQ("request", peer_.received_application);
+}
+
+TEST_F(HttppsClientSocketTest, DisconnectReleasesPendingWriteBuffer) {
+  peer_.mode = SYNCHRONOUS;
+  peer_.read_chunk = peer_.write_chunk = 20000;
+  auto socket = Make();
+  TestCompletionCallback connect;
+  ASSERT_EQ(OK, socket->Connect(connect.callback()));
+  peer_.hold_writes = true;
+  auto buffer = base::MakeRefCounted<StringIOBuffer>("request");
+  int callbacks = 0;
+  ASSERT_EQ(ERR_IO_PENDING,
+            socket->Write(buffer.get(), buffer->size(),
+                          base::BindLambdaForTesting([&](int) { ++callbacks; }),
+                          TRAFFIC_ANNOTATION_FOR_TESTS));
+  EXPECT_FALSE(buffer->HasOneRef());
+  socket->Disconnect();
+  EXPECT_TRUE(buffer->HasOneRef());
+  tasks_.RunUntilIdle();
+  EXPECT_EQ(0, callbacks);
+}
+
+TEST_F(HttppsClientSocketTest, QueuedEmptyRecordReadIsCancelledOnWriteFailure) {
+  peer_.mode = SYNCHRONOUS;
+  peer_.read_chunk = 20000;
+  peer_.write_chunk = 20000;
+  auto socket = Make();
+  TestCompletionCallback connect;
+  ASSERT_EQ(OK, socket->Connect(connect.callback()));
+  for (int i = 0; i < 64; ++i) {
+    peer_.Application("");
+  }
+  auto read_buffer = base::MakeRefCounted<IOBufferWithSize>(32);
+  int reads = 0;
+  EXPECT_EQ(ERR_IO_PENDING,
+            socket->Read(read_buffer.get(), 32,
+                         base::BindLambdaForTesting([&](int result) {
+                           EXPECT_EQ(ERR_CONNECTION_RESET, result);
+                           ++reads;
+                         })));
+  peer_.fail_writes = true;
+  auto write_buffer = base::MakeRefCounted<StringIOBuffer>("request");
+  TestCompletionCallback write;
+  EXPECT_EQ(ERR_CONNECTION_RESET,
+            socket->Write(write_buffer.get(), write_buffer->size(),
+                          write.callback(), TRAFFIC_ANNOTATION_FOR_TESTS));
+  tasks_.RunUntilIdle();
+  EXPECT_EQ(1, reads);
+}
+
+TEST_F(HttppsClientSocketTest, UnexpectedEofFailsBothConcurrentOperationsOnce) {
+  peer_.mode = SYNCHRONOUS;
+  auto socket = Make();
+  TestCompletionCallback connect;
+  EXPECT_EQ(OK, socket->Connect(connect.callback()));
+  peer_.hold_writes = true;
+  int writes = 0;
+  auto buffer = base::MakeRefCounted<StringIOBuffer>("request");
+  EXPECT_EQ(ERR_IO_PENDING,
+            socket->Write(buffer.get(), buffer->size(),
+                          base::BindLambdaForTesting([&](int result) {
+                            EXPECT_EQ(ERR_CONNECTION_CLOSED, result);
+                            ++writes;
+                          }),
+                          TRAFFIC_ANNOTATION_FOR_TESTS));
+  peer_.eof = true;
+  auto read_buffer = base::MakeRefCounted<IOBufferWithSize>(32);
+  TestCompletionCallback read;
+  EXPECT_EQ(
+      ERR_CONNECTION_CLOSED,
+      read.GetResult(socket->Read(read_buffer.get(), 32, read.callback())));
+  tasks_.RunUntilIdle();
+  EXPECT_EQ(1, writes);
+  EXPECT_FALSE(socket->IsConnected());
+}
+
+}  // namespace
+}  // namespace net

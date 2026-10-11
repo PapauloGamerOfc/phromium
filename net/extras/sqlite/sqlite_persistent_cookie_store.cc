@@ -9,6 +9,7 @@
 #include <memory>
 #include <optional>
 #include <set>
+#include <string_view>
 #include <tuple>
 
 #include "base/feature_list.h"
@@ -58,6 +59,18 @@ namespace {
 
 static constexpr int kHoursInOneWeek = 24 * 7;
 static constexpr int kHoursInOneYear = 24 * 365;
+
+// Keep the existing encrypted cookie format for HTTP/HTTPS profiles, but bind
+// HTTPPS ciphertext to its namespace as well as its domain. Relabeling a row's
+// source_scheme must not replay an HTTPS session into HTTPPS (or vice versa).
+std::string CookieEncryptionHash(std::string_view domain,
+                                 net::CookieSourceScheme source_scheme) {
+  if (source_scheme == net::CookieSourceScheme::kHttpps) {
+    return crypto::SHA256HashString(
+        base::StrCat({"Phromium HTTPPS cookie namespace:", domain}));
+  }
+  return crypto::SHA256HashString(domain);
+}
 
 base::DictValue CookieKeyedLoadNetLogParams(
     const std::string& key,
@@ -1051,7 +1064,8 @@ bool SQLitePersistentCookieStore::Backend::MakeCookiesFromSQLStatement(
         ok = false;
         continue;
       }
-      std::string correct_hash = crypto::SHA256HashString(domain);
+      std::string correct_hash = CookieEncryptionHash(
+          domain, DBToCookieSourceScheme(statement.ColumnInt(15)));
       if (!base::StartsWith(value, correct_hash,
                             base::CompareCase::SENSITIVE)) {
         RecordCookieLoadProblem(CookieLoadProblem::kHashFailed);
@@ -1360,7 +1374,8 @@ void SQLitePersistentCookieStore::Backend::DoCommit() {
           if (crypto_) {
             std::string encrypted_value;
             if (!crypto_->EncryptString(
-                    base::StrCat({crypto::SHA256HashString(po->cc().Domain()),
+                    base::StrCat({CookieEncryptionHash(po->cc().Domain(),
+                                                       po->cc().SourceScheme()),
                                   po->cc().Value()}),
                     &encrypted_value)) {
               DLOG(WARNING) << "Could not encrypt a cookie, skipping add.";
@@ -1496,9 +1511,14 @@ void SQLitePersistentCookieStore::Backend::BackgroundDeleteAllInList(
   // list of pending operations. https://crbug.com/486742.
   Commit();
 
-  sql::Statement delete_statement(db()->GetCachedStatement(
-      SQL_FROM_HERE, "DELETE FROM cookies WHERE host_key=? AND is_secure=?"));
-  if (!delete_statement.is_valid()) {
+  sql::Statement delete_statement(
+      db()->GetCachedStatement(SQL_FROM_HERE,
+                               "DELETE FROM cookies WHERE host_key=? AND "
+                               "is_secure=? AND source_scheme!=?"));
+  sql::Statement delete_httpps_statement(db()->GetCachedStatement(
+      SQL_FROM_HERE,
+      "DELETE FROM cookies WHERE host_key=? AND source_scheme=?"));
+  if (!delete_statement.is_valid() || !delete_httpps_statement.is_valid()) {
     LOG(WARNING) << "Unable to delete cookies on shutdown.";
     return;
   }
@@ -1510,14 +1530,24 @@ void SQLitePersistentCookieStore::Backend::BackgroundDeleteAllInList(
   }
 
   for (const auto& cookie : cookies) {
-    const GURL url(cookie_util::CookieOriginToURL(cookie.first, cookie.second));
+    const GURL url(cookie_util::CookieDomainAndPathToURL(cookie.first, "/",
+                                                         cookie.second));
     if (!url.is_valid())
       continue;
 
-    delete_statement.Reset(true);
-    delete_statement.BindString(0, cookie.first);
-    delete_statement.BindInt(1, cookie.second);
-    if (!delete_statement.Run()) {
+    const bool httpps = cookie.second == CookieSourceScheme::kHttpps;
+    auto& statement = httpps ? delete_httpps_statement : delete_statement;
+    statement.Reset(true);
+    statement.BindString(0, cookie.first);
+    if (httpps) {
+      statement.BindInt(1, static_cast<int>(CookieSourceScheme::kHttpps));
+    } else {
+      // Preserve existing HTTP/HTTPS cleanup semantics, but never delete the
+      // isolated HTTPPS namespace as a side effect.
+      statement.BindBool(1, cookie.second == CookieSourceScheme::kSecure);
+      statement.BindInt(2, static_cast<int>(CookieSourceScheme::kHttpps));
+    }
+    if (!statement.Run()) {
       LOG(WARNING) << "Could not delete a cookie from the DB.";
     }
   }

@@ -272,6 +272,38 @@ def generate_idl_from_template(idl_template, dynamic_guids, idl):
     open(idl, 'wb').write(contents)
 
 
+def normalize_compiler_settings_path(contents, idl_template, generated_idl):
+    # Dynamic GUIDs require compiling a substituted copy under gen/. Existing
+    # baselines may have been compiled directly from the original IDL instead.
+    # Only the compiler's exact metadata line is equivalent between these two
+    # paths; preserve all declarations, GUIDs, options and other comments.
+    paths = b'|'.join(
+        re.escape(path.encode('utf-8'))
+        for path in (idl_template, generated_idl)
+    )
+    return re.sub(
+        rb'^/\* Compiler settings for (?:' + paths + rb'):(?=\r?$)',
+        b'/* Compiler settings for <dynamic-guid-input.idl>:',
+        contents,
+        flags=re.M,
+    )
+
+
+def differs_beyond_input_path(baseline, generated, idl_template, generated_idl):
+    # Never normalize binary type libraries or files without C comments.
+    if not baseline.endswith(('.h', '.c')):
+        return True
+    with open(baseline, 'rb') as baseline_file:
+        baseline_contents = baseline_file.read()
+    with open(generated, 'rb') as generated_file:
+        generated_contents = generated_file.read()
+    return normalize_compiler_settings_path(
+        baseline_contents, idl_template, generated_idl
+    ) != normalize_compiler_settings_path(
+        generated_contents, idl_template, generated_idl
+    )
+
+
 # This function runs the MIDL compiler with the provided arguments. It creates
 # and returns a tuple of |0,midl_output_dir| on success.
 def run_midl(args, env_dict):
@@ -505,6 +537,17 @@ def main(
         midl_output_dir, outdir, common_files
     )
     assert not errors
+    if idl_template:
+        mismatch = [
+            name
+            for name in mismatch
+            if differs_beyond_input_path(
+                os.path.join(outdir, name),
+                os.path.join(midl_output_dir, name),
+                idl_template,
+                idl,
+            )
+        ]
 
     if mismatch:
         print(

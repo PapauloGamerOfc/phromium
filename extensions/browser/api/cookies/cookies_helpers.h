@@ -75,7 +75,8 @@ void GetAllCookiesFromManager(
 // Constructs a URL from a cookie's information for use in checking
 // a cookie against the extension's host permissions. The Secure
 // property of the cookie defines the URL scheme, and the cookie's
-// domain becomes the URL host.
+// domain becomes the URL host. HTTPPS cookies always preserve their independent
+// scheme regardless of the Secure attribute.
 GURL GetURLFromCanonicalCookie(const net::CanonicalCookie& cookie);
 
 // Looks through all cookies in the given cookie store, and appends to the

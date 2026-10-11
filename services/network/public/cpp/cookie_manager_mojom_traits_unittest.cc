@@ -19,6 +19,7 @@
 #include "services/network/public/mojom/cookie_partition_key.mojom.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "url/gurl.h"
 #include "url/third_party/mozilla/url_parse.h"
 
 namespace network {
@@ -240,12 +241,26 @@ TEST(CookieManagerTraitsTest, Roundtrips_CookieAccessSemantics) {
 TEST(CookieManagerTraitsTest, Roundtrips_CookieSourceScheme) {
   for (net::CookieSourceScheme source_scheme :
        {net::CookieSourceScheme::kUnset, net::CookieSourceScheme::kNonSecure,
-        net::CookieSourceScheme::kSecure}) {
+        net::CookieSourceScheme::kSecure, net::CookieSourceScheme::kHttpps}) {
     net::CookieSourceScheme roundtrip;
     ASSERT_TRUE(mojo::test::SerializeAndDeserialize<mojom::CookieSourceScheme>(
         source_scheme, roundtrip));
     EXPECT_EQ(source_scheme, roundtrip);
   }
+}
+
+TEST(CookieManagerTraitsTest, Roundtrips_HttppsCanonicalCookie) {
+  auto original = net::CanonicalCookie::CreateForTesting(
+      GURL("httpps://example.com:443/path"),
+      "session=isolated; Secure; HttpOnly; Max-Age=3600", base::Time::Now(),
+      net::CookieSourceType::kHTTP);
+  ASSERT_TRUE(original);
+  ASSERT_EQ(net::CookieSourceScheme::kHttpps, original->SourceScheme());
+  net::CanonicalCookie copied;
+  ASSERT_TRUE(mojo::test::SerializeAndDeserialize<mojom::CanonicalCookie>(
+      *original, copied));
+  EXPECT_TRUE(original->HasEquivalentDataMembers(copied));
+  EXPECT_EQ(net::CookieSourceScheme::kHttpps, copied.SourceScheme());
 }
 
 TEST(CookieManagerTraitsTest, Roundtrips_CookieChangeCause) {

@@ -59,6 +59,8 @@ URLRequestJobFactory::URLRequestJobFactory() {
                                            /*is_for_websockets=*/false));
   SetProtocolHandler(url::kHttpsScheme, std::make_unique<HttpProtocolHandler>(
                                             /*is_for_websockets=*/false));
+  SetProtocolHandler(url::kHttppsScheme, std::make_unique<HttpProtocolHandler>(
+                                             /*is_for_websockets=*/false));
 #if BUILDFLAG(ENABLE_WEBSOCKETS)
   SetProtocolHandler(url::kWsScheme, std::make_unique<HttpProtocolHandler>(
                                          /*is_for_websockets=*/true));
@@ -78,15 +80,17 @@ bool URLRequestJobFactory::SetProtocolHandler(
 
   if (!protocol_handler) {
     auto it = protocol_handler_map_.find(scheme);
-    if (it == protocol_handler_map_.end())
+    if (it == protocol_handler_map_.end()) {
       return false;
+    }
 
     protocol_handler_map_.erase(it);
     return true;
   }
 
-  if (protocol_handler_map_.contains(scheme))
+  if (protocol_handler_map_.contains(scheme)) {
     return false;
+  }
   protocol_handler_map_[scheme] = std::move(protocol_handler);
   return true;
 }
@@ -96,14 +100,16 @@ std::unique_ptr<URLRequestJob> URLRequestJobFactory::CreateJob(
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
 
   // If we are given an invalid URL, then don't even try to inspect the scheme.
-  if (!request->url().is_valid())
+  if (!request->url().is_valid()) {
     return std::make_unique<URLRequestErrorJob>(request, ERR_INVALID_URL);
+  }
 
   if (g_interceptor_for_testing) {
     std::unique_ptr<URLRequestJob> job(
         g_interceptor_for_testing->MaybeInterceptRequest(request));
-    if (job)
+    if (job) {
       return job;
+    }
   }
 
   auto it = protocol_handler_map_.find(request->url().GetScheme());

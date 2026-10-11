@@ -75,6 +75,8 @@ enum CookieSourceScheme {
   kUnset,
   kNonSecure,
   kSecure,
+  // Separate cookie namespace; never aliases HTTPS, including legacy cookies.
+  kHttpps,
 };
 
 // See https://tools.ietf.org/html/draft-ietf-httpbis-cookie-same-site-00
@@ -385,6 +387,10 @@ struct CookieDeletionFilter {
   // context triggering the deletion. In these cases, we should only delete
   // partitioned cookies.
   bool partitioned_state_only;
+
+  // null matches both HTTP(S) and HTTPPS; true matches HTTPPS only, false
+  // matches the conventional cookie namespace. Does not change domain scope.
+  bool? httpps_namespace;
 };
 
 // Interface used to register event listeners in processes like the Browser and

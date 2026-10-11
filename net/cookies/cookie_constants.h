@@ -146,8 +146,11 @@ enum class CookieSourceScheme {
   kUnset = 0,
   kNonSecure = 1,
   kSecure = 2,
+  // HTTPPS is cryptographic, but has an independent cookie namespace. Never
+  // collapse this into kSecure when persisting or comparing cookies.
+  kHttpps = 3,
 
-  kMaxValue = kSecure  // Keep as the last value.
+  kMaxValue = kHttpps  // Keep as the last value.
 };
 
 enum class CookiePort {
@@ -315,7 +318,8 @@ enum class CookieSourceSchemeName {
   kWsScheme = 20,
   kWssScheme = 21,
   kChromeExtensionScheme = 22,
-  kMaxValue = kChromeExtensionScheme
+  kHttppsScheme = 23,
+  kMaxValue = kHttppsScheme
 };
 
 // Returns the Set-Cookie header priority token corresponding to |priority|.

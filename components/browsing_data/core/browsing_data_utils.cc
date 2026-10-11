@@ -453,16 +453,17 @@ std::optional<BrowsingDataType> GetDataTypeFromDeletionPreference(
   return std::nullopt;
 }
 
-bool IsHttpsCookieSourceScheme(net::CookieSourceScheme cookie_source_scheme) {
+net::CookieSourceScheme CookieSourceSchemeForDisplay(
+    net::CookieSourceScheme cookie_source_scheme) {
   switch (cookie_source_scheme) {
     case net::CookieSourceScheme::kSecure:
-      return true;
     case net::CookieSourceScheme::kNonSecure:
-      return false;
+    case net::CookieSourceScheme::kHttpps:
+      return cookie_source_scheme;
     case net::CookieSourceScheme::kUnset:
       // Older cookies don't have a source scheme. Associate them with https
       // since the majority of pageloads are https.
-      return true;
+      return net::CookieSourceScheme::kSecure;
   }
 }
 

@@ -398,7 +398,7 @@ void AddAdditionalRequestHeaders(
     blink::mojom::Referrer* referrer,
     FrameTreeNode* frame_tree_node,
     bool is_browser_initiated) {
-  if (!url.SchemeIsHTTPOrHTTPS()) {
+  if (!url.SchemeIsHTTPOrHTTPSOrHTTPPS()) {
     return;
   }
 

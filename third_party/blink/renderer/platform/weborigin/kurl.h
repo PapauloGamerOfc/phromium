@@ -193,6 +193,9 @@ class PLATFORM_EXPORT KURL {
   bool ProtocolIsAbout() const { return ProtocolIs("about"); }
   bool ProtocolIsJavaScript() const;
   bool ProtocolIsInHttpFamily() const;
+  // Explicit HTTPPS-aware checks, without changing legacy HTTP/HTTPS-only
+  // dispatch (notably browser-side generated code cache support).
+  bool ProtocolIsInHttpFamilyOrHTTPPS() const;
   bool IsLocalFile() const;
   bool IsAboutBlankUrl() const;   // Is about:blank, ignoring query/ref strings.
   bool IsAboutSrcdocUrl() const;  // Is about:srcdoc, ignoring query/ref

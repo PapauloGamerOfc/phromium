@@ -4195,6 +4195,13 @@ skip_child_includes = [
 
 
 hooks = [
+  {
+    # Preserve the HTTPS key policy while making HTTPPS X25519 leaf SPKIs
+    # available to the explicitly opted-in certificate verifier.
+    'name': 'httpps_boringssl_spki',
+    'pattern': '.',
+    'action': ['python3', 'src/net/httpps/apply_boringssl_patch.py'],
+  },
   # Download and initialize "vpython" VirtualEnv environment packages for
   # Python3. We do this before running any other hooks so that any other
   # hooks that might use vpython don't trip over unexpected issues and

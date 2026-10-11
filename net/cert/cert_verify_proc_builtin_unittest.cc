@@ -62,6 +62,8 @@
 #include "net/url_request/url_request_context_builder.h"
 #include "net/url_request/url_request_test_util.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/boringssl/src/include/openssl/evp.h"
+#include "third_party/boringssl/src/pki/extended_key_usage.h"
 #include "third_party/boringssl/src/pki/parse_certificate.h"
 #include "third_party/boringssl/src/pki/signature_algorithm.h"
 #include "third_party/boringssl/src/pki/trust_store.h"
@@ -738,6 +740,147 @@ TEST_F(CertVerifyProcBuiltinTest, SimpleSuccess) {
   // When CRS is not being used (mock_crs_version_ == 0), the anchor usage
   // histogram should not be recorded.
   histograms.ExpectTotalCount("Net.Certificate.TrustAnchor2.Verify", 0u);
+}
+
+TEST_F(CertVerifyProcBuiltinTest, HttppsUsesSameTrustButNotTlsLeafProfile) {
+  auto [leaf, intermediate, root] = CertBuilder::CreateSimpleChain3();
+  root->GenerateRSAKey();
+  leaf->SetKey(
+      bssl::UniquePtr<EVP_PKEY>(EVP_PKEY_generate_from_alg(EVP_pkey_x25519())));
+  leaf->SetKeyUsages({bssl::KEY_USAGE_BIT_KEY_AGREEMENT});
+  InitializeVerifyProc(CreateParams({root->GetX509Certificate()}));
+
+  for (int flags : {0, int(CertVerifyProc::VERIFY_HTTPPS_SERVER)}) {
+    CertVerifyResult result;
+    NetLogSource source;
+    TestCompletionCallback callback;
+    Verify(leaf->GetX509CertificateChain(), "www.example.com", flags, &result,
+           &source, callback.callback());
+    // The ordinary TLS delegate rejects X25519 as an unacceptable public key.
+    // Path-builder errors map that rejection to CERT_STATUS_WEAK_KEY, not the
+    // generic invalid-certificate status used for an invalid HTTPPS profile.
+    EXPECT_EQ(flags ? OK : ERR_CERT_WEAK_KEY, callback.WaitForResult());
+    if (flags) {
+      EXPECT_FALSE(IsCertStatusError(result.cert_status));
+    } else {
+      EXPECT_TRUE(result.cert_status & CERT_STATUS_WEAK_KEY);
+    }
+  }
+  // A normal TLS leaf is not an HTTPPS server, even with the same trust root.
+  leaf->GenerateECKey();
+  leaf->SetKeyUsages({bssl::KEY_USAGE_BIT_DIGITAL_SIGNATURE});
+  CertVerifyResult result;
+  NetLogSource source;
+  TestCompletionCallback callback;
+  Verify(leaf->GetX509CertificateChain(), "www.example.com",
+         CertVerifyProc::VERIFY_HTTPPS_SERVER, &result, &source,
+         callback.callback());
+  EXPECT_THAT(callback.WaitForResult(), IsError(ERR_CERT_INVALID));
+}
+
+TEST_F(CertVerifyProcBuiltinTest, HttppsRejectsWrongLeafUsages) {
+  for (int invalid_profile = 0; invalid_profile < 9; ++invalid_profile) {
+    SCOPED_TRACE(invalid_profile);
+    auto [leaf, root] = CertBuilder::CreateSimpleChain2();
+    leaf->SetKey(bssl::UniquePtr<EVP_PKEY>(
+        EVP_PKEY_generate_from_alg(EVP_pkey_x25519())));
+    leaf->SetKeyUsages({bssl::KEY_USAGE_BIT_KEY_AGREEMENT});
+    switch (invalid_profile) {
+      case 0:
+        leaf->SetKeyUsages({bssl::KEY_USAGE_BIT_KEY_AGREEMENT,
+                            bssl::KEY_USAGE_BIT_DIGITAL_SIGNATURE});
+        break;
+      case 1:
+        leaf->EraseExtension(bssl::der::Input(bssl::kKeyUsageOid));
+        break;
+      case 2:
+        leaf->SetExtendedKeyUsages({bssl::der::Input(bssl::kClientAuth)});
+        break;
+      case 3:
+        leaf->EraseExtension(bssl::der::Input(bssl::kExtKeyUsageOid));
+        break;
+      case 4:
+        leaf->SetBasicConstraints(/*is_ca=*/true, /*path_len=*/-1);
+        break;
+      case 5:
+        leaf->EraseExtension(bssl::der::Input(bssl::kBasicConstraintsOid));
+        break;
+      case 6:
+        // Correct usage encoded as a non-critical extension is not this
+        // protocol's required profile.
+        leaf->SetExtension(bssl::der::Input(bssl::kKeyUsageOid),
+                           std::string("\x03\x02\x03\x08", 4), false);
+        break;
+      case 7:
+        leaf->SetExtension(bssl::der::Input(bssl::kBasicConstraintsOid),
+                           std::string("\x30\x00", 2), false);
+        break;
+      case 8:
+        leaf->SetBasicConstraints(/*is_ca=*/false, /*path_len=*/0);
+        break;
+    }
+    InitializeVerifyProc(CreateParams({root->GetX509Certificate()}));
+    CertVerifyResult result;
+    NetLogSource source;
+    TestCompletionCallback callback;
+    Verify(leaf->GetX509CertificateChain(), "www.example.com",
+           CertVerifyProc::VERIFY_HTTPPS_SERVER, &result, &source,
+           callback.callback());
+    EXPECT_THAT(callback.WaitForResult(), IsError(ERR_CERT_INVALID));
+  }
+}
+
+TEST_F(CertVerifyProcBuiltinTest, HttppsPreservesTrustNameAndTimeChecks) {
+  for (int invalid_chain = 0; invalid_chain < 5; ++invalid_chain) {
+    SCOPED_TRACE(invalid_chain);
+    auto [leaf, intermediate, root] = CertBuilder::CreateSimpleChain3();
+    leaf->SetKey(bssl::UniquePtr<EVP_PKEY>(
+        EVP_PKEY_generate_from_alg(EVP_pkey_x25519())));
+    leaf->SetKeyUsages({bssl::KEY_USAGE_BIT_KEY_AGREEMENT});
+    if (invalid_chain == 1) {
+      leaf->SetSubjectAltName("wrong.example.com");
+    } else if (invalid_chain == 2) {
+      leaf->SetValidity(base::Time::Now() - base::Days(3),
+                        base::Time::Now() - base::Days(1));
+    } else if (invalid_chain == 3) {
+      intermediate->SetNameConstraintsDnsNames({"only.example.org"}, {});
+    }
+    InitializeVerifyProc(CreateParams(
+        invalid_chain == 0 ? CertificateList{}
+                           : CertificateList{root->GetX509Certificate()},
+        {},
+        invalid_chain == 4 ? CertificateList{intermediate->GetX509Certificate()}
+                           : CertificateList{}));
+    CertVerifyResult result;
+    NetLogSource source;
+    TestCompletionCallback callback;
+    Verify(leaf->GetX509CertificateChain(), "www.example.com",
+           CertVerifyProc::VERIFY_HTTPPS_SERVER, &result, &source,
+           callback.callback());
+    EXPECT_NE(OK, callback.WaitForResult());
+  }
+}
+
+TEST_F(CertVerifyProcBuiltinTest, HttppsPreservesPublicRootCtRequirements) {
+  auto [leaf, intermediate, root] = CertBuilder::CreateSimpleChain3();
+  leaf->SetKey(
+      bssl::UniquePtr<EVP_PKEY>(EVP_PKEY_generate_from_alg(EVP_pkey_x25519())));
+  leaf->SetKeyUsages({bssl::KEY_USAGE_BIT_KEY_AGREEMENT});
+  InitializeVerifyProc(CreateParams({root->GetX509Certificate()}));
+  ScopedTestKnownRoot known_root(root->GetX509Certificate().get());
+  EXPECT_CALL(*mock_ct_policy_enforcer(), IsCtEnabled())
+      .WillRepeatedly(testing::Return(true));
+  EXPECT_CALL(*mock_ct_policy_enforcer(), CheckCompliance(_, _, _, _))
+      .WillRepeatedly(
+          testing::Return(ct::CTPolicyCompliance::CT_POLICY_NOT_ENOUGH_SCTS));
+  CertVerifyResult result;
+  NetLogSource source;
+  TestCompletionCallback callback;
+  Verify(leaf->GetX509CertificateChain(), "www.example.com",
+         CertVerifyProc::VERIFY_HTTPPS_SERVER, &result, &source,
+         callback.callback());
+  EXPECT_THAT(callback.WaitForResult(),
+              IsError(ERR_CERTIFICATE_TRANSPARENCY_REQUIRED));
 }
 
 TEST_F(CertVerifyProcBuiltinTest, SimpleSignaturelessMtcSuccess) {

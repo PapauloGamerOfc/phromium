@@ -476,6 +476,9 @@ base::DictValue CreateProxyServerDict(const net::ProxyChain& proxy_chain) {
     case net::ProxyServer::SCHEME_HTTPS:
       scheme = "https";
       break;
+    case net::ProxyServer::SCHEME_HTTPPS:
+      scheme = "httpps";
+      break;
     case net::ProxyServer::SCHEME_QUIC:
       scheme = "quic";
       break;

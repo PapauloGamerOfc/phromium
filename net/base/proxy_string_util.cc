@@ -47,6 +47,9 @@ ProxyServer::Scheme GetSchemeFromPacTypeInternal(std::string_view type) {
   if (base::EqualsCaseInsensitiveASCII(type, "https")) {
     return ProxyServer::SCHEME_HTTPS;
   }
+  if (base::EqualsCaseInsensitiveASCII(type, "httpps")) {
+    return ProxyServer::SCHEME_HTTPPS;
+  }
 
   return ProxyServer::SCHEME_INVALID;
 }
@@ -127,6 +130,10 @@ std::string ProxyServerToPacResultElement(const ProxyServer& proxy_server) {
       return base::StrCat(
           {"QUIC ", ConstructHostPortString(proxy_server.GetHost(),
                                             proxy_server.GetPort())});
+    case ProxyServer::SCHEME_HTTPPS:
+      return base::StrCat(
+          {"HTTPPS ", ConstructHostPortString(proxy_server.GetHost(),
+                                              proxy_server.GetPort())});
     default:
       // Got called with an invalid scheme.
       NOTREACHED();
@@ -193,6 +200,10 @@ std::string ProxyServerToProxyUri(const ProxyServer& proxy_server) {
       return base::StrCat(
           {"quic://", ConstructHostPortString(proxy_server.GetHost(),
                                               proxy_server.GetPort())});
+    case ProxyServer::SCHEME_HTTPPS:
+      return base::StrCat(
+          {"httpps://", ConstructHostPortString(proxy_server.GetHost(),
+                                                proxy_server.GetPort())});
     default:
       // Got called with an invalid scheme.
       NOTREACHED();
@@ -255,6 +266,9 @@ ProxyServer::Scheme GetSchemeFromUriScheme(std::string_view scheme,
   }
   if (base::EqualsCaseInsensitiveASCII(scheme, "https")) {
     return ProxyServer::SCHEME_HTTPS;
+  }
+  if (base::EqualsCaseInsensitiveASCII(scheme, "httpps")) {
+    return ProxyServer::SCHEME_HTTPPS;
   }
 #if BUILDFLAG(ENABLE_QUIC_PROXY_SUPPORT)
   if (is_quic_allowed && base::EqualsCaseInsensitiveASCII(scheme, "quic")) {

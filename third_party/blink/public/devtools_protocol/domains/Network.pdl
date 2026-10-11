@@ -106,6 +106,7 @@ domain Network
       Unset
       NonSecure
       Secure
+      Httpps
 
   # Timing information for the request.
   type ResourceTiming extends object

@@ -68,7 +68,8 @@ static network::cors::OriginAccessList& GetOriginAccessList() {
 }
 
 bool SecurityPolicy::ShouldHideReferrer(const KURL& url, const KURL& referrer) {
-  bool referrer_is_secure_url = referrer.ProtocolIs("https");
+  bool referrer_is_secure_url =
+      referrer.ProtocolIs("https") || referrer.ProtocolIs("httpps");
   bool scheme_is_allowed =
       SchemeRegistry::ShouldTreatURLSchemeAsAllowedForReferrer(
           referrer.Protocol());
@@ -79,7 +80,7 @@ bool SecurityPolicy::ShouldHideReferrer(const KURL& url, const KURL& referrer) {
   if (!referrer_is_secure_url)
     return false;
 
-  bool url_is_secure_url = url.ProtocolIs("https");
+  bool url_is_secure_url = url.ProtocolIs("https") || url.ProtocolIs("httpps");
 
   return !url_is_secure_url;
 }

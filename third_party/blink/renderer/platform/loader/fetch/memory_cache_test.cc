@@ -323,6 +323,18 @@ TEST_F(MemoryCacheTest, FragmentIdentifier) {
   EXPECT_EQ(resource, MemoryCache::Get()->ResourceForURLForTesting(url2));
 }
 
+TEST_F(MemoryCacheTest, HttppsFragmentsShareResourceButNotHttpsOrigin) {
+  const KURL url("httpps://example.test/resource#foo");
+  auto* resource = MakeGarbageCollected<FakeResource>(url, ResourceType::kRaw);
+  MemoryCache::Get()->Add(resource);
+  EXPECT_EQ(KURL("httpps://example.test/resource"),
+            MemoryCache::RemoveFragmentIdentifierIfNeeded(url));
+  EXPECT_EQ(resource, MemoryCache::Get()->ResourceForURLForTesting(
+                          KURL("httpps://example.test/resource#bar")));
+  EXPECT_EQ(nullptr, MemoryCache::Get()->ResourceForURLForTesting(
+                         KURL("https://example.test:343/resource")));
+}
+
 TEST_F(MemoryCacheTest, RemoveURLFromCache) {
   const KURL url1 = KURL("http://test/resource1");
   Persistent<FakeResource> resource1 =

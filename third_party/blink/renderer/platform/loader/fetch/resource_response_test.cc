@@ -36,6 +36,15 @@ ResourceResponse CreateTestResponse() {
 
 }  // namespace
 
+TEST(ResourceResponseTest, HttppsUsesHttpResponseSemantics) {
+  ResourceResponse response(KURL("httpps://example.test/resource"));
+  EXPECT_TRUE(response.IsHTTP());
+  EXPECT_TRUE(response.ShouldPopulateResourceTiming());
+  response.SetHttpHeaderField(http_names::kCacheControl,
+                              AtomicString("no-store"));
+  EXPECT_TRUE(response.CacheControlContainsNoStore());
+}
+
 TEST(ResourceResponseTest, AddHttpHeaderFieldWithMultipleValues) {
   ResourceResponse response(CreateTestResponse());
 

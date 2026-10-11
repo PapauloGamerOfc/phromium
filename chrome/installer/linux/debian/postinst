@@ -61,7 +61,9 @@ update-alternatives --install /usr/bin/@@package_orig @@package_orig \
 remove_udev_symlinks
 
 ## MAIN ##
-install_key
-install_deb822_sources
-remove_legacy_list
-remove_legacy_key
+if [ "@@branding" = "google_chrome" ]; then
+  install_key
+  install_deb822_sources
+  remove_legacy_list
+  remove_legacy_key
+fi

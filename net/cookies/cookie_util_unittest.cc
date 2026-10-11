@@ -65,6 +65,27 @@ TEST(CookieUtilTest, TestDomainIsHostOnly) {
   }
 }
 
+TEST(CookieUtilTest, HttppsDomainCookiesUseThePublicSuffixList) {
+  EXPECT_EQ("example.com",
+            cookie_util::GetEffectiveDomain("httpps", "sub.example.com"));
+  for (const char* domain : {"example.com", ".example.com"}) {
+    CookieInclusionStatus status;
+    EXPECT_EQ(std::make_optional(std::string(".example.com")),
+              cookie_util::GetCookieDomainWithString(
+                  GURL("httpps://sub.example.com/"), domain, status));
+    EXPECT_TRUE(status.IsInclude());
+  }
+  for (const char* domain : {"com", ".com", "other.com"}) {
+    CookieInclusionStatus status;
+    EXPECT_FALSE(cookie_util::GetCookieDomainWithString(
+        GURL("httpps://sub.example.com/"), domain, status));
+    EXPECT_FALSE(status.IsInclude());
+  }
+  CookieInclusionStatus private_suffix_status;
+  EXPECT_FALSE(cookie_util::GetCookieDomainWithString(
+      GURL("httpps://tenant.github.io/"), "github.io", private_suffix_status));
+}
+
 // A cookie domain containing non-ASCII characters is not allowed, even if it
 // matches the domain from the URL.
 TEST(CookieUtilTest, GetCookieDomainWithString_NonASCII) {
@@ -645,6 +666,27 @@ TEST(CookieUtilTest, SimulatedCookieSource) {
           cookie_util::SimulatedCookieSource(*cookie, test.source_scheme);
       EXPECT_EQ(GURL(test.expected_simulated_source), simulated_source);
     }
+  }
+}
+
+TEST(CookieUtilTest, HttppsCookieSourceKeepsItsNamespace) {
+  auto cookie = CanonicalCookie::CreateForTesting(
+      GURL("httpps://b.a.com/"), "a=b; Domain=a.com; Path=/private",
+      base::Time::Now(), CookieSourceType::kOther);
+  ASSERT_TRUE(cookie);
+  EXPECT_EQ(
+      GURL("httpps://a.com/"),
+      cookie_util::CookieOriginToURL(cookie->Domain(), cookie->SourceScheme()));
+  EXPECT_EQ(GURL("https://a.com/"), cookie_util::CookieOriginToURL(
+                                        "a.com", CookieSourceScheme::kSecure));
+  EXPECT_EQ(GURL("http://a.com/"), cookie_util::CookieOriginToURL(
+                                       "a.com", CookieSourceScheme::kUnset));
+  EXPECT_EQ(GURL("httpps://a.com/private"),
+            cookie_util::CookieDomainAndPathToURL(
+                cookie->Domain(), cookie->Path(), cookie->SourceScheme()));
+  for (const char* requested_scheme : {"http", "https", "httpps"}) {
+    EXPECT_EQ(GURL("httpps://a.com/private"),
+              cookie_util::SimulatedCookieSource(*cookie, requested_scheme));
   }
 }
 

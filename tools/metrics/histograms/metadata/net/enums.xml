@@ -2825,6 +2825,7 @@ Called by update_net_trust_anchors.py.-->
   <int value="16" label="SCHEME_SOCKS5"/>
   <int value="32" label="SCHEME_HTTPS"/>
   <int value="64" label="SCHEME_QUIC"/>
+  <int value="128" label="SCHEME_HTTPPS"/>
 </enum>
 
 <enum name="QuicAddressMismatch">

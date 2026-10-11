@@ -57,6 +57,25 @@ TEST(SecurityPolicyTest, EmptyReferrerForUnauthorizedScheme) {
                               .referrer);
 }
 
+TEST(SecurityPolicyTest, HttppsReferrerDoesNotLeakOnDowngrade) {
+  const KURL source("httpps://example.test/private?query=value");
+  EXPECT_TRUE(SecurityPolicy::ShouldHideReferrer(
+      KURL("http://example.test/"), source));
+  EXPECT_FALSE(SecurityPolicy::ShouldHideReferrer(
+      KURL("httpps://example.test/"), source));
+  EXPECT_FALSE(SecurityPolicy::ShouldHideReferrer(
+      KURL("https://example.test/"), source));
+  EXPECT_EQ(String(), SecurityPolicy::GenerateReferrer(
+                          network::mojom::ReferrerPolicy::kNoReferrerWhenDowngrade,
+                          KURL("http://example.test/"), source)
+                          .referrer);
+  EXPECT_EQ(String("httpps://example.test/"),
+            SecurityPolicy::GenerateReferrer(
+                network::mojom::ReferrerPolicy::kStrictOriginWhenCrossOrigin,
+                KURL("https://example.test/"), source)
+                .referrer);
+}
+
 TEST(SecurityPolicyTest, GenerateReferrerRespectsReferrerSchemesRegistry) {
   const KURL example_http_url = KURL("http://example.com/");
   const String foobar_url = "foobar://somepage/";

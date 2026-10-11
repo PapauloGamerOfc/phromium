@@ -1206,6 +1206,69 @@ TEST_F(URLRequestHttpJobTest, ConnectedCallbackAfterDestruction) {
   EXPECT_EQ(ERR_ABORTED, callback.Run(TransportInfo(), base::DoNothing()));
 }
 
+TEST_F(URLRequestHttpJobTest, HttppsCannotModifyHttpsHstsPolicy) {
+  struct TestCase {
+    const char* url;
+    const char* header;
+    bool existing_policy;
+    bool expected_policy;
+  } cases[] = {
+      {"https://https-policy.test/", "max-age=3600", false, true},
+      {"httpps://add-policy.test/", "max-age=3600", false, false},
+      {"httpps://remove-policy.test/", "max-age=0", true, true},
+      {"httpps://extend-policy.test/", "max-age=31536000; includeSubDomains",
+       true, true},
+  };
+  auto cert = ImportCertFromFile(GetTestCertsDirectory(), "ok_cert.pem");
+  ASSERT_TRUE(cert);
+  for (const auto& test : cases) {
+    SCOPED_TRACE(test.url);
+    // MockNetworkLayer expects one completed read over its entire lifetime,
+    // not one per transaction. Give each independent policy case its own
+    // context rather than reusing the fixture's mock for multiple requests.
+    auto context_builder = CreateTestURLRequestContextBuilder();
+    auto network_layer = std::make_unique<MockNetworkLayer>();
+    MockNetworkLayer* network_layer_ptr = network_layer.get();
+    context_builder->SetHttpTransactionFactoryForTesting(
+        std::move(network_layer));
+    context_builder->DisableHttpCache();
+    auto context = context_builder->Build();
+    TransportSecurityState* state = context->transport_security_state();
+    const GURL url(test.url);
+    const base::Time original_expiry = base::Time::Now() + base::Hours(1);
+    if (test.existing_policy) {
+      state->AddHSTS(url.host(), original_expiry, /*include_subdomains=*/false);
+    }
+    ScopedMockTransaction transaction(kSimpleGET_Transaction, test.url);
+    const std::string headers = base::StrCat(
+        {"Strict-Transport-Security: ", test.header, "\nContent-Length: 0\n"});
+    transaction.response_headers = headers.c_str();
+    transaction.data = "";
+    // Both transports produce a valid SSLInfo. Policy separation must depend
+    // on the URL scheme, not merely whether a certificate is present.
+    transaction.cert = cert;
+    transaction.cert_status = 0;
+    TestDelegate delegate;
+    auto request = context->CreateRequest(
+        url, DEFAULT_PRIORITY, &delegate, TRAFFIC_ANNOTATION_FOR_TESTS,
+        net::handles::kInvalidNetworkHandle);
+    request->Start();
+    delegate.RunUntilComplete();
+    ASSERT_THAT(delegate.request_status(), IsOk());
+    ASSERT_TRUE(request->ssl_info().is_valid());
+    EXPECT_EQ(1, network_layer_ptr->transaction_count());
+    EXPECT_TRUE(network_layer_ptr->done_reading_called());
+
+    TransportSecurityState::STSState policy;
+    EXPECT_EQ(test.expected_policy,
+              state->GetDynamicSTSState(url.host(), &policy));
+    if (test.existing_policy) {
+      EXPECT_EQ(original_expiry, policy.expiry);
+      EXPECT_FALSE(policy.include_subdomains);
+    }
+  }
+}
+
 TEST_F(URLRequestHttpJobTest, HSTSInternalRedirectTest) {
   // Setup HSTS state.
   context_->transport_security_state()->AddHSTS(

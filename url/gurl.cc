@@ -381,18 +381,24 @@ bool GURL::SchemeIsHTTPOrHTTPSInternal() const {
   return SchemeIs(url::kHttpsScheme) || SchemeIs(url::kHttpScheme);
 }
 
+bool GURL::SchemeIsHTTPOrHTTPSOrHTTPPS() const {
+  return SchemeIsHTTPOrHTTPS() || SchemeIs(url::kHttppsScheme);
+}
+
 bool GURL::SchemeIsWSOrWSS() const {
   return SchemeIs(url::kWsScheme) || SchemeIs(url::kWssScheme);
 }
 
 bool GURL::SchemeIsCryptographic() const {
-  return has_scheme() && SchemeIsCryptographic(scheme());}
+  return has_scheme() && SchemeIsCryptographic(scheme());
+}
 
 bool GURL::SchemeIsCryptographic(std::string_view lower_ascii_scheme) {
   DCHECK(base::IsStringASCII(lower_ascii_scheme));
   DCHECK(base::ToLowerASCII(lower_ascii_scheme) == lower_ascii_scheme);
 
   return lower_ascii_scheme == url::kHttpsScheme ||
+         lower_ascii_scheme == url::kHttppsScheme ||
          lower_ascii_scheme == url::kWssScheme;
 }
 

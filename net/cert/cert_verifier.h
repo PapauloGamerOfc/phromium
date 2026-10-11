@@ -93,7 +93,13 @@ class NET_EXPORT CertVerifier {
     // in implementations where CT is handled by chrome.
     VERIFY_SXG_CT_REQUIREMENTS = 1 << 1,
 
-    VERIFY_FLAGS_LAST = VERIFY_SXG_CT_REQUIREMENTS
+    // Verify an HTTPPS server certificate: the leaf must contain an X25519
+    // keyAgreement-only key instead of a TLS signing key. This does not change
+    // trust anchors, name checks, revocation, or Certificate Transparency.
+    // Ordinary TLS callers must never set this flag.
+    VERIFY_HTTPPS_SERVER = 1 << 2,
+
+    VERIFY_FLAGS_LAST = VERIFY_HTTPPS_SERVER
   };
   // LINT.ThenChange(/net/log/net_log_util.cc:CertVerifier.VerifyFlags)
 

@@ -137,6 +137,14 @@ TEST_F(URLUtilTest, IsReferrerScheme) {
   EXPECT_FALSE(IsReferrerScheme(kFooScheme));
 }
 
+TEST_F(URLUtilTest, HttppsSchemeIsStandardAndReferrerAllowed) {
+  EXPECT_TRUE(IsStandard("httpps"));
+  EXPECT_TRUE(IsReferrerScheme("httpps"));
+  SchemeType type;
+  EXPECT_TRUE(GetStandardSchemeType("httpps", &type));
+  EXPECT_EQ(SCHEME_WITH_HOST_PORT_AND_USER_INFORMATION, type);
+}
+
 TEST_F(URLUtilTest, AddReferrerScheme) {
   static const char kFooScheme[] = "foo";
   EXPECT_FALSE(IsReferrerScheme(kFooScheme));

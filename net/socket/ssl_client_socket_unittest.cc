@@ -61,6 +61,7 @@
 #include "net/dns/host_resolver.h"
 #include "net/http/transport_security_state.h"
 #include "net/http/transport_security_state_test_util.h"
+#include "net/httpps/draft01.h"
 #include "net/log/net_log_event_type.h"
 #include "net/log/net_log_source.h"
 #include "net/log/test_net_log.h"
@@ -119,6 +120,36 @@ using testing::Values;
 using testing::ValuesIn;
 
 namespace net {
+
+class SSLClientContextHttppsTestPeer {
+ public:
+  static uint64_t Generation(SSLClientContext& context) {
+    context.SynchronizeHttppsSessionGeneration();
+    return context.httpps_session_generation_;
+  }
+  static void Store(SSLClientContext& context, uint64_t generation,
+                    const HostPortPair& server, const SSLConfig& config,
+                    httpps::SessionTicket ticket) {
+    context.StoreHttppsSession(generation, server, config, std::move(ticket));
+  }
+  static std::optional<httpps::SessionTicket> Take(
+      SSLClientContext& context, const HostPortPair& server,
+      const SSLConfig& config) {
+    return context.TakeHttppsSession(server, config);
+  }
+  static httpps::SessionTicket Ticket(std::string host = "cache.test") {
+    httpps::SessionTicket ticket;
+    ticket.identity = {1, 2, 3};
+    ticket.psk.fill(0x42);
+    ticket.lifetime = 3600;
+    ticket.received_milliseconds = httpps::MonotonicMilliseconds();
+    ticket.hostname = std::move(host);
+    // This is only a cache unit test. The socket must separately validate the
+    // real stored certificate chain before it can use a ticket on the wire.
+    ticket.certificates = {"cache fixture, not a certificate"};
+    return ticket;
+  }
+};
 
 class NetLogWithSource;
 
@@ -7028,6 +7059,141 @@ TEST_F(SSLClientSocketTest, ServerPaddingSupportedNoPaddingRequested) {
   EXPECT_TRUE(LogContainsEndEvent(entries, -1, NetLogEventType::SSL_CONNECT));
   EXPECT_EQ(false, entries.back().params.FindBool("requested_server_padding"));
   EXPECT_EQ(false, entries.back().params.FindBool("received_server_padding"));
+}
+
+TEST_F(SSLClientSocketTest, HttppsTicketsArePartitionedAndSingleUse) {
+  using Peer = SSLClientContextHttppsTestPeer;
+  const HostPortPair server("cache.test", 343);
+  SSLConfig config;
+  config.is_httpps = true;
+  config.alpn_protos = {NextProto::kProtoHTTP11};
+  config.network_anonymization_key = NetworkAnonymizationKey::CreateSameSite(
+      SchemefulSite(GURL("https://first.test")));
+  Peer::Store(*context_, Peer::Generation(*context_), server, config,
+              Peer::Ticket());
+  EXPECT_EQ(ssl_client_session_cache_->size(), 0u);
+  EXPECT_FALSE(Peer::Take(*context_, HostPortPair("cache.test", 443), config));
+  EXPECT_FALSE(Peer::Take(*context_, HostPortPair("other.test", 343), config));
+
+  std::vector<SSLConfig> alternatives(8, config);
+  alternatives[0].is_httpps = false;
+  alternatives[1].privacy_mode = PRIVACY_MODE_ENABLED;
+  alternatives[2].session_usage = SessionUsage::kProxy;
+  alternatives[3].proxy_chain = ProxyChain::FromSchemeHostAndPort(
+      ProxyServer::SCHEME_HTTP, "proxy.test", 8080);
+  alternatives[4].proxy_chain_index = 1;
+  alternatives[5].alpn_protos = {NextProto::kProtoHTTP2};
+  alternatives[6].network_anonymization_key =
+      NetworkAnonymizationKey::CreateSameSite(
+          SchemefulSite(GURL("https://second.test")));
+  alternatives[7].disable_cert_verification_network_fetches = true;
+  for (size_t i = 0; i < alternatives.size(); ++i) {
+    SCOPED_TRACE(i);
+    EXPECT_FALSE(Peer::Take(*context_, server, alternatives[i]));
+  }
+  auto ticket = Peer::Take(*context_, server, config);
+  ASSERT_TRUE(ticket);
+  EXPECT_EQ(ticket->identity, (httpps::Bytes{1, 2, 3}));
+  EXPECT_FALSE(Peer::Take(*context_, server, config));
+}
+
+TEST_F(SSLClientSocketTest, HttppsTicketsInvalidateWithTrustAndOldCallbacks) {
+  using Peer = SSLClientContextHttppsTestPeer;
+  const HostPortPair server("cache.test", 343);
+  SSLConfig config;
+  config.is_httpps = true;
+  const std::vector<std::function<void()>> changes = {
+      [&] { context_->OnSSLContextConfigChanged(); },
+      [&] { context_->OnCertVerifierChanged(); },
+      [&] { context_->OnTrustStoreChanged(); },
+      [&] { ssl_client_session_cache_->Flush(); },
+      [&] { context_->SetHttppsTrustAnchors({"new origin root"}); },
+      [&] { context_->SetHttppsProxyTrustAnchors({"new proxy root"}); },
+      [&] { context_->OnClientCertStoreChanged(); },
+      [&] { context_->SetClientCertificate(server, nullptr, nullptr); }};
+  for (size_t i = 0; i < changes.size(); ++i) {
+    SCOPED_TRACE(i);
+    const uint64_t old_generation = Peer::Generation(*context_);
+    Peer::Store(*context_, old_generation, server, config, Peer::Ticket());
+    changes[i]();
+    EXPECT_FALSE(Peer::Take(*context_, server, config));
+    Peer::Store(*context_, old_generation, server, config, Peer::Ticket());
+    EXPECT_FALSE(Peer::Take(*context_, server, config));
+    Peer::Store(*context_, Peer::Generation(*context_), server, config,
+                Peer::Ticket());
+    EXPECT_TRUE(Peer::Take(*context_, server, config));
+  }
+}
+
+TEST_F(SSLClientSocketTest, HttppsTicketsRejectExpiredMalformedAndOversized) {
+  using Peer = SSLClientContextHttppsTestPeer;
+  const HostPortPair server("cache.test", 343);
+  SSLConfig config;
+  config.is_httpps = true;
+  std::vector<httpps::SessionTicket> tickets(10, Peer::Ticket());
+  tickets[0].lifetime = 0;
+  tickets[1].lifetime = 604801;
+  tickets[2].received_milliseconds = -1;
+  tickets[3].received_milliseconds += 100000;
+  tickets[4].hostname = "different.test";
+  tickets[5].identity.clear();
+  tickets[6].certificates.clear();
+  tickets[7].certificates = {std::string(1024 * 1024, 'x')};
+  tickets[8].certificates = std::vector<std::string>(65, "certificate");
+  tickets[9].identity.resize(65536);
+  for (size_t i = 0; i < tickets.size(); ++i) {
+    SCOPED_TRACE(i);
+    Peer::Store(*context_, Peer::Generation(*context_), server, config,
+                tickets[i]);
+    EXPECT_FALSE(Peer::Take(*context_, server, config));
+  }
+  auto expired = Peer::Ticket();
+  expired.lifetime = 1;
+  expired.received_milliseconds -= 1000;
+  Peer::Store(*context_, Peer::Generation(*context_), server, config, expired);
+  EXPECT_FALSE(Peer::Take(*context_, server, config));
+}
+
+TEST_F(SSLClientSocketTest, HttppsTicketCacheHasBoundedEntries) {
+  using Peer = SSLClientContextHttppsTestPeer;
+  SSLConfig config;
+  config.is_httpps = true;
+  for (size_t i = 0; i < 257; ++i) {
+    auto host = "cache" + base::NumberToString(i) + ".test";
+    Peer::Store(*context_, Peer::Generation(*context_), HostPortPair(host, 343),
+                config, Peer::Ticket(host));
+  }
+  EXPECT_FALSE(Peer::Take(*context_, HostPortPair("cache0.test", 343), config));
+  EXPECT_TRUE(Peer::Take(*context_, HostPortPair("cache1.test", 343), config));
+  EXPECT_TRUE(Peer::Take(*context_, HostPortPair("cache256.test", 343), config));
+}
+
+TEST_F(SSLClientSocketTest, HttppsTicketCacheHasBoundedBytes) {
+  using Peer = SSLClientContextHttppsTestPeer;
+  SSLConfig config;
+  config.is_httpps = true;
+  for (size_t i = 0; i < 17; ++i) {
+    auto host = "large" + base::NumberToString(i) + ".test";
+    auto ticket = Peer::Ticket(host);
+    ticket.certificates = {std::string(
+        1024 * 1024 - ticket.identity.size() - ticket.psk.size(), 'x')};
+    Peer::Store(*context_, Peer::Generation(*context_), HostPortPair(host, 343),
+                config, std::move(ticket));
+  }
+  EXPECT_FALSE(Peer::Take(*context_, HostPortPair("large0.test", 343), config));
+  EXPECT_TRUE(Peer::Take(*context_, HostPortPair("large1.test", 343), config));
+  EXPECT_TRUE(Peer::Take(*context_, HostPortPair("large16.test", 343), config));
+}
+
+TEST_F(SSLClientSocketTest, HttppsSessionCacheRespectsDisabledCaching) {
+  using Peer = SSLClientContextHttppsTestPeer;
+  SSLClientContext context(ssl_config_service_.get(), cert_verifier_.get(),
+                           transport_security_state_.get(), nullptr, nullptr);
+  SSLConfig config;
+  config.is_httpps = true;
+  const HostPortPair server("cache.test", 343);
+  Peer::Store(context, Peer::Generation(context), server, config, Peer::Ticket());
+  EXPECT_FALSE(Peer::Take(context, server, config));
 }
 
 TEST_F(SSLClientSocketTest, ServerPaddingUnsupported) {

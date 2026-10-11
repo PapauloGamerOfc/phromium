@@ -361,8 +361,10 @@ class InstallStaticUtilTest
 #if BUILDFLAG(GOOGLE_CHROME_BRANDING)
     static constexpr wchar_t kPolicyKey[] =
         L"Software\\Policies\\Google\\Chrome";
-#else
+#elif BUILDFLAG(GOOGLE_CHROME_FOR_TESTING_BRANDING)
     static constexpr wchar_t kPolicyKey[] = L"Software\\Policies\\Chromium";
+#else
+    static constexpr wchar_t kPolicyKey[] = L"Software\\Policies\\Phromium";
 #endif
 
     ASSERT_EQ(ERROR_SUCCESS,
@@ -417,7 +419,7 @@ TEST_P(InstallStaticUtilTest, GetChromeInstallSubDirectory) {
   // The directory strings for the brand's install modes; parallel to
   // kInstallModes.
   static constexpr auto kInstallDirs = std::to_array<const wchar_t*>({
-      L"Chromium",
+      L"Phromium",
   });
 #endif
   static_assert(std::size(kInstallDirs) == NUM_INSTALL_MODES,
@@ -446,7 +448,7 @@ TEST_P(InstallStaticUtilTest, GetRegistryPath) {
   // The registry path strings for the brand's install modes; parallel to
   // kInstallModes.
   static constexpr auto kRegistryPaths = std::to_array<const wchar_t*>({
-      L"Software\\Chromium",
+      L"Software\\Phromium",
   });
 #endif
   static_assert(std::size(kRegistryPaths) == NUM_INSTALL_MODES,
@@ -484,7 +486,7 @@ TEST_P(InstallStaticUtilTest, GetUninstallRegistryPath) {
   // kInstallModes.
   static constexpr auto kUninstallRegistryPaths =
       std::to_array<const wchar_t*>({
-          L"Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Chromium",
+          L"Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Phromium",
       });
 #endif
   static_assert(std::size(kUninstallRegistryPaths) == NUM_INSTALL_MODES,
@@ -531,7 +533,7 @@ TEST_P(InstallStaticUtilTest, GetBaseAppId) {
 #else
   // The base app ids for the brand's install modes; parallel to kInstallModes.
   static constexpr auto kBaseAppIds = std::to_array<const wchar_t*>({
-      L"Chromium",
+      L"Phromium",
   });
 #endif
   static_assert(std::size(kBaseAppIds) == NUM_INSTALL_MODES,
@@ -594,16 +596,16 @@ TEST_P(InstallStaticUtilTest, GetToastActivatorClsid) {
   // The toast activator CLSIDs for the brand's install modes; parallel to
   // kInstallModes.
   static constexpr auto kToastActivatorClsids = std::to_array<CLSID>({
-      {0x635EFA6F,
-       0x08D6,
-       0x4EC9,
-       {0xBD, 0x14, 0x8A, 0x0F, 0xDE, 0x97, 0x51, 0x59}}  // Chromium.
+      {0xd376dfae,
+       0x36ac,
+       0x537c,
+       {0x9e, 0x89, 0x59, 0xd7, 0xbe, 0x7e, 0x8a, 0x07}}  // Phromium.
   });
 
   // The string representation of the CLSIDs above.
   static constexpr auto kToastActivatorClsidsString =
       std::to_array<const wchar_t*>({
-          L"{635EFA6F-08D6-4EC9-BD14-8A0FDE975159}"  // Chromium.
+          L"{D376DFAE-36AC-537C-9E89-59D7BE7E8A07}"  // Phromium.
       });
 #endif
   static_assert(std::size(kToastActivatorClsids) == NUM_INSTALL_MODES,
@@ -664,15 +666,15 @@ TEST_P(InstallStaticUtilTest, GetElevatorClsid) {
 #else
   // The Elevator CLSIDs, one for each of the kInstallModes.
   static constexpr auto kElevatorClsids = std::to_array<CLSID>({
-      {0xD133B120,
-       0x6DB4,
-       0x4D6B,
-       {0x8B, 0xFE, 0x83, 0xBF, 0x8C, 0xA1, 0xB1, 0xB0}},  // Chromium.
+      {0x770905cf,
+       0x2e8a,
+       0x5deb,
+       {0x87, 0xea, 0x5b, 0xc2, 0xd2, 0xf1, 0xc4, 0xab}},  // Phromium.
   });
 
   // The string representation of the CLSIDs above.
   static constexpr auto kElevatorClsidsString = std::to_array<const wchar_t*>({
-      L"{D133B120-6DB4-4D6B-8BFE-83BF8CA1B1B0}",  // Chromium.
+      L"{770905CF-2E8A-5DEB-87EA-5BC2D2F1C4AB}",  // Phromium.
   });
 #endif
   static_assert(std::size(kElevatorClsids) == NUM_INSTALL_MODES,
@@ -744,17 +746,17 @@ TEST_P(InstallStaticUtilTest, GetElevatorIid) {
 #else
   // The Elevator IIDs, one for each of the kInstallModes.
   static constexpr auto kElevatorIids = std::to_array<IID>({
-      {0xbb19a0e5,
-       0xc6,
-       0x4966,
-       {0x94, 0xb2, 0x5a, 0xfe, 0xc6, 0xfe, 0xd9,
-        0x3a}},  // IElevator IID and TypeLib
-                 // {BB19A0E5-00C6-4966-94B2-5AFEC6FED93A} for Chromium.
+      {0x51333cf0,
+       0xf660,
+       0x530e,
+       {0x82, 0x97, 0x96, 0x73, 0x7e, 0x1b, 0xa8,
+        0xe8}},  // IElevator IID and TypeLib
+                 // {51333CF0-F660-530E-8297-96737E1BA8E8} for Phromium.
   });
 
   // The string representation of the IIDs above.
   static constexpr auto kElevatorIidsString = std::to_array<const wchar_t*>({
-      L"{BB19A0E5-00C6-4966-94B2-5AFEC6FED93A}",  // Chromium.
+      L"{51333CF0-F660-530E-8297-96737E1BA8E8}",  // Phromium.
   });
 #endif
   static_assert(std::size(kElevatorIids) == NUM_INSTALL_MODES,
@@ -862,7 +864,7 @@ TEST_P(InstallStaticUtilTest, GetSandboxSidPrefix) {
 #else
   static constexpr auto kSandBoxSids = std::to_array<const wchar_t*>({
       L"S-1-15-2-3251537155-1984446955-2931258699-841473695-1938553385-"
-      L"924012148-",  // Chromium.
+      L"366676605-",  // Phromium.
   });
 #endif
   static_assert(std::size(kSandBoxSids) == NUM_INSTALL_MODES,
