@@ -423,11 +423,6 @@ bool HttpStreamFactory::Job::UsingHttpProxyWithoutTunnel() const {
 bool HttpStreamFactory::Job::CanUseExistingSpdySession() const {
   DCHECK(!using_quic_);
 
-  // Never reuse an HTTPS connection for the distinct experimental protocol.
-  if (request_info_.url.SchemeIs(url::kHttppsScheme)) {
-    return false;
-  }
-
   if (session_->http_server_properties()->RequiresHTTP11(
           url::SchemeHostPort(request_info_.url),
           request_info_.network_anonymization_key)) {
@@ -438,14 +433,16 @@ bool HttpStreamFactory::Job::CanUseExistingSpdySession() const {
     return try_websocket_over_http2_;
   }
 
-  DCHECK(request_info_.url.SchemeIsHTTPOrHTTPS());
+  DCHECK(request_info_.url.SchemeIsHTTPOrHTTPS() ||
+         request_info_.url.SchemeIs(url::kHttppsScheme));
 
   // We need to make sure that if a HTTP/2 session was created for
   // https://somehost/ then we do not use that session for http://somehost:443/.
   // The only time we can use an existing session is if the request URL is
   // https (the normal case) or if we are connecting to an HTTPS proxy to make
   // a GET request for an HTTP destination. https://crbug.com/133176
-  if (request_info_.url.SchemeIs(url::kHttpsScheme)) {
+  if (request_info_.url.SchemeIs(url::kHttpsScheme) ||
+      request_info_.url.SchemeIs(url::kHttppsScheme)) {
     return true;
   }
   if (!proxy_info_.is_empty()) {

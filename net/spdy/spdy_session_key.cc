@@ -32,20 +32,22 @@ SpdySessionKey::SpdySessionKey(
     const NetworkAnonymizationKey& network_anonymization_key,
     SecureDnsPolicy secure_dns_policy,
     bool disable_cert_verification_network_fetches,
-    handles::NetworkHandle target_network)
+    handles::NetworkHandle target_network,
+    bool is_httpps)
     : host_port_pair_(host_port_pair),
       privacy_mode_(privacy_mode),
       proxy_chain_(proxy_chain),
       session_usage_(session_usage),
       socket_tag_(socket_tag),
       network_anonymization_key_(
-          NetworkAnonymizationKey::IsPartitioningEnabled()
+          is_httpps || NetworkAnonymizationKey::IsPartitioningEnabled()
               ? network_anonymization_key
               : NetworkAnonymizationKey()),
       secure_dns_policy_(secure_dns_policy),
       disable_cert_verification_network_fetches_(
           disable_cert_verification_network_fetches),
-      target_network_(target_network) {
+      target_network_(target_network),
+      is_httpps_(is_httpps) {
   DCHECK(disable_cert_verification_network_fetches_ ||
          session_usage_ != SessionUsage::kProxy);
   DCHECK(privacy_mode_ == PRIVACY_MODE_DISABLED ||
@@ -60,26 +62,31 @@ bool SpdySessionKey::operator<(const SpdySessionKey& other) const {
   return std::tie(host_port_pair_, privacy_mode_, proxy_chain_, session_usage_,
                   network_anonymization_key_, secure_dns_policy_,
                   disable_cert_verification_network_fetches_, socket_tag_,
-                  target_network_) <
+                  target_network_, is_httpps_) <
          std::tie(other.host_port_pair_, other.privacy_mode_,
                   other.proxy_chain_, other.session_usage_,
                   other.network_anonymization_key_, other.secure_dns_policy_,
                   other.disable_cert_verification_network_fetches_,
-                  other.socket_tag_, other.target_network_);
+                  other.socket_tag_, other.target_network_, other.is_httpps_);
 }
 
 SpdySessionKey::CompareForAliasingResult SpdySessionKey::CompareForAliasing(
     const SpdySessionKey& other) const {
   CompareForAliasingResult result;
+  // HTTPPS policy and client identities are explicitly provisioned for one
+  // origin. A certificate SAN does not authorize skipping the other origin's
+  // policy (including a policy configured after this connection was opened).
   result.is_potentially_aliasable =
-      (privacy_mode_ == other.privacy_mode_ &&
+      ((!is_httpps_ || host_port_pair_ == other.host_port_pair_) &&
+       privacy_mode_ == other.privacy_mode_ &&
        proxy_chain_ == other.proxy_chain_ &&
        session_usage_ == other.session_usage_ &&
        network_anonymization_key_ == other.network_anonymization_key_ &&
        secure_dns_policy_ == other.secure_dns_policy_ &&
        disable_cert_verification_network_fetches_ ==
            other.disable_cert_verification_network_fetches_ &&
-       target_network_ == other.target_network_);
+       target_network_ == other.target_network_ &&
+       is_httpps_ == other.is_httpps_);
   result.is_socket_tag_match = (socket_tag_ == other.socket_tag_);
   return result;
 }
@@ -94,7 +101,8 @@ std::ostream& operator<<(std::ostream& os, const SpdySessionKey& key) {
      << ", secure_dns_policy: " << static_cast<int>(key.secure_dns_policy())
      << ", disable_cert_verification_network_fetches: "
      << key.disable_cert_verification_network_fetches()
-     << ", target_network: " << key.target_network() << "}";
+     << ", target_network: " << key.target_network()
+     << ", is_httpps: " << key.is_httpps() << "}";
   return os;
 }
 

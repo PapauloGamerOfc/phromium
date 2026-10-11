@@ -14,7 +14,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock, patch
 
 from browser_e2e_test import (Browser, CDP, Fixtures, MAX_MESSAGE, OwnedProcess,
                               close_writer, cookie_map, debug_targets)
@@ -207,6 +207,51 @@ class CDPTest(unittest.IsolatedAsyncioTestCase):
                     self.fail("Missing browser must not enter the test body")
             self.assertIsNone(browser.process)
             self.assertTrue(browser.log.closed)
+
+    async def test_startup_failure_survives_forced_process_cleanup(self):
+        for failure in (RuntimeError("original WebSocket failure"),
+                        asyncio.CancelledError("startup cancelled")):
+            with self.subTest(failure=type(failure).__name__):
+                with tempfile.TemporaryDirectory(prefix="httpps-startup-failure-") as temporary:
+                    folder = Path(temporary)
+                    browser = Browser(folder / "fixture.exe", folder / "profile")
+                    process = Mock(returncode=None)
+                    process.wait = AsyncMock(side_effect=[TimeoutError("owned wait timeout"), 0])
+
+                    async def spawn(*args, **kwargs):
+                        (browser.profile / "DevToolsActivePort").write_text("12345\n/browser/test\n")
+                        return process
+
+                    with patch("browser_e2e_test.OwnedProcess.start", side_effect=spawn), \
+                         patch("browser_e2e_test.debug_targets", new=AsyncMock(return_value=[
+                             {"type": "page", "webSocketDebuggerUrl": "ws://127.0.0.1:12345/test"}])), \
+                         patch("browser_e2e_test.CDP.connect", new=AsyncMock(side_effect=failure)):
+                        with self.assertRaises(type(failure)) as caught:
+                            await browser.__aenter__()
+                    self.assertIs(caught.exception, failure)
+                    self.assertIn("connecting page debugger WebSocket", failure.__notes__[0])
+                    self.assertIn("Browser cleanup also failed", failure.__notes__[1])
+                    process.kill.assert_called_once()
+                    self.assertEqual(process.wait.await_count, 2)
+                    self.assertTrue(browser.log.closed)
+
+    async def test_cleanup_preserves_body_error_but_invalidates_successful_persistence(self):
+        for failure in (ValueError("original assertion"), None):
+            with self.subTest(prior_failure=failure is not None):
+                with tempfile.TemporaryDirectory(prefix="httpps-cleanup-failure-") as temporary:
+                    folder = Path(temporary)
+                    browser = Browser(folder / "fixture.exe", folder / "profile")
+                    browser.log = (folder / "fixture.log").open("ab")
+                    browser.process = Mock()
+                    browser.process.wait = AsyncMock(side_effect=[TimeoutError("timeout"), 0])
+                    if failure:
+                        self.assertFalse(await browser.__aexit__(type(failure), failure, None))
+                        self.assertIn("persistence result invalid", failure.__notes__[0])
+                    else:
+                        with self.assertRaisesRegex(RuntimeError, "persistence result invalid"):
+                            await browser.__aexit__(None, None, None)
+                    browser.process.kill.assert_called_once()
+                    self.assertTrue(browser.log.closed)
 
 
 if __name__ == "__main__":

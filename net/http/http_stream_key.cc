@@ -34,7 +34,8 @@ HttpStreamKey::HttpStreamKey(
       privacy_mode_(privacy_mode),
       socket_tag_(std::move(socket_tag)),
       network_anonymization_key_(
-          NetworkAnonymizationKey::IsPartitioningEnabled()
+          destination_.scheme() == url::kHttppsScheme ||
+                  NetworkAnonymizationKey::IsPartitioningEnabled()
               ? std::move(network_anonymization_key)
               : NetworkAnonymizationKey()),
       secure_dns_policy_(secure_dns_policy),
@@ -104,7 +105,8 @@ SpdySessionKey HttpStreamKey::CalculateSpdySessionKey() const {
   return SpdySessionKey(
       std::move(host_port), privacy_mode(), ProxyChain::Direct(),
       SessionUsage::kDestination, socket_tag(), network_anonymization_key(),
-      secure_dns_policy(), disable_cert_network_fetches(), target_network());
+      secure_dns_policy(), disable_cert_network_fetches(), target_network(),
+      destination().scheme() == url::kHttppsScheme);
 }
 
 HostResolver::Host HttpStreamKey::GetHostToResolve() const {

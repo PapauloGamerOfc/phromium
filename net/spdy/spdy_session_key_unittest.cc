@@ -4,6 +4,8 @@
 
 #include "net/spdy/spdy_session_key.h"
 
+#include "base/test/scoped_feature_list.h"
+#include "net/base/features.h"
 #include "net/base/network_anonymization_key.h"
 #include "net/base/network_handle.h"
 #include "net/base/proxy_chain.h"
@@ -18,6 +20,67 @@
 namespace net {
 
 namespace {
+
+TEST(SpdySessionKeyTest, HttppsNeverAliasesHttpsEvenAtSameAuthority) {
+  auto key = [](bool httpps) {
+    return SpdySessionKey(HostPortPair("same.example", 343),
+                         PRIVACY_MODE_DISABLED, ProxyChain::Direct(),
+                         SessionUsage::kDestination, SocketTag(),
+                         NetworkAnonymizationKey(), SecureDnsPolicy::kAllow,
+                         false, handles::kInvalidNetworkHandle, httpps);
+  };
+  const auto https = key(false);
+  const auto httpps = key(true);
+  EXPECT_NE(https, httpps);
+  EXPECT_NE(https < httpps, httpps < https);
+  EXPECT_FALSE(https.CompareForAliasing(httpps).is_potentially_aliasable);
+  EXPECT_FALSE(httpps.CompareForAliasing(https).is_potentially_aliasable);
+  EXPECT_TRUE(httpps.CompareForAliasing(key(true)).is_potentially_aliasable);
+  EXPECT_TRUE(httpps.is_httpps());
+  EXPECT_FALSE(https.is_httpps());
+}
+
+TEST(SpdySessionKeyTest, HttppsDoesNotAliasAnotherOrigin) {
+  auto key = [](const char* host, uint16_t port, bool httpps) {
+    return SpdySessionKey(HostPortPair(host, port), PRIVACY_MODE_DISABLED,
+                         ProxyChain::Direct(), SessionUsage::kDestination,
+                         SocketTag(), NetworkAnonymizationKey(),
+                         SecureDnsPolicy::kAllow, true,
+                         handles::kInvalidNetworkHandle, httpps);
+  };
+  const auto source = key("first.test", 343, true);
+  EXPECT_TRUE(source.CompareForAliasing(key("first.test", 343, true))
+                  .is_potentially_aliasable);
+  EXPECT_FALSE(source.CompareForAliasing(key("second.test", 343, true))
+                   .is_potentially_aliasable);
+  EXPECT_FALSE(source.CompareForAliasing(key("first.test", 8443, true))
+                   .is_potentially_aliasable);
+  EXPECT_TRUE(key("first.test", 443, false)
+                  .CompareForAliasing(key("second.test", 443, false))
+                  .is_potentially_aliasable);
+}
+
+TEST(SpdySessionKeyTest, HttppsPartitionsWhenOrdinaryPartitioningIsDisabled) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndDisableFeature(
+      features::kPartitionConnectionsByNetworkIsolationKey);
+  ASSERT_FALSE(NetworkAnonymizationKey::IsPartitioningEnabled());
+  const auto first = NetworkAnonymizationKey::CreateSameSite(
+      SchemefulSite(GURL("https://first.test")));
+  const auto second = NetworkAnonymizationKey::CreateSameSite(
+      SchemefulSite(GURL("https://second.test")));
+  auto key = [](const NetworkAnonymizationKey& nak, bool httpps) {
+    return SpdySessionKey(HostPortPair("same.test", 343), PRIVACY_MODE_DISABLED,
+                         ProxyChain::Direct(), SessionUsage::kDestination,
+                         SocketTag(), nak, SecureDnsPolicy::kAllow, true,
+                         handles::kInvalidNetworkHandle, httpps);
+  };
+  EXPECT_EQ(key(first, true).network_anonymization_key(), first);
+  EXPECT_NE(key(first, true), key(second, true));
+  EXPECT_FALSE(key(first, true).CompareForAliasing(key(second, true))
+                   .is_potentially_aliasable);
+  EXPECT_EQ(key(first, false), key(second, false));
+}
 
 // Check for equality of session keys, and inequality when various pieces of the
 // key differ. The SocketTag is only used on Android, and the NAK is only used

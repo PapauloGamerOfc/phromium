@@ -34,6 +34,26 @@ TEST(ClientSocketPool, HttppsNeverSharesHttpsSocketGroup) {
   EXPECT_NE(group(url::kHttppsScheme), group(url::kHttpScheme));
 }
 
+TEST(ClientSocketPool, HttppsPartitionsWhenOrdinaryPartitioningIsDisabled) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndDisableFeature(
+      features::kPartitionConnectionsByNetworkIsolationKey);
+  ASSERT_FALSE(NetworkAnonymizationKey::IsPartitioningEnabled());
+  const auto first = NetworkAnonymizationKey::CreateSameSite(
+      SchemefulSite(GURL("https://first.test")));
+  const auto second = NetworkAnonymizationKey::CreateSameSite(
+      SchemefulSite(GURL("https://second.test")));
+  auto group = [](const char* scheme, const NetworkAnonymizationKey& key) {
+    return ClientSocketPool::GroupId(
+        url::SchemeHostPort(scheme, "example.test", 343),
+        PRIVACY_MODE_DISABLED, key, SecureDnsPolicy::kAllow, false,
+        handles::kInvalidNetworkHandle);
+  };
+  EXPECT_EQ(group(url::kHttppsScheme, first).network_anonymization_key(), first);
+  EXPECT_NE(group(url::kHttppsScheme, first), group(url::kHttppsScheme, second));
+  EXPECT_EQ(group(url::kHttpsScheme, first), group(url::kHttpsScheme, second));
+}
+
 TEST(ClientSocketPool, GroupIdOperators) {
   base::test::ScopedFeatureList feature_list;
   feature_list.InitAndEnableFeature(

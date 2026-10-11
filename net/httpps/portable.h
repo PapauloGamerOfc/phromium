@@ -22,8 +22,10 @@ namespace net::httpps {
 // production builds always use the checked Chromium span implementation.
 #if defined(PHROMIUM_HTTPPS_STANDALONE)
 using ByteSpan = std::span<const uint8_t>;
+using MutableByteSpan = std::span<uint8_t>;
 #else
 using ByteSpan = base::span<const uint8_t>;
+using MutableByteSpan = base::span<uint8_t>;
 #endif
 
 inline ByteSpan StringBytes(std::string_view value) {

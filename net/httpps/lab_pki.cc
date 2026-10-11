@@ -4,20 +4,25 @@
 
 #include <algorithm>
 #include <set>
+#include <ctime>
 
 #include "net/httpps/draft01.h"
+#include "net/httpps/certificate_features.h"
+#include "net/httpps/native_provider.h"
 #include "third_party/boringssl/src/include/openssl/asn1.h"
 #include "third_party/boringssl/src/include/openssl/bn.h"
+#include "third_party/boringssl/src/include/openssl/bytestring.h"
 #include "third_party/boringssl/src/include/openssl/ec.h"
 #include "third_party/boringssl/src/include/openssl/ecdsa.h"
 #include "third_party/boringssl/src/include/openssl/evp.h"
+#include "third_party/boringssl/src/include/openssl/rsa.h"
 #include "third_party/boringssl/src/include/openssl/x509.h"
 #include "third_party/boringssl/src/include/openssl/x509v3.h"
 
 namespace net::httpps {
 namespace {
 
-bssl::UniquePtr<X509> Parse(std::string_view der) {
+bssl::UniquePtr<X509> Parse(std::string_view der, bool require_v3 = true) {
   if (der.empty() || der.size() > 65536) {
     return nullptr;
   }
@@ -25,7 +30,7 @@ bssl::UniquePtr<X509> Parse(std::string_view der) {
   auto* cursor = begin;
   bssl::UniquePtr<X509> cert(d2i_X509(nullptr, &cursor, der.size()));
   if (!cert || static_cast<size_t>(cursor - begin) != der.size() ||
-      X509_get_version(cert.get()) != 2) {
+      (require_v3 && X509_get_version(cert.get()) != 2)) {
     return nullptr;
   }
   return cert;
@@ -134,7 +139,7 @@ bool CanonicalPublicKeyEncoding(X509* cert) {
          encoded == canonical;
 }
 
-bool CommonChecks(X509* cert, bool ca, size_t ca_below = 0) {
+bool CommonChecks(X509* cert, bool ca, size_t ca_below = 0, bool signing_parent = false) {
   bssl::UniquePtr<BIGNUM> serial(
       ASN1_INTEGER_to_BN(X509_get0_serialNumber(cert), nullptr));
   if (!serial || BN_is_negative(serial.get()) || BN_is_zero(serial.get()) ||
@@ -191,6 +196,8 @@ bool CommonChecks(X509* cert, bool ca, size_t ca_below = 0) {
                      NID_X9_62_prime256v1;
   }
   // Leaf usage is exactly bit 4 (keyAgreement), including no unknown bits.
+  if (signing_parent)
+    return ASN1_BIT_STRING_get_bit(usage.get(), 0) == 1;
   for (int bit = 0; bit < ASN1_STRING_length(usage.get()) * 8; ++bit) {
     if (ASN1_BIT_STRING_get_bit(usage.get(), bit) != (bit == 4)) {
       return false;
@@ -257,19 +264,88 @@ bool ExtractServerPublicKey(std::string_view leaf_der,
   return true;
 }
 
-bool VerifyLabChain(const std::vector<std::string>& chain,
+static std::optional<std::set<uint16_t>> CertificateTLSFeatures(
+    std::string_view der) {
+  // A validated path may include a v1 trust anchor. This helper only interprets
+  // the TLSFeature extension; it does not impose the lab profile on that path.
+  auto certificate = Parse(der, false);
+  bssl::UniquePtr<ASN1_OBJECT> oid(OBJ_txt2obj("1.3.6.1.5.5.7.1.24", 1));
+  if (!certificate || !oid)
+    return std::nullopt;
+  const int index = X509_get_ext_by_OBJ(certificate.get(), oid.get(), -1);
+  if (index < 0)
+    return std::set<uint16_t>{};
+  if (X509_get_ext_by_OBJ(certificate.get(), oid.get(), index) >= 0)
+    return std::nullopt;
+  const auto* encoded = X509_EXTENSION_get_data(X509_get_ext(certificate.get(), index));
+  CBS input, features;
+  CBS_init(&input, ASN1_STRING_get0_data(encoded), ASN1_STRING_length(encoded));
+  if (!CBS_get_asn1(&input, &features, CBS_ASN1_SEQUENCE) || CBS_len(&input))
+    return std::nullopt;
+  std::set<uint16_t> required;
+  while (CBS_len(&features)) {
+    uint64_t feature;
+    if (!CBS_get_asn1_uint64(&features, &feature) || feature > 65535)
+      return std::nullopt;
+    required.insert(static_cast<uint16_t>(feature));
+  }
+  return required;
+}
+
+std::optional<bool> CertificateRequiresFeature(std::string_view der, uint16_t feature) {
+  const auto features = CertificateTLSFeatures(der);
+  if (!features)
+    return std::nullopt;
+  return features->contains(feature);
+}
+
+std::optional<bool> CertificateRequiresBrowserEvidence(std::string_view der,
+                                                      bool offered_ocsp,
+                                                      bool offered_scts) {
+  const auto features = CertificateTLSFeatures(der);
+  if (!features)
+    return std::nullopt;
+  return (offered_ocsp && features->contains(5)) ||
+         (offered_scts && features->contains(18));
+}
+
+std::optional<bool> CertificateRequiresOCSP(std::string_view der) {
+  return CertificateRequiresFeature(der, 5);
+}
+
+bool CertificateTLSFeaturesAllowed(
+    const std::vector<std::string>& validated_path) {
+  if (validated_path.empty() || validated_path.size() > 64)
+    return false;
+  auto child = CertificateTLSFeatures(validated_path.front());
+  if (!child)
+    return false;
+  for (size_t index = 1; index < validated_path.size(); ++index) {
+    auto issuer = CertificateTLSFeatures(validated_path[index]);
+    // RFC 7633 section 4.2.2: every subordinate certificate must preserve its
+    // issuer's advertised requirements, including features unknown locally.
+    // Only an independently validated, leaf-first path belongs in this check.
+    if (!issuer || !std::includes(child->begin(), child->end(),
+                                  issuer->begin(), issuer->end()))
+      return false;
+    child = std::move(issuer);
+  }
+  return true;
+}
+
+static bool VerifyRestrictedLabChain(const std::vector<std::string>& chain,
                     const std::vector<std::string>& anchors,
                     std::string_view hostname,
-                    Secret* server_public_key) {
+                    Secret* server_public_key, bool signing_parent) {
   if (chain.empty() || chain.size() > 8 || anchors.empty() ||
-      anchors.size() > 32 || !ValidServerName(hostname) ||
+      anchors.size() > 32 || !ValidServiceIdentity(hostname) ||
       std::set(chain.begin(), chain.end()).size() != chain.size()) {
     return false;
   }
   std::vector<bssl::UniquePtr<X509>> certificates;
   for (size_t i = 0; i < chain.size(); ++i) {
     auto cert = Parse(chain[i]);
-    if (!cert || !CommonChecks(cert.get(), i != 0, i ? i - 1 : 0) ||
+    if (!cert || !CommonChecks(cert.get(), i != 0, i ? i - 1 : 0, signing_parent && i == 0) ||
         !AlgorithmSupported(cert.get())) {
       return false;
     }
@@ -286,28 +362,30 @@ bool VerifyLabChain(const std::vector<std::string>& chain,
   if (hostname.starts_with("xn--")) {
     host_flags |= X509_CHECK_FLAG_NO_WILDCARDS;
   }
-  if (X509_check_host(leaf, hostname.data(), hostname.size(), host_flags,
-                      nullptr) != 1) {
+  const int matches = IsIpIdentity(hostname)
+      ? X509_check_ip_asc(leaf, std::string(hostname).c_str(), 0)
+      : X509_check_host(leaf, hostname.data(), hostname.size(), host_flags, nullptr);
+  if (matches != 1) {
     return false;
   }
   // Enforce RFC 8410's absent parameters and exact X25519 SPKI, rather than
   // relying on a permissive generic key parser or accepting an RSA/ECDSA leaf.
   bssl::UniquePtr<EVP_PKEY> public_key(X509_get_pubkey(leaf));
-  if (!public_key || EVP_PKEY_id(public_key.get()) != EVP_PKEY_X25519) {
+  if (!public_key || (!signing_parent && EVP_PKEY_id(public_key.get()) != EVP_PKEY_X25519)) {
     return false;
   }
   constexpr std::array<uint8_t, 12> kX25519Prefix = {
       0x30, 0x2a, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x6e, 0x03, 0x21, 0x00};
   X509_PUBKEY* spki = X509_get_X509_PUBKEY(leaf);
   int encoded_length = i2d_X509_PUBKEY(spki, nullptr);
-  if (encoded_length != 44) {
+  if (!signing_parent && encoded_length != 44) {
     return false;
   }
   std::array<uint8_t, 44> encoded{};
   uint8_t* encoded_ptr = encoded.data();
-  if (i2d_X509_PUBKEY(spki, &encoded_ptr) != 44 ||
+  if (!signing_parent && (i2d_X509_PUBKEY(spki, &encoded_ptr) != 44 ||
       !std::equal(kX25519Prefix.begin(), kX25519Prefix.end(),
-                  encoded.begin())) {
+                  encoded.begin()))) {
     return false;
   }
 
@@ -359,12 +437,124 @@ bool VerifyLabChain(const std::vector<std::string>& chain,
     }
     X509_VERIFY_PARAM_set_depth(parameters, 8);
     if (X509_verify_cert(context.get()) == 1) {
-      std::copy(encoded.begin() + 12, encoded.end(),
-                server_public_key->begin());
+      if (!signing_parent)
+        std::copy(encoded.begin() + 12, encoded.end(), server_public_key->begin());
       return true;
     }
   }
   return false;
+}
+
+bool VerifyLabChain(const std::vector<std::string>& chain,
+                    const std::vector<std::string>& anchors,
+                    std::string_view hostname, Secret* server_public_key,
+                    bool signing_parent, const NativeProvider* provider) {
+  if (VerifyRestrictedLabChain(chain, anchors, hostname, server_public_key, signing_parent))
+    return true;
+  return provider && !chain.empty() &&
+      provider->VerifyCertificatePath(chain, anchors, hostname).has_value() &&
+      (signing_parent || ExtractServerPublicKey(chain.front(), server_public_key));
+}
+
+bool ValidateDelegation(std::string_view parent_der, ByteSpan grant, bool server,
+                        const std::vector<uint16_t>& algorithms, Secret* public_key,
+                        const NativeProvider* provider) {
+  auto parent = Parse(parent_der);
+  if (!parent || grant.size() < 13)
+    return false;
+  auto integer = [](ByteSpan value) {
+    uint32_t result = 0;
+    for (uint8_t byte : value)
+      result = (result << 8) | byte;
+    return result;
+  };
+  const uint32_t valid_time = integer(grant.first(4u));
+  if (integer(grant.subspan(4u, 2u)) != (server ? 0xfe00 : 0xfe01))
+    return false;
+  const size_t spki_size = integer(grant.subspan(6u, 3u));
+  if (spki_size > grant.size() - 13 ||
+      !ExtractRawPublicKey(grant.subspan(9u, spki_size), public_key))
+    return false;
+  const size_t cursor = 9 + spki_size;
+  const uint16_t scheme = integer(grant.subspan(cursor, 2u));
+  if (std::find(algorithms.begin(), algorithms.end(), scheme) == algorithms.end() ||
+      integer(grant.subspan(cursor + 2, 2u)) != grant.size() - cursor - 4)
+    return false;
+  bssl::UniquePtr<ASN1_OBJECT> usage_oid(OBJ_txt2obj("1.3.6.1.4.1.44363.44", 1));
+  const int index = X509_get_ext_by_OBJ(parent.get(), usage_oid.get(), -1);
+  if (index < 0 || X509_get_ext_by_OBJ(parent.get(), usage_oid.get(), index) >= 0)
+    return false;
+  auto* extension = X509_get_ext(parent.get(), index);
+  auto* value = X509_EXTENSION_get_data(extension);
+  CBS usage_encoding;
+  CBS_init(&usage_encoding, ASN1_STRING_get0_data(value), ASN1_STRING_length(value));
+  uint8_t usage_tag = 0;
+  uint8_t usage_length = 0;
+  if (X509_EXTENSION_get_critical(extension) ||
+      !CBS_get_u8(&usage_encoding, &usage_tag) || usage_tag != 5 ||
+      !CBS_get_u8(&usage_encoding, &usage_length) || usage_length != 0 ||
+      CBS_len(&usage_encoding) != 0)
+    return false;
+  bssl::UniquePtr<ASN1_BIT_STRING> usage(static_cast<ASN1_BIT_STRING*>(
+      X509_get_ext_d2i(parent.get(), NID_key_usage, nullptr, nullptr)));
+  if (!usage || !ASN1_BIT_STRING_get_bit(usage.get(), 0))
+    return false;
+  int64_t before, after;
+  if (!ASN1_TIME_to_posix(X509_get0_notBefore(parent.get()), &before) ||
+      !ASN1_TIME_to_posix(X509_get0_notAfter(parent.get()), &after))
+    return false;
+  const int64_t now = std::time(nullptr), expiry = before + valid_time;
+  if (now < before || now > expiry || expiry >= after || expiry - now > 604800)
+    return false;
+  Bytes message(64, 0x20);
+  const std::string_view role = server ? "TLS20 server delegated credentials" : "TLS20 client delegated credentials";
+  message.insert(message.end(), role.begin(), role.end());
+  message.push_back(0);
+  message.insert(message.end(), parent_der.begin(), parent_der.end());
+  auto signed_grant = grant.first(cursor + 2);
+  message.insert(message.end(), signed_grant.begin(), signed_grant.end());
+  if (scheme == 0x0708 || (scheme >= 0x0709 && scheme <= 0x070f) ||
+      scheme == 0x0808 || (scheme >= 0x0809 && scheme <= 0x080b) ||
+      (scheme >= 0x081a && scheme <= 0x081c)) {
+    const int length = i2d_X509_PUBKEY(X509_get_X509_PUBKEY(parent.get()), nullptr);
+    if (!provider || length < 1 || length > 16384)
+      return false;
+    Bytes spki(static_cast<size_t>(length));
+    auto* encoded = spki.data();
+    if (i2d_X509_PUBKEY(X509_get_X509_PUBKEY(parent.get()), &encoded) != length) return false;
+    return scheme == 0x0708 ? provider->VerifySm2Signature(spki, message, grant.subspan(cursor + 4), "TLSv1.3+GM+Cipher+Suite")
+        : provider->VerifyPublicSignature(spki, message, grant.subspan(cursor + 4), scheme);
+  }
+  bssl::UniquePtr<EVP_PKEY> key(X509_get_pubkey(parent.get()));
+  if (!key)
+    return false;
+  const EVP_MD* digest = nullptr;
+  bool pss = false;
+  if (scheme == 0x0807) {
+    if (EVP_PKEY_id(key.get()) != EVP_PKEY_ED25519)
+      return false;
+  } else if (scheme >= 0x0403 && scheme <= 0x0603 && (scheme & 255) == 3) {
+    const auto* ec = EVP_PKEY_get0_EC_KEY(key.get());
+    const int curve = scheme == 0x0403 ? NID_X9_62_prime256v1 : scheme == 0x0503 ? NID_secp384r1 : NID_secp521r1;
+    if (!ec || EC_GROUP_get_curve_name(EC_KEY_get0_group(ec)) != curve)
+      return false;
+    digest = scheme == 0x0403 ? EVP_sha256() : scheme == 0x0503 ? EVP_sha384() : EVP_sha512();
+  } else if (scheme >= 0x0804 && scheme <= 0x0806) {
+    if (EVP_PKEY_id(key.get()) != EVP_PKEY_RSA || EVP_PKEY_bits(key.get()) < 2048)
+      return false;
+    digest = scheme == 0x0804 ? EVP_sha256() : scheme == 0x0805 ? EVP_sha384() : EVP_sha512();
+    pss = true;
+  } else {
+    return false;
+  }
+  bssl::UniquePtr<EVP_MD_CTX> verifier(EVP_MD_CTX_new());
+  EVP_PKEY_CTX* key_context = nullptr;
+  if (!verifier || !EVP_DigestVerifyInit(verifier.get(), &key_context, digest, nullptr, key.get()) ||
+      (pss && (!EVP_PKEY_CTX_set_rsa_padding(key_context, RSA_PKCS1_PSS_PADDING) ||
+               !EVP_PKEY_CTX_set_rsa_pss_saltlen(key_context, EVP_MD_size(digest)))))
+    return false;
+  auto signature = grant.subspan(cursor + 4);
+  return EVP_DigestVerify(verifier.get(), signature.data(), signature.size(), message.data(), message.size()) == 1;
 }
 
 }  // namespace net::httpps

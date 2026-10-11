@@ -26,14 +26,16 @@ needs no elevated privilege to connect to port 343 and must not run as root.
 The native client implements the first TLS 2.0 framing, key schedule,
 authenticated handshake and encrypted records. Its specification is
 [tls20-spec](https://github.com/PapauloGamerOfc/tls20-spec), revision
-`0c9c8bf0914697d521050554e545a167fa8fc345`. It negotiates `0x0400`, uses the
+`dee31da9826e10bd590f58acc0f9f46143505fd1`. It negotiates `0x0400`, uses the
 `TLS20-EXPERIMENT\r\n` bootstrap and rejects older TLS versions. The reference peer is
 [tls20-server](https://github.com/PapauloGamerOfc/tls20-server).
 Configure that server's listening port explicitly to match the URL; do not
 assume an older server build has the same default port.
 
-The client generates independent fresh X25519 authentication and X25519/P-256
-traffic keys with BoringSSL's cryptographic random generator. It validates the server's
+The client generates independent fresh X25519 authentication and negotiated
+traffic keys with BoringSSL's cryptographic random generator. Baseline traffic
+groups are X25519 and P-256/P-384/P-521, with separately supported ML-KEM hybrid
+groups; the server MAC key remains X25519 regardless of the traffic group. It validates the server's
 certificate chain, hostname, authentication proof and Finished message before
 releasing ordinary application traffic. Opt-in early data uses a previously
 authenticated ticket and revalidates its cached certificate chain first (see below).
@@ -207,7 +209,7 @@ but requires a separate explicit route policy before it forwards early HTTP.
 
 ### Client authentication
 
-The portable engine implements initial client-certificate MAC authentication.
+The portable engine implements initial and post-handshake client MAC authentication.
 An API caller can explicitly supply a `ClientCredential` containing an X25519
 client credential and its matching private key. The client verifies the server
 and Server Finished before releasing its Certificate and role-separated
@@ -215,23 +217,138 @@ and Server Finished before releasing its Certificate and role-separated
 authorize that client credential; presenting a certificate alone is not
 authorization.
 
-The browser integration currently has no client-identity selection UI or
-credential-provider integration. It sends an empty Certificate when an initial
-CertificateRequest arrives, preserving the server's optional/required-client
-decision. Post-handshake client authentication (PHA) is not offered by the
-browser. The Python reference peer's initial/PHA APIs and the native engine's
-explicit credential API do not imply that these browser features exist.
+The browser has no end-user identity chooser yet. Its trusted embedding API
+`SSLClientContext::SetHttppsClientCredential` selects an identity for an exact
+origin/port, privacy/network partition and route. A change invalidates previous
+tickets and connections; HTTPS signing identities are not automatically reused.
+Without an explicit identity it sends an empty initial Certificate, preserving
+the server's optional/required decision. PHA is offered only with a selected
+identity and is never used on `h2`. The asynchronous adapter serializes control
+and application writes. A working embedding API is not a graphical key-import UI.
+
+### Extended protocol profiles
+
+The native engine supports the five baseline AEAD suites (including CCM and
+CCM8), multi-identity external/imported PSKs, combined certificate+PSK and
+`psk_ke`/`psk_dhe_ke`, explicit RPK bindings, offline delegated credentials,
+certificate compression with zlib/Brotli/Zstandard, and cached credential/request
+flights. These require their own explicit options and trust inputs; received
+public bytes never become a trust anchor. Certificate path signatures and
+delegation-grant signatures are negotiated independently of online MACs.
+
+Browser connections enable bounded certificate compression and delegation;
+cached certificate bytes come only from the same partitioned ticket context and
+receive fresh validation. Optional RPK/PSK provisioning is an embedding API, not
+a web-facing capability. Non-X.509 identities do not manufacture certificates or
+claim CA validation in the browser UI. HTTPPS does not coalesce HTTP/2 connections
+across origins: an existing ordinary connection cannot bypass another origin's
+explicit trust or identity policy, even if its certificate has extra SANs.
+Multiplexing and connection reuse within the same origin and partition remain
+available. HTTPPS keeps its network partition even when the ordinary TLS
+partitioning experiment is disabled. Its transport metadata is preserved without
+pretending to be TLS 1.3.
+
+Record limits, MFL, padding and heartbeat are negotiated by the engine. It does
+not enable a periodic background heartbeat timer. Cross-language tests exercise
+full/resumed/early connections and KeyUpdate, plus repeated client PHA and
+compression/cache flights. A codec/parser test alone is not protocol support.
+The complete browser must also pass the corresponding adapter and navigation
+tests; see validation status below.
+
+Additional explicit library profiles now include application authenticators and
+the named exporter channel binding, RFC 9966 bootstrap credentials, external
+signaling bindings and ticket-count hints. Application authenticators require
+separate application framing, authorization and replay-context management; they
+do not invent a new HTTP authentication header or overwrite the connection's
+identity. Bootstrap provisioning trust is a generic API mode and is rejected by
+the ordinary HTTPPS browser adapter.
+
+Server continuity pinning uses a separate opt-in `PinningCache`, not the session
+cache. It forces a fresh authenticated credential handshake, verifies the proof
+before releasing a client identity, and commits only after client Finished is
+flushed. Host/port and an explicit caller-supplied privacy/route/policy partition
+scope each pin. Live entries are never evicted to meet the default 4,096-entry
+and 16 MiB accounted-byte budgets. This is an in-memory API, not a claim of
+durable browser pin storage. Removing a pin requires explicit trusted recovery.
+
+The trusted embedding API `SSLClientContext::SetHttppsOptions` selects optional
+profiles for an exact origin/port and privacy/network/route partition. It does
+not expose secrets to web content, change HTTPS, or apply an origin's account to
+a proxy. Replacing or clearing a profile invalidates outstanding tickets and
+pooled connections. A one-use pin exchange must be created per socket rather
+than stored in these reusable options. There is no graphical profile/credential
+importer yet; a programmatic embedding API is not such an importer.
+
+Selected password and CT/DANE/ITS policy data are copied into this context, not
+aliased to a caller's mutable policy object. To update them, call the setter
+again. DANE callbacks may capture application-owned state; if that state changes,
+the application must change `application_policy_context` and call the setter
+again before making requests, so old sessions are invalidated as well.
+
+Optional native providers are explicitly loaded from absolute paths. They use
+public OpenSSL 3 APIs in a private library context, without activating global
+OpenSSL configuration, changing BoringSSL, or fetching native code at runtime.
+This permits X448/Brainpool/SM traffic algorithms and password authentication
+without silently advertising an algorithm whose provider is absent. The owner
+must maintain and verify these libraries. No provider is inferred from a
+website, certificate, environment variable, PATH, or system root store.
+
+TLS-PWD uses an explicitly selected service/account/password and a separate
+original MIT-licensed native PAKE helper. Passwords are not external PSKs.
+The browser's preparation uses RFC 8265 OpaqueString with Chromium's ICU Unicode
+data: non-ASCII spaces map to SPACE, NFC applies, and Freeform/context rules are
+enforced. Case and width are preserved, whitespace is not trimmed, malformed
+UTF-8 is rejected. Both username and password are prepared this way as required
+by the TLS-PWD profile. Account, password and optional username-protection key
+bind the ticket context; changing them cannot reuse the previous account's
+0-RTT state. Native test executables use public fixture credentials only;
+production credentials must not be put in command-line arguments.
+
+CT v2 evidence is checked only against explicitly configured log policy, in
+addition to current path/name validation. It is not a replacement for the
+ordinary browser CT policy. DNSSEC/DANE similarly requires explicit trust
+anchors and an offline getdns validator; no resolver AD bit or unsigned DNS
+answer is trusted. The service's actual destination port is bound to the TLSA
+question. Authenticated DNSSEC absence is never, by itself, authentication.
+Cached DANE authorization retains the original DNS TTL/signature deadline
+through ticket renewal; resumption cannot reset that deadline. Input-size,
+alias, NSEC3 and key/signature work bounds are applied before native validation.
+Neither profile manufactures CA validation for a non-CA identity.
+
+For reproducible optional-provider tests, use the pinned reference-server
+checkout from the workflow:
+
+```text
+python out/reference-server/tools/build_native_dependencies.py --output out/providers --with-gost --with-getdns --with-its --jobs 2
+python net/httpps/tests/run_provider_tests.py --manifest out/providers/providers.json --native-build out/httpps-native --server-source out/reference-server
+```
+
+This builds locally from pinned OpenSSL/GOST/getdns sources and the locked Rust
+ITS dependencies under permissive licenses, including the production PAKE
+helper and a separate test-only oracle. The workflow pins the tested Rust
+toolchain. Short-lived ITS test fixtures are generated only by the Rust test
+binary, not by the production library.
+The production loaders reject that oracle's ABI. The CMake transport build can
+also compile the production helper using
+`-DHTTPPS_PAKE_SOURCE=/absolute/reference-server/native/pake.c`; its source SHA-256
+must match the reviewed revision. When distributing it, include the reference
+server's MIT license and the licenses of any optional runtime providers. These
+commands do not install a global provider, import a CA, or open a public service.
+
+IP references use exact `iPAddress` SAN matching and omit DNS SNI; a `dNSName`
+containing an IP-looking string does not authenticate the IP. The reference
+client/server and native engine test IPv4 and IPv6 full/resumed/early exchanges.
 
 ### Initial scope and limitations
 
-- Direct or proxied TCP and HTTP/1.1, with fresh or resumed HTTPPS handshakes.
+- Direct or proxied TCP and HTTP/1.1 or HTTP/2, with fresh or resumed handshakes.
   Connections may be reused only for the same socket-pool identity,
   including proxy type and route.
 - Shared desktop HTTPS trust policy with an HTTPPS-specific X25519 leaf, plus
   optional independent private anchors. The wire protocol remains experimental;
   shared root trust is not a claim of public CA issuance or protocol approval.
 - Isolated HTTPPS cookie values/keys, with shared profile storage and quotas.
-- No HTTP/2, HTTP/3, QUIC, alternative-service transport, ECH
+- No HTTP/3, QUIC, alternative-service transport, ECH
   or WebSockets for an HTTPPS destination. This does not disable an HTTPS
   destination's own TLS/HTTP negotiation inside an HTTPPS proxy tunnel.
 - The legacy TLS-version display reports an unknown version for HTTPPS, not
@@ -240,11 +357,12 @@ explicit credential API do not imply that these browser features exist.
   for ordinary HTTP/HTTPS is unchanged. HTTPPS Alt-Svc is ignored.
 - Device-bound sessions, service workers, WebSockets, early hints and generated
   script-code caches have not been opted into HTTPPS in this alpha.
-- Optional specification profiles such as post-handshake client authentication,
-  raw public keys, delegated credentials, certificate compression, exported
-  authenticators and PAKE are not yet browser features. They are not advertised.
-  Initial client MAC is available only through the engine's explicit credential
-  API; browser identity selection remains unimplemented as explained above.
+- Optional profiles require explicit trusted embedding configuration; they are
+  not implicitly enabled by a website. Native engine interoperability tests,
+  browser adapter tests and complete browser navigation tests are separate
+  validation scopes. Graphical identity/profile selection remains unimplemented.
+  Application authenticators require the application's own framing and policy;
+  the transport does not invent HTTP authentication behavior for them.
 - Internal source filenames `draft01.cc`/`.h` are retained temporarily for build
   compatibility; they no longer select the former draft wire format or KDF.
 
@@ -263,9 +381,10 @@ using this fork's URL, then expand any sparse checkout and synchronize the
 pinned DEPS before using GN/Ninja. Do not replace this fork with a fresh upstream
 checkout during that synchronization.
 
-The `httpps_boringssl_spki` DEPS hook applies the small tracked patch in
-`net/httpps/patches` to the pinned BoringSSL revision. The patch only enables
-parsing of X25519 SPKIs; the normal HTTPS key policy still rejects them. The hook
+The `httpps_boringssl_spki` DEPS hook applies the tracked patches in
+`net/httpps/patches` to the pinned BoringSSL revision. They enable parsing of
+X25519 SPKIs and the 12-byte-nonce CCM/CCM8 AEAD profiles; the normal HTTPS key
+policy still rejects X25519 leaves. The hook
 is idempotent and fails rather than overwriting conflicting local edits or
 silently patching a different revision. Run `gclient runhooks` after dependency
 sync. The standalone CMake build runs the same hook automatically.
@@ -308,7 +427,7 @@ complete Chromium browser**, async socket adapter, renderer or installer.
 The portable CI matrix also runs `session_interop_test.py` and
 `client_auth_interop_test.py` against a pinned reference server, plus
 `spec_oracle_test.py` against specification revision
-`0c9c8bf0914697d521050554e545a167fa8fc345`. The latter uses the specification's
+`dee31da9826e10bd590f58acc0f9f46143505fd1`. The latter uses the specification's
 derivation helpers and an independent peer state machine, not the reference
 server's handshake implementation. See the
 [test instructions](../net/httpps/tests/browser_e2e_README.md) for commands and
@@ -316,7 +435,49 @@ the distinction between engine, async-adapter and real-browser coverage.
 
 ### Local validation status
 
-#### Current specification migration: 2026-10-11
+#### Optional-profile expansion: 2026-10-11
+
+The complete Windows x64 browser and `net_unittests` were rebuilt successfully.
+All **894 targeted** network/HTTPPS checks and **7,236 broader** proxy, cookie,
+SSL and HTTP regression checks passed. These selections overlap and must not
+be added as a count of distinct tests. Logs are
+`out/Phromium/final-httpps-tests.log` and
+`out/Phromium/final-network-regressions.log`.
+
+The six standalone CTest suites passed, alongside the wire, suite/group,
+password, credential and evidence interoperability matrices. The final native
+provider run includes 64 persistent-worker lifetime cases: private OpenSSL
+contexts must clean up their executing thread's state before the context or
+DLL is released. That run is recorded in
+`out/httpps-native/provider-thread-lifetime-results.log`.
+
+The real-browser harness passed **38 assertions** against clean reference
+server revision `18e04497259e21549c996dfb8ad45ea4ce590760`, without
+`--allow-server-worktree`. This includes HTTP/2 multiplexing of sixteen
+requests, session resumption, 0-RTT received before client Finished, HTTP 425
+retry, persistent cookie isolation, and rejection of invalid credentials
+before HTTP application data. One preceding attempt timed out during browser
+startup before any fixture connection; it is retained as a failed report,
+not counted as a protocol pass. The successful repeat reported no fixture or
+event-loop errors. Reports are `out/Phromium/final-pinned-browser-e2e.json`
+(startup failure) and `out/Phromium/final-pinned-browser-repeat.json` (pass).
+The harness now preserves the original startup exception and records cleanup
+failures separately, while still failing persistence checks that require a
+forced process exit. Its 14 unit tests passed; a further real-browser run also
+passed all 38 assertions (`out/Phromium/final-pinned-browser-harness.json`).
+
+The matching server separately passed its 498-test native suite twice, with
+only two Windows-specific filesystem checks skipped, and its isolated wheel
+installation check. Linux/macOS CI for these new revisions has not been run
+locally. Optional profiles require explicit provider, credential and trust
+configuration; these tests do not claim a browser GUI profile importer,
+coverage of every deployment-specific ITS profile, or an independent security
+audit. Historical service/component results below remain historical.
+
+#### Previous core migration baseline: 2026-10-11
+
+The results in this subsection describe the earlier core-only revision, not
+automatic validation of the optional-profile expansion documented above.
 
 The current Windows standalone Release build passed all three CTest suites,
 47 interoperability/certificate checks, 70 wire checks, 364 certificate-mutation

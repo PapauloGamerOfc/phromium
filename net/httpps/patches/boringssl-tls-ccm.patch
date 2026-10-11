@@ -1,0 +1,61 @@
+diff --git a/crypto/fipsmodule/cipher/e_aesccm.cc.inc b/crypto/fipsmodule/cipher/e_aesccm.cc.inc
+index de6bfd4..da7e328 100644
+--- a/crypto/fipsmodule/cipher/e_aesccm.cc.inc
++++ b/crypto/fipsmodule/cipher/e_aesccm.cc.inc
+@@ -425,6 +425,40 @@ static int aead_aes_ccm_matter_init(EVP_AEAD_CTX *ctx, const uint8_t *key,
+   return aead_aes_ccm_init(ctx, key, key_len, tag_len, 16, 2);
+ }
+ 
++static int aead_aes_ccm_tls_init(EVP_AEAD_CTX *ctx, const uint8_t *key,
++                               size_t key_len, size_t tag_len) {
++  return aead_aes_ccm_init(ctx, key, key_len, tag_len, 16, 3);
++}
++
++static int aead_aes_ccm_8_tls_init(EVP_AEAD_CTX *ctx, const uint8_t *key,
++                                 size_t key_len, size_t tag_len) {
++  return aead_aes_ccm_init(ctx, key, key_len, tag_len, 8, 3);
++}
++
++DEFINE_METHOD_FUNCTION(EVP_AEAD, EVP_aead_aes_128_ccm_tls) {
++  memset(out, 0, sizeof(EVP_AEAD));
++  out->key_len = 16;
++  out->nonce_len = 12;
++  out->overhead = 16;
++  out->max_tag_len = 16;
++  out->init = aead_aes_ccm_tls_init;
++  out->cleanup = aead_aes_ccm_cleanup;
++  out->sealv = aead_aes_ccm_sealv;
++  out->openv_detached = aead_aes_ccm_openv_detached;
++}
++
++DEFINE_METHOD_FUNCTION(EVP_AEAD, EVP_aead_aes_128_ccm_8_tls) {
++  memset(out, 0, sizeof(EVP_AEAD));
++  out->key_len = 16;
++  out->nonce_len = 12;
++  out->overhead = 8;
++  out->max_tag_len = 8;
++  out->init = aead_aes_ccm_8_tls_init;
++  out->cleanup = aead_aes_ccm_cleanup;
++  out->sealv = aead_aes_ccm_sealv;
++  out->openv_detached = aead_aes_ccm_openv_detached;
++}
++
+ DEFINE_METHOD_FUNCTION(EVP_AEAD, EVP_aead_aes_128_ccm_matter) {
+   memset(out, 0, sizeof(EVP_AEAD));
+ 
+diff --git a/include/openssl/aead.h b/include/openssl/aead.h
+index 339e34a..2bd1f0b 100644
+--- a/include/openssl/aead.h
++++ b/include/openssl/aead.h
+@@ -182,6 +182,11 @@ OPENSSL_EXPORT const EVP_AEAD *EVP_aead_aes_128_ccm_bluetooth_8(void);
+ // and 13-byte nonces), as used in the Matter specification.
+ OPENSSL_EXPORT const EVP_AEAD *EVP_aead_aes_128_ccm_matter(void);
+ 
++// TLS AES-CCM uses 12-byte nonces (L=3), not Bluetooth/Matter's L=2.
++// These variants retain the same CCM implementation and full tag checking.
++OPENSSL_EXPORT const EVP_AEAD *EVP_aead_aes_128_ccm_tls(void);
++OPENSSL_EXPORT const EVP_AEAD *EVP_aead_aes_128_ccm_8_tls(void);
++
+ // EVP_has_aes_hardware returns one if we enable hardware support for fast and
+ // constant-time AES-GCM.
+ OPENSSL_EXPORT int EVP_has_aes_hardware(void);

@@ -21,7 +21,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -29,6 +29,9 @@ jobs:
           sparse-checkout: |
             net/httpps
             third_party/boringssl
+            third_party/zlib
+            third_party/brotli
+            third_party/zstd
       - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: '3.13'
@@ -36,18 +39,25 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git submodule update --init --depth 1 third_party/boringssl/src
+          git submodule update --init --depth 1 third_party/boringssl/src third_party/zstd/src
           git clone --no-checkout https://github.com/PapauloGamerOfc/tls20-server.git out/reference-server
-          git -C out/reference-server checkout --detach 4f28b2c2da40e8a8371e9846dd3c5cd8a6c9401f
+          git -C out/reference-server checkout --detach 18e04497259e21549c996dfb8ad45ea4ce590760
           git clone --no-checkout https://github.com/PapauloGamerOfc/tls20-spec.git out/reference-spec
-          git -C out/reference-spec checkout --detach 0c9c8bf0914697d521050554e545a167fa8fc345
-          python -m pip install cryptography==50.0.2
+          git -C out/reference-spec checkout --detach dee31da9826e10bd590f58acc0f9f46143505fd1
+          python -m pip install -r out/reference-server/requirements-dev.txt
       - name: Compile actual engine with pinned BoringSSL
         run: cmake -S net/httpps/tests -B out/httpps-native -DCMAKE_BUILD_TYPE=Release
       - name: Build
         run: cmake --build out/httpps-native --config Release --parallel 3
       - name: Primitive tests
         run: ctest --test-dir out/httpps-native -C Release --output-on-failure
+      - name: Build explicit optional providers from pinned permissive sources
+        run: |
+          rustup toolchain install 1.98.0 --profile minimal --no-self-update
+          rustup override set 1.98.0
+          python out/reference-server/tools/build_native_dependencies.py --output out/providers --with-gost --with-getdns --with-its --jobs 2
+      - name: Native optional profiles and independent evidence oracles
+        run: python net/httpps/tests/run_provider_tests.py --manifest out/providers/providers.json --native-build out/httpps-native --server-source out/reference-server
       - name: Independent wire interoperability and PKI rejection tests
         shell: bash
         run: |
@@ -60,10 +70,24 @@ jobs:
           python net/httpps/tests/wire_test.py --native "$executable" --server-source out/reference-server
           python net/httpps/tests/session_interop_test.py --native "$executable" --server-source out/reference-server
           python net/httpps/tests/client_auth_interop_test.py --native "$executable" --server-source out/reference-server
+          python net/httpps/tests/suite_interop_test.py --native "$executable" --server-source out/reference-server
+          python net/httpps/tests/suite_interop_test.py --native "$executable" --server-source out/reference-server --ffdhe
+          python net/httpps/tests/external_psk_interop_test.py --native "$executable" --server-source out/reference-server
+          python net/httpps/tests/record_limit_interop_test.py --native "$executable" --server-source out/reference-server
+          python net/httpps/tests/rpk_interop_test.py --native "$executable" --server-source out/reference-server
+          python net/httpps/tests/delegation_interop_test.py --native "$executable" --server-source out/reference-server
+          python net/httpps/tests/pha_interop_test.py --native "$executable" --server-source out/reference-server --cache
+          python net/httpps/tests/authenticator_interop_test.py --native "$executable" --server-source out/reference-server
+          python net/httpps/tests/bootstrap_interop_test.py --native "$executable" --server-source out/reference-server
+          python net/httpps/tests/pinning_interop_test.py --native "$executable" --server-source out/reference-server
+          python net/httpps/tests/control_interop_test.py --native "$executable" --server-source out/reference-server
+          python net/httpps/tests/ip_identity_interop_test.py --native "$executable" --server-source out/reference-server
+          python net/httpps/tests/integrity_interop_test.py --native "$executable" --server-source out/reference-server
+          python net/httpps/tests/diagnostics_interop_test.py --native "$executable" --server-source out/reference-server
           python net/httpps/tests/spec_oracle_test.py --native "$executable" --server-source out/reference-server --spec-source out/reference-spec
       - name: Scope of these checks
         shell: bash
-        run: echo 'Portable engine checks include sessions/0-RTT, initial client MAC authentication and a pinned-spec oracle. They do not compile or validate the complete Chromium browser, async adapter, browser client-identity UI, PHA or installers.' >> "$GITHUB_STEP_SUMMARY"
+        run: echo 'Portable engine checks include suites/groups, PSK/RPK/delegation, compression/cache, record limits, sessions/0-RTT, initial/PHA client MAC authentication and a pinned-spec oracle. They do not compile or validate the complete Chromium browser, async adapter, browser client-identity UI or installers.' >> "$GITHUB_STEP_SUMMARY"
 
   branding:
     runs-on: ubuntu-latest

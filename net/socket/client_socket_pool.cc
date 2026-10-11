@@ -129,7 +129,8 @@ ClientSocketPool::GroupId::GroupId(
     : destination_(std::move(destination)),
       privacy_mode_(privacy_mode),
       network_anonymization_key_(
-          NetworkAnonymizationKey::IsPartitioningEnabled()
+          destination_.scheme() == url::kHttppsScheme ||
+                  NetworkAnonymizationKey::IsPartitioningEnabled()
               ? std::move(network_anonymization_key)
               : NetworkAnonymizationKey()),
       secure_dns_policy_(secure_dns_policy),

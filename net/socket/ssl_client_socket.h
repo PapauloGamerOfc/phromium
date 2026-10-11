@@ -28,6 +28,8 @@ namespace net {
 
 namespace httpps {
 struct SessionTicket;
+struct ClientCredential;
+struct ClientOptions;
 }
 
 class HostPortPair;
@@ -182,6 +184,26 @@ class NET_EXPORT SSLClientContext : public SSLConfigService::Observer,
   // Additional proxy trust is independent; neither private store uses the other.
   void SetHttppsProxyTrustAnchors(const std::vector<std::string>& roots);
 
+  // Explicit application selection of an HTTPPS X25519 client identity. Scoped
+  // to this origin AND the request's privacy/network/route partition. Never
+  // substitutes an HTTPS signing identity or sends an origin identity to a
+  // proxy. Private material remains in memory and is cleared with the context.
+  // Invalid/mismatched credentials are rejected without changing the selection.
+  bool SetHttppsClientCredential(const HostPortPair& server,
+                                const SSLConfig& config,
+                                const httpps::ClientCredential& credential);
+  bool ClearHttppsClientCredential(const HostPortPair& server,
+                                  const SSLConfig& config);
+
+  // Explicit opt-in protocol profile, with the SAME exact origin/privacy/
+  // network/route partition as client credentials. Never changes HTTPS or a
+  // proxy. Updates invalidate tickets and pooled sockets. This is an embedding
+  // API, not a website-controlled preference or an automatic credential lookup.
+  // One-shot pin attempts belong to individual sockets, not reusable profiles.
+  bool SetHttppsOptions(const HostPortPair& server, const SSLConfig& config,
+                        const httpps::ClientOptions& options);
+  bool ClearHttppsOptions(const HostPortPair& server, const SSLConfig& config);
+
   SSLConfigService* ssl_config_service() { return ssl_config_service_; }
   CertVerifier* cert_verifier() { return cert_verifier_; }
   TransportSecurityState* transport_security_state() {
@@ -290,6 +312,10 @@ class NET_EXPORT SSLClientContext : public SSLConfigService::Observer,
                          httpps::SessionTicket ticket);
   void ClearHttppsSessions();
   void SynchronizeHttppsSessionGeneration();
+  const httpps::ClientCredential* GetHttppsClientCredential(
+      const HostPortPair& server, const SSLConfig& config) const;
+  const httpps::ClientOptions* GetHttppsOptions(
+      const HostPortPair& server, const SSLConfig& config) const;
 
   std::vector<std::string> httpps_trust_anchors_;
   std::vector<std::string> httpps_proxy_trust_anchors_;

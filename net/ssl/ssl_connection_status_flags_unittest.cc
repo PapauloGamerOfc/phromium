@@ -32,6 +32,21 @@ TEST(SSLConnectionStatusTest, SetVersion) {
             SSLConnectionStatusToCipherSuite(connection_status));
 }
 
+TEST(SSLConnectionStatusTest, HttppsMarkerIsIndependentOfTlsVersion) {
+  int status = SSL_CONNECTION_HTTPPS;
+  SSLConnectionStatusSetCipherSuite(0x1302, &status);
+  EXPECT_TRUE(SSLConnectionStatusIsHttpps(status));
+  EXPECT_EQ(SSL_CONNECTION_VERSION_UNKNOWN, SSLConnectionStatusToVersion(status));
+  EXPECT_EQ(0x1302, SSLConnectionStatusToCipherSuite(status));
+  EXPECT_GE(status, 0);
+
+  int ordinary = 0;
+  SSLConnectionStatusSetCipherSuite(0x1302, &ordinary);
+  SSLConnectionStatusSetVersion(SSL_CONNECTION_VERSION_TLS1_3, &ordinary);
+  EXPECT_FALSE(SSLConnectionStatusIsHttpps(ordinary));
+  EXPECT_EQ(SSL_CONNECTION_VERSION_TLS1_3, SSLConnectionStatusToVersion(ordinary));
+}
+
 }  // namespace
 
 }  // namespace net

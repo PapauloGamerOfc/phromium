@@ -14,6 +14,9 @@
 #include "base/task/sequenced_task_runner.h"
 #include "net/base/net_errors.h"
 #include "net/cert/x509_certificate.h"
+#include "net/cert/x509_util.h"
+#include "net/httpps/dnssec.h"
+#include "net/httpps/certificate_features.h"
 #include "net/ssl/ssl_connection_status_flags.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
 
@@ -47,6 +50,61 @@ scoped_refptr<DrainableIOBuffer> ReadBuffer(size_t length) {
       base::MakeRefCounted<IOBufferWithSize>(length), length);
 }
 
+std::string_view LeafEvidence(
+    const std::vector<std::map<uint16_t, httpps::Bytes>>& entries,
+    uint16_t kind) {
+  if (entries.empty())
+    return {};
+  const auto found = entries.front().find(kind);
+  if (found == entries.front().end())
+    return {};
+  auto value = base::span(found->second);
+  if (kind == 5) {
+    if (value.size() < 5 || value[0] != 1 ||
+        ((size_t(value[1]) << 16) | (size_t(value[2]) << 8) | value[3]) != value.size() - 4)
+      return {};
+    value = value.subspan(4u);
+  }
+  return std::string_view(reinterpret_cast<const char*>(value.data()), value.size());
+}
+
+bool RequiredEvidenceVerified(const std::vector<std::string>& certificates,
+                              const std::vector<std::map<uint16_t, httpps::Bytes>>& extensions,
+                              const CertVerifyResult& result,
+                              const httpps::ClientOptions& options) {
+  if (certificates.empty())
+    return false;
+  const auto required = httpps::CertificateRequiresFeature(certificates.front(), 5);
+  const auto scts = httpps::CertificateRequiresFeature(certificates.front(), 18);
+  return required && scts && (!*required || !options.request_ocsp ||
+      (!LeafEvidence(extensions, 5).empty() &&
+       result.ocsp_result.response_status == bssl::OCSPVerifyResult::PROVIDED &&
+       result.ocsp_result.revocation_status == bssl::OCSPRevocationStatus::GOOD)) &&
+      (!*scts || !options.request_scts ||
+       (!LeafEvidence(extensions, 18).empty() &&
+        std::any_of(result.scts.begin(), result.scts.end(), [](const auto& value) {
+          return value.sct && value.status == ct::SCT_STATUS_OK &&
+                 value.sct->origin == ct::SignedCertificateTimestamp::SCT_FROM_TLS_EXTENSION;
+        })));
+}
+
+std::string VerifiedIssuer(const CertVerifyResult& result) {
+  if (!result.verified_cert || result.verified_cert->intermediate_buffers().empty())
+    return {};
+  return std::string(x509_util::CryptoBufferAsStringPiece(
+      result.verified_cert->intermediate_buffers().front().get()));
+}
+
+std::vector<std::string> VerifiedPath(const CertVerifyResult& result) {
+  std::vector<std::string> path;
+  if (!result.verified_cert)
+    return path;
+  path.emplace_back(x509_util::CryptoBufferAsStringPiece(result.verified_cert->cert_buffer()));
+  for (const auto& der : result.verified_cert->intermediate_buffers())
+    path.emplace_back(x509_util::CryptoBufferAsStringPiece(der.get()));
+  return path;
+}
+
 }  // namespace
 
 HttppsClientSocket::HttppsClientSocket(std::unique_ptr<StreamSocket> transport,
@@ -55,7 +113,9 @@ HttppsClientSocket::HttppsClientSocket(std::unique_ptr<StreamSocket> transport,
                                        CertVerifier* cert_verifier,
     std::optional<httpps::SessionTicket> session,
     base::RepeatingCallback<void(httpps::SessionTicket)> ticket_callback,
-    bool early_data_enabled)
+    bool early_data_enabled,
+    httpps::ClientOptions options,
+    std::optional<httpps::ClientCredential> credential)
     : transport_(std::move(transport)),
       destination_(destination),
       trust_anchors_(std::move(trust_anchors)),
@@ -63,7 +123,18 @@ HttppsClientSocket::HttppsClientSocket(std::unique_ptr<StreamSocket> transport,
       session_(std::move(session)),
       ticket_callback_(std::move(ticket_callback)),
       early_data_enabled_(early_data_enabled),
-      write_annotation_(kHandshakeAnnotation) {}
+      options_(std::move(options)),
+      credential_(std::move(credential)),
+      write_annotation_(kHandshakeAnnotation) {
+  // Use exactly the browser's current CT/revocation policy. Neither received
+  // evidence nor the request extensions themselves confer trust.
+  if (cert_verifier_) {
+    options_.request_ocsp = true;
+    options_.request_scts = true;
+  }
+  if (!options_.ocsp_responder_ids.empty() || !options_.ocsp_request_extensions.empty())
+    options_.request_ocsp = true;
+}
 
 HttppsClientSocket::~HttppsClientSocket() {
   Disconnect();
@@ -87,8 +158,14 @@ int HttppsClientSocket::Connect(CompletionOnceCallback callback) {
 }
 
 int HttppsClientSocket::BeginHandshake() {
+  if (!options_.ordinary_httpps || options_.allow_integrity_only ||
+      (options_.dane_policy && options_.dane_policy->port != destination_.port()) ||
+      (options_.bootstrap && options_.bootstrap->provisioning_trust))
+    return Abort(ERR_SSL_PROTOCOL_ERROR);
   client_ = std::make_unique<httpps::Client>(
-      destination_.host(), trust_anchors_, cert_verifier_ != nullptr);
+      destination_.host(), trust_anchors_, cert_verifier_ != nullptr, options_);
+  if (credential_ && !client_->SetClientCredential(*credential_))
+    return Abort(ERR_SSL_CLIENT_AUTH_CERT_BAD_FORMAT);
   if (!client_->Start(session_ ? &*session_ : nullptr, {},
                       early_data_enabled_ && session_verified_))
     return Abort(ProtocolError());
@@ -97,10 +174,41 @@ int HttppsClientSocket::BeginHandshake() {
 }
 
 int HttppsClientSocket::VerifySessionCertificate() {
+  if (session_->server_certificate_type == 2 || session_->server_certificate_type == 3 ||
+      session_->authentication == httpps::Authentication::kExternalPsk ||
+      session_->authentication == httpps::Authentication::kPassword) {
+    // Start rechecks the exact origin's current pins/provisioned secret before
+    // emitting CH or early data. No CA exception is manufactured for raw keys.
+    session_verified_ = true;
+    return BeginHandshake();
+  }
   httpps::Secret unused;
-  if (!trust_anchors_.empty() &&
+  const auto required_evidence = session_->certificates.empty() ? std::nullopt
+      : httpps::CertificateRequiresBrowserEvidence(session_->certificates.front(),
+                                                   options_.request_ocsp, options_.request_scts);
+  session_validated_path_ = httpps::ValidatedPrivatePath(session_->certificates,
+      trust_anchors_, destination_.host(), !session_->delegation.empty(), options_.native_provider.get());
+  const auto dane = httpps::VerifyDNSSECPolicy(options_.dane_policy.get(), destination_.host(),
+      session_->certificates, session_->server_certificate_type, session_->certificate_extensions,
+      session_validated_path_);
+  if (options_.dane_policy && dane && *dane >= 0 && !options_.ct_v2_policy &&
+      required_evidence && !*required_evidence) {
+    session_verified_ = true;
+    return BeginHandshake();
+  }
+  if (required_evidence && !*required_evidence && !trust_anchors_.empty() &&
       httpps::VerifyLabChain(session_->certificates, trust_anchors_,
-                             destination_.host(), &unused)) {
+                             destination_.host(), &unused, !session_->delegation.empty(), options_.native_provider.get())) {
+    session_validated_issuer_ = httpps::ValidatedPrivateIssuer(session_->certificates,
+        trust_anchors_, destination_.host(), !session_->delegation.empty(), options_.native_provider.get());
+    if (!dane || !httpps::CertificateTLSFeaturesAllowed(session_validated_path_) ||
+        !httpps::CertificateAlgorithmsAllowed(session_validated_path_, options_.certificate_signature_algorithms) ||
+        !httpps::VerifyCertificateTransparency(options_.ct_v2_policy.get(), session_->certificates,
+          session_->certificate_extensions, session_validated_issuer_)) {
+      session_.reset();
+      session_validated_issuer_.clear();
+      return BeginHandshake();
+    }
     session_verified_ = true;
     return BeginHandshake();
   }
@@ -115,8 +223,10 @@ int HttppsClientSocket::VerifySessionCertificate() {
   verifying_session_ = true;
   CertVerifier::RequestParams params(
       certificate, destination_.host(),
-      CertVerifier::VERIFY_HTTPPS_SERVER |
-          CertVerifier::VERIFY_DISABLE_NETWORK_FETCHES, {}, {});
+      (session_->delegation.empty() ? CertVerifier::VERIFY_HTTPPS_SERVER : 0) |
+          CertVerifier::VERIFY_DISABLE_NETWORK_FETCHES,
+      LeafEvidence(session_->certificate_extensions, 5),
+      LeafEvidence(session_->certificate_extensions, 18));
   int result = cert_verifier_->Verify(
       params, &cert_verify_result_,
       base::BindOnce(&HttppsClientSocket::OnCertificateVerified,
@@ -146,17 +256,24 @@ int HttppsClientSocket::ConfirmHandshake(CompletionOnceCallback callback) {
 }
 
 int HttppsClientSocket::PopulateSSLInfo() {
+  const auto authentication = GetHttppsAuthentication();
+  const bool x509 = authentication == httpps::Authentication::kCertificate ||
+                    authentication == httpps::Authentication::kCertificateAndPsk;
   std::vector<std::string_view> certificates;
   const auto& chain = client_->established() ? client_->certificates()
                                             : session_->certificates;
   for (const auto& der : chain)
     certificates.push_back(der);
-  ssl_info_.unverified_cert = X509Certificate::CreateFromDERCertChain(certificates);
-  ssl_info_.cert = verified_with_browser_ ? cert_verify_result_.verified_cert
-                                         : ssl_info_.unverified_cert;
-  if (!ssl_info_.cert)
-    return Abort(ERR_SSL_SERVER_CERT_BAD_FORMAT);
-  if (verified_with_browser_) {
+  if (x509) {
+    ssl_info_.unverified_cert = X509Certificate::CreateFromDERCertChain(certificates);
+    ssl_info_.cert = verified_with_browser_ ? cert_verify_result_.verified_cert
+                                           : ssl_info_.unverified_cert;
+    if (!ssl_info_.cert)
+      return Abort(ERR_SSL_SERVER_CERT_BAD_FORMAT);
+  } else {
+    ssl_info_ = SSLInfo();
+  }
+  if (x509 && verified_with_browser_) {
     ssl_info_.cert_status = cert_verify_result_.cert_status;
     ssl_info_.is_issued_by_known_root = cert_verify_result_.is_issued_by_known_root;
     ssl_info_.public_key_hashes = cert_verify_result_.public_key_hashes;
@@ -172,8 +289,17 @@ int HttppsClientSocket::PopulateSSLInfo() {
                                 ? SSLInfo::HANDSHAKE_RESUME
                                 : SSLInfo::HANDSHAKE_FULL;
   ssl_info_.early_data_accepted = client_->early_data_accepted();
+  ssl_info_.peer_signature_algorithm = authentication != httpps::Authentication::kExternalPsk &&
+      authentication != httpps::Authentication::kPassword ? 0xfe00 : 0;
   // UNKNOWN standard version: this is not TLS 1.3 despite the AEAD identifier.
-  SSLConnectionStatusSetCipherSuite(0x1301, &ssl_info_.connection_status);
+  SSLConnectionStatusSetCipherSuite(
+      client_->negotiated_alpn().empty() && session_ ? session_->cipher_suite
+                                                    : client_->cipher_suite(),
+      &ssl_info_.connection_status);
+  ssl_info_.connection_status |= SSL_CONNECTION_HTTPPS;
+  if (authentication != httpps::Authentication::kCertificate || credential_)
+    ssl_info_.connection_status |= SSL_CONNECTION_HTTPPS_EXPLICIT_IDENTITY;
+  ssl_info_.client_cert_sent = client_->client_identity_authenticated();
   return OK;
 }
 
@@ -310,7 +436,7 @@ int HttppsClientSocket::HandshakeLoop(int result) {
     }
     if (client_->certificate_verification_pending()) {
       result = client_->resumed() && session_verified_
-                   ? (client_->CompleteCertificateVerification(true)
+                   ? (client_->CompleteCertificateVerification(true, session_validated_issuer_, session_validated_path_)
                           ? OK : Abort(ProtocolError()))
                    : VerifyCertificate();
       if (result != OK) {
@@ -340,9 +466,10 @@ int HttppsClientSocket::VerifyCertificate() {
   // connection currently being authenticated. Full chains are sent by peers.
   CertVerifier::RequestParams params(
       certificate, destination_.host(),
-      CertVerifier::VERIFY_HTTPPS_SERVER |
+      (client_->delegated() ? 0 : CertVerifier::VERIFY_HTTPPS_SERVER) |
           CertVerifier::VERIFY_DISABLE_NETWORK_FETCHES,
-      /*ocsp_response=*/{}, /*sct_list=*/{});
+      LeafEvidence(client_->certificate_extensions(), 5),
+      LeafEvidence(client_->certificate_extensions(), 18));
   const int result = cert_verifier_->Verify(
       params, &cert_verify_result_,
       base::BindOnce(&HttppsClientSocket::OnCertificateVerified,
@@ -356,25 +483,41 @@ int HttppsClientSocket::CompleteCertificateVerification(int result) {
   cert_verifier_request_.reset();
   if (verifying_session_) {
     verifying_session_ = false;
+    session_validated_issuer_ = VerifiedIssuer(cert_verify_result_);
+    session_validated_path_ = VerifiedPath(cert_verify_result_);
     session_verified_ = result == OK && cert_verify_result_.verified_cert &&
-                        !IsCertStatusError(cert_verify_result_.cert_status);
+                        httpps::CertificateTLSFeaturesAllowed(session_validated_path_) &&
+                        httpps::CertificateAlgorithmsAllowed(session_validated_path_, options_.certificate_signature_algorithms) &&
+                        !IsCertStatusError(cert_verify_result_.cert_status) &&
+                        RequiredEvidenceVerified(session_->certificates, session_->certificate_extensions,
+                                                 cert_verify_result_, options_) &&
+                        httpps::VerifyCertificateTransparency(options_.ct_v2_policy.get(),
+                            session_->certificates, session_->certificate_extensions,
+                            session_validated_issuer_) &&
+                        httpps::VerifyDNSSECPolicy(options_.dane_policy.get(), destination_.host(),
+                            session_->certificates, session_->server_certificate_type,
+                            session_->certificate_extensions, session_validated_path_).has_value();
     verified_with_browser_ = session_verified_;
     // Rejected/stale cached credentials cannot authorize PSK/0-RTT. A fresh
     // certificate handshake may succeed after a legitimate certificate change.
     if (!session_verified_) {
       session_.reset();
+      session_validated_issuer_.clear();
       cert_verify_result_.Reset();
     }
     return BeginHandshake();
   }
   if (result != OK || !cert_verify_result_.verified_cert ||
-      IsCertStatusError(cert_verify_result_.cert_status)) {
+      IsCertStatusError(cert_verify_result_.cert_status) ||
+      !RequiredEvidenceVerified(client_->certificates(), client_->certificate_extensions(),
+                                cert_verify_result_, options_)) {
     // No certificate-error clickthrough, ignore-certificate-errors, fallback
     // to another trust path, or application traffic after a rejected decision.
     client_->CompleteCertificateVerification(false);
     return Abort(ERR_SSL_SERVER_CERT_BAD_FORMAT);
   }
-  if (!client_->CompleteCertificateVerification(true)) {
+  if (!client_->CompleteCertificateVerification(true, VerifiedIssuer(cert_verify_result_),
+                                                 VerifiedPath(cert_verify_result_))) {
     return Abort(ProtocolError());
   }
   verified_with_browser_ = true;
@@ -447,6 +590,14 @@ int HttppsClientSocket::ProtocolError() const {
 
 int HttppsClientSocket::Abort(int error) {
   if (fatal_error_ == OK) {
+    if (client_ && !raw_write_ && control_output_.empty()) {
+      auto alert = client_->TakeFatalAlert();
+      if (!alert.empty()) {
+        auto buffer = base::MakeRefCounted<VectorIOBuffer>(std::move(alert));
+        transport_->Write(buffer.get(), buffer->size(),
+            base::BindOnce([](scoped_refptr<IOBuffer>, int) {}, buffer), kHandshakeAnnotation);
+      }
+    }
     fatal_error_ = error;
     connected_ = false;
     handshake_timer_.Stop();
@@ -517,6 +668,12 @@ void HttppsClientSocket::OnWriteReady(int result) {
     FinishHandshakeOperation(result);
     return;
   }
+  if (control_writing_) {
+    result = FlushControlOutput(result);
+    if (result != ERR_IO_PENDING)
+      ResumeAfterControlOutput();
+    return;
+  }
   result = WriteRecord(result);
   if (result != ERR_IO_PENDING) {
     if (result < 0) {
@@ -525,10 +682,63 @@ void HttppsClientSocket::OnWriteReady(int result) {
     user_write_buffer_.reset();
     auto weak = weak_factory_.GetWeakPtr();
     std::move(write_callback_).Run(result < 0 ? result : user_write_length_);
+    if (weak && result == OK && !control_output_.empty()) {
+      if (FlushControlOutput() != ERR_IO_PENDING)
+        ResumeAfterControlOutput();
+    }
     if (weak && result == OK && handshake_waiting_for_write_) {
       handshake_waiting_for_write_ = false;
       if (!transport_read_pending_ && !cert_verifier_request_)
         FinishHandshakeOperation(HandshakeLoop(OK));
+    }
+  }
+}
+
+int HttppsClientSocket::FlushControlOutput(int result) {
+  if (raw_write_ && !control_writing_)
+    return ERR_IO_PENDING;  // Never replace a partially emitted user record.
+  if (control_writing_) {
+    result = WriteRecord(result);
+    if (result == ERR_IO_PENDING)
+      return result;
+    control_writing_ = false;
+    if (result < 0)
+      return Abort(result);
+  }
+  while (!control_output_.empty()) {
+    QueueWrite(std::exchange(control_output_, {}));
+    control_writing_ = true;
+    result = WriteRecord(OK);
+    if (result == ERR_IO_PENDING)
+      return result;
+    control_writing_ = false;
+    if (result < 0)
+      return Abort(result);
+  }
+  return OK;
+}
+
+void HttppsClientSocket::ResumeAfterControlOutput() {
+  if (fatal_error_ != OK)
+    return;
+  auto weak = weak_factory_.GetWeakPtr();
+  const bool resume_read = read_waiting_for_control_ && read_callback_;
+  if (write_waiting_for_control_ && write_callback_) {
+    write_waiting_for_control_ = false;
+    int result = StartUserWrite();
+    if (result != ERR_IO_PENDING) {
+      user_write_buffer_.reset();
+      std::move(write_callback_).Run(result);
+    }
+  }
+  if (!weak)
+    return;
+  if (resume_read && read_waiting_for_control_ && read_callback_) {
+    read_waiting_for_control_ = false;
+    int result = ReadApplication(OK);
+    if (result != ERR_IO_PENDING) {
+      user_read_buffer_.reset();
+      std::move(read_callback_).Run(result);
     }
   }
 }
@@ -570,8 +780,18 @@ int HttppsClientSocket::ReadApplication(int result) {
       return Abort(result < 0 ? result : ProtocolError());
     }
     SaveTickets();
+    auto control = client_->TakeOutput();
+    control_output_.insert(control_output_.end(), control.begin(), control.end());
+    if (!control_output_.empty() || control_writing_) {
+      result = FlushControlOutput();
+      if (result == ERR_IO_PENDING) {
+        read_waiting_for_control_ = true;
+        return result;
+      }
+      if (result < 0)
+        return result;
+    }
     if (client_->closed()) {
-      BestEffortCloseNotify();
       return 0;
     }
     if (!application_data_.empty()) {
@@ -612,7 +832,7 @@ int HttppsClientSocket::Write(IOBuffer* buffer,
                               const NetworkTrafficAnnotationTag& annotation) {
   CHECK(!write_callback_);
   CHECK_GT(length, 0);
-  if (!connected_ || client_->closed()) {
+  if (!connected_) {
     return fatal_error_ < 0 ? fatal_error_ : ERR_SOCKET_NOT_CONNECTED;
   }
   was_ever_used_ = true;
@@ -620,8 +840,13 @@ int HttppsClientSocket::Write(IOBuffer* buffer,
   // even though the record layer makes its own encrypted copy immediately.
   user_write_buffer_ = buffer;
   user_write_length_ =
-      std::min(length, static_cast<int>(httpps::kMaxRecordContent));
+      std::min(length, static_cast<int>(client_->max_send_content()));
   write_annotation_ = MutableNetworkTrafficAnnotationTag(annotation);
+  if (control_writing_ || !control_output_.empty()) {
+    write_waiting_for_control_ = true;
+    write_callback_ = std::move(callback);
+    return ERR_IO_PENDING;
+  }
   if (!client_->established() &&
       (!client_->early_data_available() || raw_write_ || confirming_ ||
        transport_read_pending_ || cert_verifier_request_)) {
@@ -663,7 +888,7 @@ void HttppsClientSocket::BestEffortCloseNotify() {
   // TLS shutdown API. Send the authenticated alert only when no write is in
   // flight. Never interleave an alert into a partially written record.
   httpps::Bytes close;
-  if (!raw_write_ && client_ && client_->Close(&close)) {
+  if (!raw_write_ && !control_writing_ && control_output_.empty() && client_ && client_->Close(&close)) {
     auto buffer = base::MakeRefCounted<VectorIOBuffer>(std::move(close));
     transport_->Write(
         buffer.get(), buffer->size(),
@@ -683,8 +908,12 @@ void HttppsClientSocket::Disconnect() {
   session_.reset();
   early_connect_complete_ = early_data_sent_ = false;
   verifying_session_ = session_verified_ = confirming_ = false;
+  session_validated_issuer_.clear();
+  session_validated_path_.clear();
   handshake_waiting_for_write_ = false;
   write_waiting_for_handshake_ = false;
+  control_output_.clear();
+  control_writing_ = read_waiting_for_control_ = write_waiting_for_control_ = false;
   connected_ = false;
   connect_callback_.Reset();
   read_callback_.Reset();
@@ -726,14 +955,21 @@ bool HttppsClientSocket::WasEverUsed() const {
   return was_ever_used_;
 }
 NextProto HttppsClientSocket::GetNegotiatedProtocol() const {
-  return NextProto::kProtoHTTP11;
+  const std::string protocol = client_ && !client_->negotiated_alpn().empty()
+      ? client_->negotiated_alpn() : session_ ? session_->alpn : "http/1.1";
+  return protocol == "h2" ? NextProto::kProtoHTTP2 : NextProto::kProtoHTTP11;
 }
 bool HttppsClientSocket::GetSSLInfo(SSLInfo* info) {
-  if (!ssl_info_.is_valid()) {
+  if (!SSLConnectionStatusIsHttpps(ssl_info_.connection_status)) {
     return false;
   }
   *info = ssl_info_;
+  info->client_cert_sent = client_->client_identity_authenticated();
   return true;
+}
+httpps::Authentication HttppsClientSocket::GetHttppsAuthentication() const {
+  return client_ && client_->established() ? client_->authentication()
+      : session_ ? session_->authentication : httpps::Authentication::kCertificate;
 }
 int64_t HttppsClientSocket::GetTotalReceivedBytes() const {
   return received_bytes_;

@@ -725,10 +725,19 @@ bool SpdySession::CanPool(TransportSecurityState* transport_security_state,
                           const SSLConfigService& ssl_config_service,
                           std::string_view old_hostname,
                           std::string_view new_hostname) {
+  // The destination may have an explicit HTTPPS credential or trust profile
+  // even if the existing connection does not. Do not bypass that policy by
+  // coalescing a different origin onto an ordinary multi-SAN connection.
+  // Port equality is also enforced by SpdySessionKey::CompareForAliasing.
+  if (SSLConnectionStatusIsHttpps(ssl_info.connection_status) &&
+      old_hostname != new_hostname) {
+    return false;
+  }
   // Pooling is prohibited if the server cert is not valid for the new domain,
   // and for connections on which client certs were sent. It is also prohibited
   // when channel ID was sent if the hosts are from different eTLDs+1.
-  if (IsCertStatusError(ssl_info.cert_status))
+  if (!ssl_info.cert || IsCertStatusError(ssl_info.cert_status) ||
+      (ssl_info.connection_status & SSL_CONNECTION_HTTPPS_EXPLICIT_IDENTITY))
     return false;
 
   if (ssl_info.client_cert_sent &&
@@ -1558,8 +1567,19 @@ bool SpdySession::HasAcceptableTransportSecurity() const {
   SSLInfo ssl_info;
   CHECK(GetSSLInfo(&ssl_info));
 
-  // HTTP/2 requires TLS 1.2+
-  if (SSLConnectionStatusToVersion(ssl_info.connection_status) <
+  // HTTPPS keeps its independent wire identity rather than claiming TLS 1.3.
+  // Require the authenticated socket marker AND the pool partition. A MAC
+  // scheme is not a transport marker: a provisioned PSK-only connection does
+  // not have a CertificateVerify. The URL alone is likewise insufficient.
+  if (SSLConnectionStatusIsHttpps(ssl_info.connection_status) !=
+      spdy_session_key_.is_httpps()) {
+    return false;
+  }
+  if (spdy_session_key_.is_httpps()) {
+    if (IsCertStatusError(ssl_info.cert_status)) {
+      return false;
+    }
+  } else if (SSLConnectionStatusToVersion(ssl_info.connection_status) <
       SSL_CONNECTION_VERSION_TLS1_2) {
     return false;
   }
@@ -1603,7 +1623,7 @@ bool SpdySession::ChangeSocketTag(const SocketTag& new_tag) {
       new_tag, spdy_session_key_.network_anonymization_key(),
       spdy_session_key_.secure_dns_policy(),
       spdy_session_key_.disable_cert_verification_network_fetches(),
-      spdy_session_key_.target_network());
+      spdy_session_key_.target_network(), spdy_session_key_.is_httpps());
   spdy_session_key_ = new_key;
 
   return true;

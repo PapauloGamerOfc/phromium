@@ -38,7 +38,10 @@ def extension(kind, data):
 
 
 def ext_values(hello):
-    data, result = hello[47:], {}
+    offset = 39 + hello[38]
+    offset += 2 + int.from_bytes(hello[offset:offset + 2], "big")
+    offset += 1 + hello[offset]
+    data, result = hello[offset + 2:], {}
     while data:
         kind, length = int.from_bytes(data[:2], "big"), int.from_bytes(data[2:4], "big")
         assert length <= len(data) - 4 and kind not in result

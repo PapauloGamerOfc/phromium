@@ -43,6 +43,25 @@ TEST_F(HttpResponseInfoTest, UnusedSincePrefetchDefault) {
   EXPECT_FALSE(response_info_.unused_since_prefetch);
 }
 
+TEST_F(HttpResponseInfoTest, HttppsWithoutCertificatePreservesTransportMetadata) {
+  response_info_.ssl_info.connection_status =
+      SSL_CONNECTION_HTTPPS | SSL_CONNECTION_HTTPPS_EXPLICIT_IDENTITY;
+  SSLConnectionStatusSetCipherSuite(0x1302,
+      &response_info_.ssl_info.connection_status);
+  response_info_.ssl_info.key_exchange_group = 29;
+  ASSERT_FALSE(response_info_.ssl_info.is_valid());
+  HttpResponseInfo restored;
+  PickleAndRestore(response_info_, &restored);
+  EXPECT_FALSE(restored.ssl_info.cert);
+  EXPECT_FALSE(restored.ssl_info.is_valid());
+  EXPECT_EQ(restored.ssl_info.connection_status,
+            response_info_.ssl_info.connection_status);
+  EXPECT_EQ(29, restored.ssl_info.key_exchange_group);
+  EXPECT_EQ(SSL_CONNECTION_VERSION_UNKNOWN,
+            SSLConnectionStatusToVersion(restored.ssl_info.connection_status));
+  EXPECT_EQ(0, restored.ssl_info.peer_signature_algorithm);
+}
+
 TEST_F(HttpResponseInfoTest, UnusedSincePrefetchCopy) {
   response_info_.unused_since_prefetch = true;
   HttpResponseInfo response_info_clone(response_info_);

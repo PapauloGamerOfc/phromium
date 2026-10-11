@@ -81,7 +81,8 @@ SpdySessionKey HttpStreamFactory::GetSpdySessionKey(
       proxy_chain, SessionUsage::kDestination, request_info.socket_tag,
       request_info.network_anonymization_key, request_info.secure_dns_policy,
       request_info.load_flags & LOAD_DISABLE_CERT_NETWORK_FETCHES,
-      request_info.target_network);
+      request_info.target_network,
+      request_info.url.SchemeIs(url::kHttppsScheme));
 }
 
 // static

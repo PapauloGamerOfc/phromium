@@ -54,7 +54,14 @@ void ConfigureHttpps(SSLConfig& ssl_config) {
   ssl_config.early_data_enabled =
       ssl_config.session_usage == SessionUsage::kDestination &&
       base::FeatureList::IsEnabled(kEnableHttppsEarlyData);
-  ssl_config.alpn_protos = {NextProto::kProtoHTTP11};
+  // Respect caller ALPN policy (including HTTP/2 being disabled), but do not
+  // advertise protocols that the native experimental transport cannot serve.
+  std::erase_if(ssl_config.alpn_protos, [](NextProto proto) {
+    return proto != NextProto::kProtoHTTP11 && proto != NextProto::kProtoHTTP2;
+  });
+  if (ssl_config.alpn_protos.empty()) {
+    ssl_config.alpn_protos = {NextProto::kProtoHTTP11};
+  }
   ssl_config.application_settings.clear();
   ssl_config.renego_allowed_default = false;
   ssl_config.renego_allowed_for_protos.clear();

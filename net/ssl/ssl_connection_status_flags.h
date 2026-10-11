@@ -27,6 +27,15 @@ enum {
   SSL_CONNECTION_VERSION_SHIFT = 20,
   SSL_CONNECTION_VERSION_MASK = 7,
 
+  // Independent HTTPPS/TLS 2.0 transport identity. Do not alias a persisted TLS
+  // version or claim TLS 1.3 for the experimental protocol. Set by its socket
+  // only after authentication; preserved in SSLInfo's existing status field.
+  SSL_CONNECTION_HTTPPS = 1 << 23,
+
+  // An explicitly provisioned RPK or external-PSK identity (including a combined
+  // X.509+PSK identity). Its authority cannot be widened using certificate SANs.
+  SSL_CONNECTION_HTTPPS_EXPLICIT_IDENTITY = 1 << 24,
+
   // 1 << 31 (the sign bit) is reserved so that the SSL connection status will
   // never be negative.
 };
@@ -50,6 +59,10 @@ static_assert(SSL_CONNECTION_VERSION_MAX - 1 <= SSL_CONNECTION_VERSION_MASK,
 
 inline uint16_t SSLConnectionStatusToCipherSuite(int connection_status) {
   return static_cast<uint16_t>(connection_status);
+}
+
+inline bool SSLConnectionStatusIsHttpps(int connection_status) {
+  return (connection_status & SSL_CONNECTION_HTTPPS) != 0;
 }
 
 inline SSLVersion SSLConnectionStatusToVersion(int connection_status) {

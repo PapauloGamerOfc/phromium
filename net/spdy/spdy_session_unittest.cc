@@ -64,6 +64,7 @@
 #include "net/spdy/spdy_stream.h"
 #include "net/spdy/spdy_stream_test_util.h"
 #include "net/spdy/spdy_test_util_common.h"
+#include "net/ssl/ssl_connection_status_flags.h"
 #include "net/test/cert_test_util.h"
 #include "net/test/gtest_util.h"
 #include "net/test/test_data_directory.h"
@@ -6863,6 +6864,32 @@ TEST(CanPoolTest, CanNotPoolWithCertErrors) {
 
   EXPECT_FALSE(SpdySession::CanPool(&tss, ssl_info, ssl_config_service,
                                     "www.example.org", "mail.example.org"));
+}
+
+TEST(CanPoolTest, HttppsExplicitIdentityCannotWidenAuthority) {
+  TransportSecurityState tss;
+  TestSSLConfigService ssl_config_service;
+  SSLInfo info;
+  info.connection_status = SSL_CONNECTION_HTTPPS |
+                           SSL_CONNECTION_HTTPPS_EXPLICIT_IDENTITY;
+  // PSK and RPK do not manufacture an X.509 certificate for consumers.
+  EXPECT_FALSE(SpdySession::CanPool(&tss, info, ssl_config_service,
+                                  "www.example.org", "mail.example.org"));
+  // Even a combined certificate+PSK identity may not inherit the cert's SANs:
+  // the PSK was provisioned for the original authority only.
+  info.cert = ImportCertFromFile(GetTestCertsDirectory(), "spdy_pooling.pem");
+  ASSERT_TRUE(info.cert);
+  EXPECT_FALSE(SpdySession::CanPool(&tss, info, ssl_config_service,
+                                  "www.example.org", "mail.example.org"));
+  info.connection_status = SSL_CONNECTION_HTTPPS;
+  // An ordinary source must not bypass a profile provisioned for the target.
+  EXPECT_FALSE(SpdySession::CanPool(&tss, info, ssl_config_service,
+                                  "www.example.org", "mail.example.org"));
+  EXPECT_TRUE(SpdySession::CanPool(&tss, info, ssl_config_service,
+                                 "www.example.org", "www.example.org"));
+  info.connection_status = 0;  // Ordinary HTTPS keeps multi-SAN coalescing.
+  EXPECT_TRUE(SpdySession::CanPool(&tss, info, ssl_config_service,
+                                 "www.example.org", "mail.example.org"));
 }
 
 TEST(CanPoolTest, CanNotPoolWithClientCerts) {

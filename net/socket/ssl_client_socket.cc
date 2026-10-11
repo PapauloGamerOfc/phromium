@@ -21,6 +21,10 @@
 #include "net/cert/x509_certificate_net_log_param.h"
 #include "net/log/net_log.h"
 #include "net/log/net_log_event_type.h"
+#include "net/httpps/dnssec.h"
+#include "net/httpps/its_credentials.h"
+#include "net/httpps/opaque_string.h"
+#include "net/httpps/transparency.h"
 #include "net/socket/httpps_client_socket.h"
 #include "net/socket/ssl_client_socket_impl.h"
 #include "net/socket/stream_socket.h"
@@ -29,6 +33,7 @@
 #include "net/ssl/ssl_connection_status_flags.h"
 #include "net/ssl/ssl_info.h"
 #include "net/ssl/ssl_key_logger.h"
+#include "third_party/boringssl/src/include/openssl/mem.h"
 
 namespace net {
 
@@ -114,6 +119,8 @@ struct SSLClientContext::HttppsSessionCache {
                static_cast<int64_t>(ticket.lifetime) * 1000;
   }
   std::map<Key, Entry> entries;
+  std::map<Key, httpps::ClientCredential> client_credentials;
+  std::map<Key, httpps::ClientOptions> profiles;
   size_t bytes = 0;
   uint64_t next_order = 0;
   uint64_t ordinary_cache_generation = 0;
@@ -346,6 +353,123 @@ void SSLClientContext::SetHttppsProxyTrustAnchors(
   }
 }
 
+bool SSLClientContext::SetHttppsClientCredential(
+    const HostPortPair& server, const SSLConfig& config,
+    const httpps::ClientCredential& credential) {
+  if (!config.is_httpps || config.session_usage != SessionUsage::kDestination) {
+    return false;
+  }
+  httpps::Client validator(server.host(), {}, true);
+  if (!validator.SetClientCredential(credential)) {
+    return false;
+  }
+  auto selected = credential;
+  if (credential.its_policy) {
+    selected.its_policy =
+        std::make_shared<httpps::ITSPolicy>(*credential.its_policy);
+  }
+  // A selection may contain a private key; never log or persist this map.
+  httpps_session_cache_->client_credentials.insert_or_assign(
+      HttppsSessionCache::MakeKey(server, config), std::move(selected));
+  NotifySSLConfigForServersChanged({server});
+  return true;
+}
+
+bool SSLClientContext::ClearHttppsClientCredential(
+    const HostPortPair& server, const SSLConfig& config) {
+  if (!config.is_httpps || config.session_usage != SessionUsage::kDestination ||
+      !httpps_session_cache_->client_credentials.erase(
+          HttppsSessionCache::MakeKey(server, config))) {
+    return false;
+  }
+  NotifySSLConfigForServersChanged({server});
+  return true;
+}
+
+const httpps::ClientCredential* SSLClientContext::GetHttppsClientCredential(
+    const HostPortPair& server, const SSLConfig& config) const {
+  if (!config.is_httpps || config.session_usage != SessionUsage::kDestination) {
+    return nullptr;
+  }
+  auto found = httpps_session_cache_->client_credentials.find(
+      HttppsSessionCache::MakeKey(server, config));
+  return found == httpps_session_cache_->client_credentials.end()
+             ? nullptr : &found->second;
+}
+
+bool SSLClientContext::SetHttppsOptions(
+    const HostPortPair& server, const SSLConfig& config,
+    const httpps::ClientOptions& options) {
+  if (!config.is_httpps || config.session_usage != SessionUsage::kDestination ||
+      !options.ordinary_httpps || options.allow_integrity_only || options.pinning ||
+      (options.bootstrap && options.bootstrap->provisioning_trust) ||
+      (options.dane_policy && options.dane_policy->port != server.port())) {
+    return false;
+  }
+  auto prepared = options;
+  // Snapshot policy data: a caller may retain a mutable shared_ptr even when
+  // our interface receives shared_ptr<const>. Updates must go through this
+  // setter to invalidate old tickets and pooled connections. Providers remain
+  // shared; external state captured by DANE callbacks obeys the same contract.
+  if (options.ct_v2_policy) {
+    prepared.ct_v2_policy =
+        std::make_shared<httpps::CTv2Policy>(*options.ct_v2_policy);
+  }
+  if (options.dane_policy) {
+    prepared.dane_policy =
+        std::make_shared<httpps::DANEPolicy>(*options.dane_policy);
+  }
+  if (options.its_policy) {
+    prepared.its_policy =
+        std::make_shared<httpps::ITSPolicy>(*options.its_policy);
+  }
+  if (options.password) {
+    if (options.password->service != server.host()) {
+      return false;
+    }
+    auto password = std::make_shared<httpps::PasswordCredential>(*options.password);
+    auto username = httpps::PrepareOpaqueString(password->username);
+    if (!username || username->size() > 255) {
+      return false;
+    }
+    auto secret = httpps::PrepareOpaqueString(password->password);
+    if (!secret) {
+      return false;
+    }
+    password->username = std::move(*username);
+    // Do not overwrite the original password's allocation without wiping it.
+    OPENSSL_cleanse(password->password.data(), password->password.size());
+    password->password = std::move(*secret);
+    password->prepare_text = httpps::PrepareOpaqueString;
+    prepared.password = std::move(password);
+  }
+  httpps_session_cache_->profiles.insert_or_assign(
+      HttppsSessionCache::MakeKey(server, config), std::move(prepared));
+  NotifySSLConfigForServersChanged({server});
+  return true;
+}
+
+bool SSLClientContext::ClearHttppsOptions(const HostPortPair& server,
+                                       const SSLConfig& config) {
+  if (!config.is_httpps || config.session_usage != SessionUsage::kDestination ||
+      !httpps_session_cache_->profiles.erase(
+          HttppsSessionCache::MakeKey(server, config))) {
+    return false;
+  }
+  NotifySSLConfigForServersChanged({server});
+  return true;
+}
+
+const httpps::ClientOptions* SSLClientContext::GetHttppsOptions(
+    const HostPortPair& server, const SSLConfig& config) const {
+  if (!config.is_httpps || config.session_usage != SessionUsage::kDestination) {
+    return nullptr;
+  }
+  auto found = httpps_session_cache_->profiles.find(
+      HttppsSessionCache::MakeKey(server, config));
+  return found == httpps_session_cache_->profiles.end() ? nullptr : &found->second;
+}
+
 std::optional<httpps::SessionTicket> SSLClientContext::TakeHttppsSession(
     const HostPortPair& server, const SSLConfig& config) {
   SynchronizeHttppsSessionGeneration();
@@ -376,7 +500,21 @@ void SSLClientContext::StoreHttppsSession(uint64_t generation,
   if (!ssl_client_session_cache_ || !config.is_httpps ||
       generation != httpps_session_generation_ ||
       ticket.hostname != server.host() || ticket.identity.empty() ||
-      ticket.identity.size() > 65535 || ticket.certificates.empty() ||
+      ticket.identity.size() > 65535 ||
+      (ticket.certificates.empty() &&
+       ticket.authentication != httpps::Authentication::kExternalPsk &&
+       ticket.authentication != httpps::Authentication::kPassword) ||
+      httpps::SuiteHashLength(ticket.cipher_suite) == 0 ||
+      ticket.psk.size() != httpps::SuiteHashLength(ticket.cipher_suite) ||
+      ticket.alpn.empty() || ticket.alpn.size() > 255 ||
+      (ticket.client_certificate_type != 0 && ticket.client_certificate_type != 2 &&
+       ticket.client_certificate_type != 3) ||
+      (!ticket.ct_policy_context.empty() && ticket.ct_policy_context.size() != 32) ||
+      (!ticket.dane_policy_context.empty() && ticket.dane_policy_context.size() != 32) ||
+      (!ticket.its_policy_context.empty() && ticket.its_policy_context.size() != 32) ||
+      ticket.authentication == httpps::Authentication::kProvisioning ||
+      (!ticket.certificate_extensions.empty() &&
+       ticket.certificate_extensions.size() != ticket.certificates.size()) ||
       ticket.certificates.size() > 64 ||
       !HttppsSessionCache::Usable(ticket, httpps::MonotonicMilliseconds())) {
     return;
@@ -385,7 +523,28 @@ void SSLClientContext::StoreHttppsSession(uint64_t generation,
   constexpr size_t kMaxEntryBytes = 1024 * 1024;
   constexpr size_t kMaxCacheBytes = 16 * 1024 * 1024;
   constexpr size_t kMaxEntries = 256;
-  size_t bytes = ticket.identity.size() + ticket.psk.size();
+  size_t bytes = ticket.identity.size() + ticket.psk.size() +
+                 ticket.ct_policy_context.size() + ticket.dane_policy_context.size() +
+                 ticket.its_policy_context.size();
+  if (ticket.delegation.size() > kMaxEntryBytes - bytes) {
+    return;
+  }
+  bytes += ticket.delegation.size();
+  for (const auto& entry : ticket.certificate_extensions) {
+    for (const auto& [type, value] : entry) {
+      // Account evidence and map-node overhead as well as certificates. A
+      // peer cannot escape the cache byte budget with many empty extensions.
+      constexpr size_t kExtensionOverhead = 64;
+      if (kExtensionOverhead > kMaxEntryBytes - bytes) {
+        return;
+      }
+      bytes += kExtensionOverhead;
+      if (value.size() > kMaxEntryBytes - bytes) {
+        return;
+      }
+      bytes += value.size();
+    }
+  }
   for (const auto& cert : ticket.certificates) {
     if (cert.empty() || cert.size() > kMaxEntryBytes - bytes) {
       return;
@@ -425,6 +584,32 @@ std::unique_ptr<SSLClientSocket> SSLClientContext::CreateSSLClientSocket(
                             ? httpps_proxy_trust_anchors_
                             : httpps_trust_anchors_;
     auto ticket = TakeHttppsSession(host_and_port, ssl_config);
+    httpps::ClientOptions options;
+    // Ordinary browser optimizations need no identity disclosure: the codecs
+    // are bounded and cached certificate bytes always receive fresh validation.
+    options.certificate_compression = {1, 2, 3};
+    options.delegated_credentials = true;
+    if (const auto* selected = GetHttppsOptions(host_and_port, ssl_config)) {
+      options = *selected;
+    }
+    if (ticket && !ticket->certificates.empty()) {
+      options.cached_certificates.emplace_back(ticket->server_certificate_type,
+                                               ticket->certificates);
+    }
+    options.alpn_protocols.clear();
+    for (NextProto proto : ssl_config.alpn_protos) {
+      if (proto == NextProto::kProtoHTTP11 || proto == NextProto::kProtoHTTP2) {
+        options.alpn_protocols.emplace_back(NextProtoToString(proto));
+      }
+    }
+    if (options.alpn_protocols.empty()) {
+      options.alpn_protocols = {"http/1.1"};
+    }
+    std::optional<httpps::ClientCredential> credential;
+    if (const auto* selected = GetHttppsClientCredential(host_and_port, ssl_config)) {
+      credential = *selected;
+      options.post_handshake_auth = true;
+    }
     return std::make_unique<HttppsClientSocket>(
         std::move(stream_socket), host_and_port, roots, cert_verifier_.get(),
         std::move(ticket),
@@ -433,7 +618,8 @@ std::unique_ptr<SSLClientSocket> SSLClientContext::CreateSSLClientSocket(
                             httpps_session_generation_, host_and_port,
                             ssl_config),
         ssl_config.early_data_enabled &&
-            ssl_config.session_usage == SessionUsage::kDestination);
+            ssl_config.session_usage == SessionUsage::kDestination,
+        std::move(options), std::move(credential));
   }
   return std::make_unique<SSLClientSocketImpl>(this, std::move(stream_socket),
                                                host_and_port, ssl_config);
@@ -502,6 +688,10 @@ void SSLClientContext::OnTrustStoreChanged() {
 void SSLClientContext::OnClientCertStoreChanged() {
   base::flat_set<HostPortPair> servers =
       ssl_client_auth_cache_.GetCachedServers();
+  for (const auto& [key, credential] : httpps_session_cache_->client_credentials) {
+    servers.insert(key.scope.server);
+  }
+  httpps_session_cache_->client_credentials.clear();
   if (servers.empty()) {
     // HTTPPS tickets must also lose their pending generation when the client
     // credential store changes before any ordinary TLS preference was cached.

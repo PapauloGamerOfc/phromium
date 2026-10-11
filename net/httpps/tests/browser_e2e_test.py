@@ -26,7 +26,7 @@ import tempfile
 from urllib.parse import parse_qs, urlsplit
 
 
-SERVER_REVISION = "4f28b2c2da40e8a8371e9846dd3c5cd8a6c9401f"
+SERVER_REVISION = "18e04497259e21549c996dfb8ad45ea4ce590760"
 HOST = "cookie.test"
 MAX_MESSAGE = 4 * 1024 * 1024
 
@@ -224,10 +224,13 @@ class Browser:
         if self.root is not None:
             arguments.append("--httpps-trust-anchor=" + base64.b64encode(self.root).decode())
         self.log = (self.profile.parent / (self.profile.name + ".browser.log")).open("ab")
+        stage = "spawning owned browser"
+        last_probe = "DevToolsActivePort not observed"
         try:
             self.process = await OwnedProcess.start(
                 *arguments, stdout=self.log, stderr=self.log,
                 creationflags=subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0)
+            stage = "discovering page debugger"
             async with asyncio.timeout(45):
                 while True:
                     if self.process.returncode is not None:
@@ -235,37 +238,58 @@ class Browser:
                     if active_port.exists():
                         lines = active_port.read_text().splitlines()
                         if lines:
-                            with suppress(OSError, ValueError, IndexError):
+                            try:
                                 targets = await debug_targets(int(lines[0]))
                                 pages = [target for target in targets if target.get("type") == "page"]
+                                last_probe = f"DevTools responded with {len(targets)} targets, {len(pages)} pages"
                                 if pages:
+                                    stage = "connecting page debugger WebSocket"
                                     self.cdp = await CDP.connect(pages[0]["webSocketDebuggerUrl"])
                                     break
+                            except (OSError, ValueError, IndexError) as probe_error:
+                                last_probe = repr(probe_error)
+                                stage = "discovering page debugger"
                     await asyncio.sleep(0.05)
+            stage = "enabling Page domain"
             await self.cdp.command("Page.enable")
+            stage = "enabling Network domain"
             await self.cdp.command("Network.enable")
+            stage = "disabling test HTTP cache"
             await self.cdp.command("Network.setCacheDisabled", cacheDisabled=True)
             return self.cdp
-        except BaseException:
-            await self.__aexit__(None, None, None)
+        except BaseException as error:
+            error.add_note(f"Browser startup stage: {stage}; last probe: {last_probe}")
+            # __aenter__ failures do not invoke __aexit__ automatically. Preserve
+            # the startup error even if teardown must kill a stalled browser;
+            # otherwise the diagnostically useful failure gets hidden.
+            await self.__aexit__(type(error), error, error.__traceback__)
             raise
 
-    async def __aexit__(self, *_):
+    async def __aexit__(self, exc_type, error, traceback):
         try:
             if self.cdp:
                 with suppress(Exception):
                     await asyncio.wait_for(self.cdp.command("Browser.close"), 5)
-                await close_writer(self.cdp.writer)
+                with suppress(Exception):
+                    await close_writer(self.cdp.writer)
             if self.process:
                 try:
-                    await asyncio.wait_for(self.process.wait(), 15)
+                    # OwnedProcess.wait already bounds the blocking worker.
+                    # A second equal timeout races it and leaves the worker
+                    # running after cancellation of asyncio.to_thread.
+                    await self.process.wait()
                 except TimeoutError:
                     self.process.kill()
                     await self.process.wait()
                     raise RuntimeError("Browser did not close normally; persistence result invalid")
+        except BaseException as cleanup_error:
+            if error is None:
+                raise
+            error.add_note(f"Browser cleanup also failed: {cleanup_error!r}")
         finally:
             if self.log:
                 self.log.close()
+        return False
 
 
 class Fixtures:
@@ -284,6 +308,8 @@ class Fixtures:
         self.application_bytes = {}
         self.ticket_store = TicketStore()
         self.early_sessions = []
+        self.h2_connections = 0
+        self.h2_requests = []
         now = datetime.now(timezone.utc)
         issuer_key = ec.generate_private_key(ec.SECP256R1())
         issuer_name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Browser local test CA")])
@@ -424,6 +450,7 @@ class Fixtures:
         https_port = await self.listen(lambda r, w: self.http(r, w, "https"), ssl=self.ssl_context)
         self.secure_port = await self.listen(self.httpps)
         self.early_port = await self.listen(self.early_httpps)
+        h2_secure_port = await self.listen(self.h2_httpps)
         self.negative_ports = {}
         for kind in ("wrong-host", "expired", "bad-proof", "untrusted"):
             self.negative_ports[kind] = await self.listen(lambda r, w, kind=kind: self.httpps(r, w, kind))
@@ -455,6 +482,81 @@ class Fixtures:
                     await close_writer(upstream)
                 await close_writer(writer)
         self.port = await self.listen(relay)
+
+        async def h2_relay(reader, writer):
+            upstream = None
+            tasks = []
+            async def pump(source, destination):
+                while data := await source.read(65536):
+                    destination.write(data)
+                    await destination.drain()
+            try:
+                async with asyncio.timeout(30):
+                    first = await reader.readexactly(1)
+                    # Same authority for HTTPS/HTTPPS checks. A reused HTTPPS
+                    # pool entry must never satisfy an ordinary HTTPS request.
+                    port = h2_secure_port if first == b"T" else https_port
+                    incoming, upstream = await asyncio.open_connection("127.0.0.1", port)
+                    upstream.write(first)
+                    tasks = [asyncio.create_task(pump(reader, upstream)),
+                             asyncio.create_task(pump(incoming, writer))]
+                    await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+            except (ConnectionError, asyncio.IncompleteReadError, TimeoutError):
+                pass
+            finally:
+                for task in tasks:
+                    task.cancel()
+                await asyncio.gather(*tasks, return_exceptions=True)
+                if upstream:
+                    await close_writer(upstream)
+                await close_writer(writer)
+        self.h2_port = await self.listen(h2_relay)
+
+    async def h2_httpps(self, reader, writer):
+        from h2.config import H2Configuration
+        from h2.connection import H2Connection
+        from h2.events import DataReceived, RequestReceived
+        from tls20_server.errors import ProtocolError
+        from tls20_server.handshake import server_handshake
+        channel = None
+        try:
+            async with asyncio.timeout(30):
+                channel = await server_handshake(reader, writer, self.credentials["valid"], HOST,
+                                                 application_protocols=(b"h2",))
+                self.h2_connections += 1
+                assert channel.protocol == b"h2" and not channel.peer_post_handshake_auth
+                connection = H2Connection(H2Configuration(client_side=False, header_encoding="utf-8"))
+                connection.initiate_connection()
+                await channel.send(connection.data_to_send())
+                while (data := await channel.recv()) is not None:
+                    for event in connection.receive_data(data):
+                        if isinstance(event, RequestReceived):
+                            headers = dict(event.headers)
+                            self.h2_requests.append(headers)
+                            if headers[":path"] == "/":
+                                body = b"<!doctype html><title>HTTPPS h2</title><link rel=icon href='data:,'>h2"
+                                mime = "text/html"
+                            else:
+                                body = json.dumps({"scheme": headers[":scheme"], "path": headers[":path"],
+                                                   "cookie": headers.get("cookie", "")}).encode()
+                                mime = "application/json"
+                            connection.send_headers(event.stream_id, [
+                                (":status", "200"), ("content-type", mime),
+                                ("content-length", str(len(body))), ("cache-control", "no-store")])
+                            connection.send_data(event.stream_id, body, end_stream=True)
+                        elif isinstance(event, DataReceived):
+                            connection.acknowledge_received_data(event.flow_controlled_length, event.stream_id)
+                    if outgoing := connection.data_to_send():
+                        await channel.send(outgoing)
+        except (ProtocolError, ConnectionError, asyncio.IncompleteReadError, TimeoutError):
+            pass
+        except Exception as error:
+            self.errors.append(repr(error))
+        finally:
+            if channel:
+                await channel.close()
+            else:
+                await close_writer(writer)
 
     async def early_httpps(self, reader, writer):
         """Separate replay-aware fixture; never relax the cookie-test peers."""
@@ -603,6 +705,23 @@ async def run(args, report):
                         await close_writer(writer)
                 check(not fixtures.errors, "Fixture servers reported no unexpected errors")
                 return
+
+            h2_origin = f"httpps://{HOST}:{fixtures.h2_port}"
+            async with Browser(args.browser.resolve(), folder / "h2-profile", fixtures.root) as cdp:
+                await cdp.navigate(h2_origin + "/")
+                await cdp.evaluate("document.cookie='h2_session=isolated; Path=/; Secure'")
+                responses = await cdp.evaluate(
+                    "Promise.all(Array.from({length:16}, (_,i) => fetch('/stream/'+i).then(r=>r.json())))")
+                check(len(responses) == 16 and all(item["scheme"] == "httpps" and
+                      item["path"] == "/stream/" + str(i) and item["cookie"] == "h2_session=isolated"
+                      for i, item in enumerate(responses)), "HTTPPS HTTP/2 multiplexes sixteen real requests with its own cookies")
+                check(fixtures.h2_connections == 1, "HTTPPS HTTP/2 reuses one authenticated connection")
+                check(await cdp.evaluate("performance.getEntriesByType('navigation')[0].nextHopProtocol") == "h2",
+                      "Browser reports actually negotiated h2")
+                before = len(fixtures.h2_requests)
+                error = await cdp.navigate(f"https://{HOST}:{fixtures.h2_port}/", success=False)
+                check(error == "net::ERR_CERT_AUTHORITY_INVALID" and len(fixtures.h2_requests) == before,
+                      "HTTPS cannot reuse the HTTPPS h2 pool at the same authority")
 
             early_origin = f"httpps://{HOST}:{fixtures.early_port}"
             async with Browser(args.browser.resolve(), folder / "early-profile", fixtures.root) as cdp:
@@ -775,6 +894,7 @@ def main():
         report["status"] = "passed"
     except BaseException as error:
         report["status"], report["error"] = "failed", repr(error)
+        report["error_notes"] = list(getattr(error, "__notes__", ()))
         raise
     finally:
         if args.report:

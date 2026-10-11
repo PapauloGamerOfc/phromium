@@ -155,6 +155,32 @@ TEST(HttpStreamKeyTest, Anonymization) {
   }
 }
 
+TEST(HttpStreamKeyTest, HttppsPartitionsWhenOrdinaryPartitioningIsDisabled) {
+  base::test::ScopedFeatureList feature_list;
+  feature_list.InitAndDisableFeature(
+      features::kPartitionConnectionsByNetworkIsolationKey);
+  ASSERT_FALSE(NetworkAnonymizationKey::IsPartitioningEnabled());
+  const auto first = NetworkAnonymizationKey::CreateSameSite(
+      SchemefulSite(GURL("https://first.test")));
+  const auto second = NetworkAnonymizationKey::CreateSameSite(
+      SchemefulSite(GURL("https://second.test")));
+  auto key = [](const char* scheme, const NetworkAnonymizationKey& nak) {
+    return HttpStreamKey(url::SchemeHostPort(scheme, "example.test", 343),
+                         PRIVACY_MODE_DISABLED, SocketTag(), nak,
+                         SecureDnsPolicy::kAllow, true,
+                         handles::kInvalidNetworkHandle);
+  };
+  const auto first_key = key("httpps", first);
+  const auto second_key = key("httpps", second);
+  EXPECT_EQ(first_key.network_anonymization_key(), first);
+  EXPECT_NE(first_key, second_key);
+  EXPECT_EQ(first_key.CalculateSpdySessionKey().network_anonymization_key(), first);
+  EXPECT_FALSE(first_key.CalculateSpdySessionKey()
+                   .CompareForAliasing(second_key.CalculateSpdySessionKey())
+                   .is_potentially_aliasable);
+  EXPECT_EQ(key("https", first), key("https", second));
+}
+
 TEST(HttpStreamKeyTest, TargetNetworkEquality) {
   const HttpStreamKey key(kHost, PRIVACY_MODE_DISABLED, SocketTag(),
                           NetworkAnonymizationKey(), SecureDnsPolicy::kAllow,

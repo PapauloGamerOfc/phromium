@@ -62,6 +62,9 @@
 #include "net/http/transport_security_state.h"
 #include "net/http/transport_security_state_test_util.h"
 #include "net/httpps/draft01.h"
+#include "net/httpps/dnssec.h"
+#include "net/httpps/its_credentials.h"
+#include "net/httpps/transparency.h"
 #include "net/log/net_log_event_type.h"
 #include "net/log/net_log_source.h"
 #include "net/log/test_net_log.h"
@@ -87,6 +90,7 @@
 #include "net/ssl/test_ssl_private_key.h"
 #include "net/ssl/test_static_ech_mode_getter.h"
 #include "net/test/cert_test_util.h"
+#include "net/test/cert_builder.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "net/test/embedded_test_server/http_request.h"
 #include "net/test/embedded_test_server/http_response.h"
@@ -137,10 +141,24 @@ class SSLClientContextHttppsTestPeer {
       const SSLConfig& config) {
     return context.TakeHttppsSession(server, config);
   }
+  static bool HasCredential(const SSLClientContext& context,
+                            const HostPortPair& server, const SSLConfig& config) {
+    return context.GetHttppsClientCredential(server, config) != nullptr;
+  }
+  static const httpps::ClientCredential* Credential(
+      const SSLClientContext& context, const HostPortPair& server,
+      const SSLConfig& config) {
+    return context.GetHttppsClientCredential(server, config);
+  }
+  static const httpps::ClientOptions* Options(
+      const SSLClientContext& context, const HostPortPair& server,
+      const SSLConfig& config) {
+    return context.GetHttppsOptions(server, config);
+  }
   static httpps::SessionTicket Ticket(std::string host = "cache.test") {
     httpps::SessionTicket ticket;
     ticket.identity = {1, 2, 3};
-    ticket.psk.fill(0x42);
+    std::fill(ticket.psk.begin(), ticket.psk.end(), 0x42);
     ticket.lifetime = 3600;
     ticket.received_milliseconds = httpps::MonotonicMilliseconds();
     ticket.hostname = std::move(host);
@@ -7061,6 +7079,151 @@ TEST_F(SSLClientSocketTest, ServerPaddingSupportedNoPaddingRequested) {
   EXPECT_EQ(false, entries.back().params.FindBool("received_server_padding"));
 }
 
+TEST_F(SSLClientSocketTest, HttppsClientIdentityIsExplicitAndPartitioned) {
+  using Peer = SSLClientContextHttppsTestPeer;
+  const HostPortPair server("cache.test", 343);
+  SSLConfig config;
+  config.is_httpps = true;
+  config.alpn_protos = {NextProto::kProtoHTTP11};
+  config.network_anonymization_key = NetworkAnonymizationKey::CreateSameSite(
+      SchemefulSite(GURL("https://first.test")));
+  auto chain = CertBuilder::CreateSimpleChain2();
+  httpps::ClientCredential credential;
+  credential.private_key.fill(0x42);
+  chain[0]->SetKey(bssl::UniquePtr<EVP_PKEY>(EVP_PKEY_new_raw_private_key(
+      EVP_PKEY_X25519, nullptr, credential.private_key.data(),
+      credential.private_key.size())));
+  credential.certificates = {chain[0]->GetDER()};
+  auto its_policy = std::make_shared<httpps::ITSPolicy>();
+  its_policy->identity = "provisioned-client";
+  credential.its_policy = its_policy;
+
+  uint64_t old_generation = Peer::Generation(*context_);
+  Peer::Store(*context_, old_generation, server, config, Peer::Ticket());
+  ASSERT_TRUE(context_->SetHttppsClientCredential(server, config, credential));
+  its_policy->identity = "mutated outside the context";
+  EXPECT_EQ(Peer::Credential(*context_, server, config)->its_policy->identity,
+            "provisioned-client");
+  EXPECT_GT(Peer::Generation(*context_), old_generation);
+  EXPECT_TRUE(Peer::HasCredential(*context_, server, config));
+  EXPECT_FALSE(Peer::Take(*context_, server, config));
+  // Pending old handshakes cannot restore a ticket with the previous identity.
+  Peer::Store(*context_, old_generation, server, config, Peer::Ticket());
+  EXPECT_FALSE(Peer::Take(*context_, server, config));
+  EXPECT_FALSE(Peer::HasCredential(*context_, HostPortPair("cache.test", 443), config));
+  EXPECT_FALSE(Peer::HasCredential(*context_, HostPortPair("other.test", 343), config));
+
+  std::vector<SSLConfig> alternatives(5, config);
+  alternatives[0].is_httpps = false;
+  alternatives[1].privacy_mode = PRIVACY_MODE_ENABLED;
+  alternatives[2].session_usage = SessionUsage::kProxy;
+  alternatives[3].proxy_chain = ProxyChain::FromSchemeHostAndPort(
+      ProxyServer::SCHEME_HTTP, "proxy.test", 8080);
+  alternatives[4].network_anonymization_key = NetworkAnonymizationKey::CreateSameSite(
+      SchemefulSite(GURL("https://second.test")));
+  for (const auto& other : alternatives) {
+    EXPECT_FALSE(Peer::HasCredential(*context_, server, other));
+    EXPECT_FALSE(context_->ClearHttppsClientCredential(server, other));
+  }
+  EXPECT_FALSE(context_->SetHttppsClientCredential(server, alternatives[0], credential));
+  EXPECT_FALSE(context_->SetHttppsClientCredential(server, alternatives[2], credential));
+  credential.private_key.fill(0x24);  // Key does not match the leaf.
+  EXPECT_FALSE(context_->SetHttppsClientCredential(server, config, credential));
+  EXPECT_TRUE(Peer::HasCredential(*context_, server, config));
+  EXPECT_TRUE(context_->ClearHttppsClientCredential(server, config));
+  EXPECT_FALSE(Peer::HasCredential(*context_, server, config));
+  EXPECT_FALSE(context_->ClearHttppsClientCredential(server, config));
+}
+
+TEST_F(SSLClientSocketTest, HttppsProfilesAreExplicitPartitionedAndInvalidateTickets) {
+  using Peer = SSLClientContextHttppsTestPeer;
+  const HostPortPair server("cache.test", 343);
+  SSLConfig config;
+  config.is_httpps = true;
+  config.alpn_protos = {NextProto::kProtoHTTP11};
+  config.network_anonymization_key = NetworkAnonymizationKey::CreateSameSite(
+      SchemefulSite(GURL("https://first.test")));
+  httpps::ClientOptions options;
+  auto credential = std::make_shared<httpps::PasswordCredential>();
+  credential->service = server.host();
+  credential->username = "account";
+  credential->password = "e\xcc\x81";
+  credential->helper_path = "C:/fixture/tls20-pake.dll";
+  options.password = credential;
+  uint64_t generation = Peer::Generation(*context_);
+  Peer::Store(*context_, generation, server, config, Peer::Ticket());
+  ASSERT_TRUE(context_->SetHttppsOptions(server, config, options));
+  ASSERT_NE(Peer::Options(*context_, server, config), nullptr);
+  EXPECT_EQ(Peer::Options(*context_, server, config)->password->password, "\xc3\xa9");
+  credential->password = "changed outside the context";
+  EXPECT_EQ(Peer::Options(*context_, server, config)->password->password, "\xc3\xa9");
+  EXPECT_GT(Peer::Generation(*context_), generation);
+  EXPECT_FALSE(Peer::Take(*context_, server, config));
+  Peer::Store(*context_, generation, server, config, Peer::Ticket());
+  EXPECT_FALSE(Peer::Take(*context_, server, config));
+  EXPECT_EQ(Peer::Options(*context_, HostPortPair("cache.test", 443), config), nullptr);
+  EXPECT_EQ(Peer::Options(*context_, HostPortPair("other.test", 343), config), nullptr);
+  std::vector<SSLConfig> alternatives(5, config);
+  alternatives[0].is_httpps = false;
+  alternatives[1].privacy_mode = PRIVACY_MODE_ENABLED;
+  alternatives[2].session_usage = SessionUsage::kProxy;
+  alternatives[3].proxy_chain = ProxyChain::FromSchemeHostAndPort(
+      ProxyServer::SCHEME_HTTP, "proxy.test", 8080);
+  alternatives[4].network_anonymization_key = NetworkAnonymizationKey::CreateSameSite(
+      SchemefulSite(GURL("https://second.test")));
+  for (const auto& other : alternatives) {
+    EXPECT_EQ(Peer::Options(*context_, server, other), nullptr);
+    EXPECT_FALSE(context_->ClearHttppsOptions(server, other));
+  }
+  EXPECT_FALSE(context_->SetHttppsOptions(server, alternatives[0], options));
+  EXPECT_FALSE(context_->SetHttppsOptions(server, alternatives[2], options));
+  options.allow_integrity_only = true;
+  EXPECT_FALSE(context_->SetHttppsOptions(server, config, options));
+  options.allow_integrity_only = false;
+  credential->password = "a\t";
+  EXPECT_FALSE(context_->SetHttppsOptions(server, config, options));
+  EXPECT_EQ(Peer::Options(*context_, server, config)->password->password, "\xc3\xa9");
+  EXPECT_TRUE(context_->ClearHttppsOptions(server, config));
+  EXPECT_EQ(Peer::Options(*context_, server, config), nullptr);
+  EXPECT_FALSE(context_->ClearHttppsOptions(server, config));
+}
+
+TEST_F(SSLClientSocketTest, HttppsTrustPoliciesAreSnapshots) {
+  using Peer = SSLClientContextHttppsTestPeer;
+  const HostPortPair server("cache.test", 343);
+  SSLConfig config;
+  config.is_httpps = true;
+  httpps::ClientOptions options;
+  auto ct = std::make_shared<httpps::CTv2Policy>();
+  ct->logs.emplace_back().id = {1, 2};
+  auto dane = std::make_shared<httpps::DANEPolicy>();
+  dane->trust_anchors = {3, 4};
+  dane->application_policy_context = {5};
+  auto its = std::make_shared<httpps::ITSPolicy>();
+  its->authorized_leaves = {{6, 7}};
+  options.ct_v2_policy = ct;
+  options.dane_policy = dane;
+  options.its_policy = its;
+  // These public fixtures only test snapshot semantics, not trust validation.
+  ASSERT_TRUE(context_->SetHttppsOptions(server, config, options));
+  const auto generation = Peer::Generation(*context_);
+  ct->logs.front().id = {8};
+  dane->trust_anchors = {9};
+  dane->application_policy_context = {10};
+  its->authorized_leaves.front() = {11};
+  const auto* stored = Peer::Options(*context_, server, config);
+  ASSERT_NE(stored, nullptr);
+  EXPECT_EQ(stored->ct_v2_policy->logs.front().id, (httpps::Bytes{1, 2}));
+  EXPECT_EQ(stored->dane_policy->trust_anchors, (httpps::Bytes{3, 4}));
+  EXPECT_EQ(stored->dane_policy->application_policy_context, (httpps::Bytes{5}));
+  EXPECT_EQ(stored->its_policy->authorized_leaves.front(), (httpps::Bytes{6, 7}));
+  EXPECT_EQ(Peer::Generation(*context_), generation);
+  ASSERT_TRUE(context_->SetHttppsOptions(server, config, options));
+  EXPECT_GT(Peer::Generation(*context_), generation);
+  EXPECT_EQ(Peer::Options(*context_, server, config)->ct_v2_policy->logs.front().id,
+            (httpps::Bytes{8}));
+}
+
 TEST_F(SSLClientSocketTest, HttppsTicketsArePartitionedAndSingleUse) {
   using Peer = SSLClientContextHttppsTestPeer;
   const HostPortPair server("cache.test", 343);
@@ -7130,7 +7293,7 @@ TEST_F(SSLClientSocketTest, HttppsTicketsRejectExpiredMalformedAndOversized) {
   const HostPortPair server("cache.test", 343);
   SSLConfig config;
   config.is_httpps = true;
-  std::vector<httpps::SessionTicket> tickets(10, Peer::Ticket());
+  std::vector<httpps::SessionTicket> tickets(26, Peer::Ticket());
   tickets[0].lifetime = 0;
   tickets[1].lifetime = 604801;
   tickets[2].received_milliseconds = -1;
@@ -7141,6 +7304,22 @@ TEST_F(SSLClientSocketTest, HttppsTicketsRejectExpiredMalformedAndOversized) {
   tickets[7].certificates = {std::string(1024 * 1024, 'x')};
   tickets[8].certificates = std::vector<std::string>(65, "certificate");
   tickets[9].identity.resize(65536);
+  tickets[10].delegation.resize(1024 * 1024);
+  tickets[11].psk.resize(31);
+  tickets[12].cipher_suite = 0xffff;
+  tickets[13].certificate_extensions = {{{5, httpps::Bytes(1024 * 1024)}}};
+  tickets[14].certificate_extensions.resize(2);
+  tickets[15].alpn.resize(256);
+  tickets[16].alpn.clear();
+  tickets[17].authentication = httpps::Authentication::kProvisioning;
+  tickets[18].ct_policy_context.resize(31);
+  tickets[19].ct_policy_context.resize(33);
+  tickets[20].dane_policy_context.resize(31);
+  tickets[21].dane_policy_context.resize(33);
+  tickets[22].its_policy_context.resize(31);
+  tickets[23].its_policy_context.resize(33);
+  tickets[24].client_certificate_type = 1;
+  tickets[25].client_certificate_type = 255;
   for (size_t i = 0; i < tickets.size(); ++i) {
     SCOPED_TRACE(i);
     Peer::Store(*context_, Peer::Generation(*context_), server, config,

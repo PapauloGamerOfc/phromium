@@ -27,6 +27,9 @@ namespace net {
 namespace {
 
 bool KeyExchangeGroupIsValid(int ssl_connection_status) {
+  if (SSLConnectionStatusIsHttpps(ssl_connection_status)) {
+    return true;
+  }
   // TLS 1.3 and later always treat the field correctly.
   if (SSLConnectionStatusToVersion(ssl_connection_status) >=
       SSL_CONNECTION_VERSION_TLS1_3) {
@@ -442,8 +445,12 @@ std::unique_ptr<base::Pickle> HttpResponseInfo::MakePickleImpl(
   pickle->Reserve(10900);
   int flags = RESPONSE_INFO_VERSION;
   int extra_flags = 0;
+  const bool has_transport_info = ssl_info.is_valid() ||
+      SSLConnectionStatusIsHttpps(ssl_info.connection_status);
   if (ssl_info.is_valid()) {
     flags |= RESPONSE_INFO_HAS_CERT;
+  }
+  if (has_transport_info) {
     flags |= RESPONSE_INFO_HAS_CERT_STATUS;
     if (ssl_info.key_exchange_group != 0)
       flags |= RESPONSE_INFO_HAS_KEY_EXCHANGE_GROUP;
@@ -518,6 +525,8 @@ std::unique_ptr<base::Pickle> HttpResponseInfo::MakePickleImpl(
 
   if (ssl_info.is_valid()) {
     ssl_info.cert->Persist(pickle.get());
+  }
+  if (has_transport_info) {
     pickle->WriteUInt32(ssl_info.cert_status);
     if (ssl_info.connection_status != 0)
       pickle->WriteInt(ssl_info.connection_status);
@@ -536,7 +545,7 @@ std::unique_ptr<base::Pickle> HttpResponseInfo::MakePickleImpl(
     pickle->WriteInt(static_cast<int>(connection_info));
   }
 
-  if (ssl_info.is_valid() && ssl_info.key_exchange_group != 0)
+  if (has_transport_info && ssl_info.key_exchange_group != 0)
     pickle->WriteInt(ssl_info.key_exchange_group);
 
   if (flags & RESPONSE_INFO_HAS_STALENESS) {
@@ -544,7 +553,7 @@ std::unique_ptr<base::Pickle> HttpResponseInfo::MakePickleImpl(
         (stale_revalidate_timeout - base::Time()).InMicroseconds());
   }
 
-  if (ssl_info.is_valid() && ssl_info.peer_signature_algorithm != 0)
+  if (has_transport_info && ssl_info.peer_signature_algorithm != 0)
     pickle->WriteInt(ssl_info.peer_signature_algorithm);
 
   if (!dns_aliases.empty()) {

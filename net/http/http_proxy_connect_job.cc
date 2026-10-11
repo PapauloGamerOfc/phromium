@@ -953,7 +953,7 @@ SpdySessionKey HttpProxyConnectJob::CreateSpdySessionKey() const {
       session_key_proxy_chain, SessionUsage::kProxy, socket_tag(),
       params_->network_anonymization_key(), params_->secure_dns_policy(),
       /*disable_cert_verification_network_fetches=*/true,
-      params_->target_network());
+      params_->target_network(), params_->proxy_server().is_httpps());
 }
 
 // static

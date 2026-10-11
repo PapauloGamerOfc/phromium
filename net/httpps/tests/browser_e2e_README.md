@@ -6,8 +6,9 @@ profile and loopback-only servers. It makes no changes to OS roots, the normal
 browser profile, or external services. It never passes `--ignore-certificate-*`,
 disables the sandbox, or bypasses a browser certificate error through CDP.
 
-Prerequisites: Python 3.11+, `cryptography`, and a clean checkout of
-`tls20-server` at `4f28b2c2da40e8a8371e9846dd3c5cd8a6c9401f`. The revision is
+Prerequisites: Python 3.11+, the reference server's `requirements-dev.txt`
+(including the `h2` fixture dependency), and a clean checkout of
+`tls20-server` at `18e04497259e21549c996dfb8ad45ea4ce590760`. The revision is
 checked before importing its protocol implementation. No dependencies are
 downloaded by the script.
 
@@ -16,8 +17,8 @@ they are committed or before this pin is updated. Pass `--allow-server-worktree`
 explicitly only for that development case. The report records the server HEAD,
 dirty state and SHA-256 of its Python source; it does not represent such a run
 as validation of the pinned revision. This option changes only the test-source
-provenance check, never certificate validation. The current migration has been
-validated against the clean pinned revision without this override.
+provenance check, never certificate validation. Historical clean-revision
+results do not validate a subsequent optional-profile expansion.
 Use the server and browser from the same migration; the old numbered prototype
 is not wire-compatible with the current spec.
 
@@ -51,6 +52,9 @@ Coverage:
 - HTTP 425 refusal followed by a browser retry without early application data.
   These tests use a separate temporary profile and replay-aware fixture, not the
   cookie-validation peers.
+- Actual HTTP/2 negotiation with 16 parallel streams on one authenticated
+  HTTPPS connection, correct `:scheme`/path/cookie fields, and rejection of
+  ordinary HTTPS under that HTTPPS-only private CA on the same authority.
 
 - Actual HTTP and HTTPPS requests, `Set-Cookie`, `document.cookie`, and `fetch`.
 - Independent same-name cookies on the same host and port.
@@ -85,14 +89,18 @@ initial CertificateRequest with an empty Certificate, which may be accepted or
 rejected by the server's optional/required-client policy. The browser currently
 does not select or prompt for a client identity. Its default is that empty
 response; the real-browser harness does not test successful client identity
-selection. The browser also does not offer post-handshake authentication (PHA).
+selection through a GUI. Embedders can explicitly provision an identity through
+`SSLClientContext::SetHttppsClientCredential`, scoped to the exact origin,
+network/privacy context and proxy role. That route supports initial/PHA MAC
+authentication; HTTP/2 never advertises or permits TLS PHA. The default remains
+no selected identity, and there is no automatic reuse of an HTTPS client key.
 
 ## Portable session and authentication checks
 
 The CI workflow separately compiles the actual native engine on Windows, Linux
 and macOS and runs the following scripts. For the specification oracle, use a
 checkout of `tls20-spec` at
-`0c9c8bf0914697d521050554e545a167fa8fc345`; CI checks out that exact revision
+`dee31da9826e10bd590f58acc0f9f46143505fd1`; CI checks out that exact revision
 under `out/reference-spec` rather than importing the moving default branch.
 
 ```powershell

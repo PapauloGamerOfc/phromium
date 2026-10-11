@@ -52,7 +52,8 @@ async def main(args):
         output, errors = await mutation.communicate()
         assert mutation.returncode == 0, errors
         print(output.decode().strip())
-        for mode, kind in itertools.product(("--get", "--get-external"), cases):
+        modes = ("--get-grease-once",) if args.grease else ("--get", "--get-external")
+        for mode, kind in itertools.product(modes, cases):
             requests = []
             finished_seen = []
             handler_errors = []
@@ -230,11 +231,12 @@ async def main(args):
             finally:
                 listener.close()
                 await listener.wait_closed()
-        print(f"{len(cases) * 2} native wire cases passed (private and deferred verification)")
+        print(f"{len(cases) * len(modes)} native wire cases passed ({', '.join(modes)})")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--native", type=Path, required=True)
     parser.add_argument("--server-source", type=Path, required=True)
+    parser.add_argument("--grease", action="store_true", help="Exercise GREASE and record-fragmented padded ClientHello, including HRR")
     asyncio.run(main(parser.parse_args()))

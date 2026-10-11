@@ -8,10 +8,16 @@
 #include <charconv>
 #include <cstdlib>
 #include <fstream>
+#include <filesystem>
 #include <iostream>
 #include <iterator>
 
 #include "net/httpps/draft01.h"
+#include "net/httpps/pinning.h"
+#include "net/httpps/native_provider.h"
+#include "net/httpps/transparency.h"
+#include "net/httpps/dnssec.h"
+#include "net/httpps/its_credentials.h"
 #include "third_party/boringssl/src/include/openssl/mem.h"
 #include "third_party/boringssl/src/include/openssl/curve25519.h"
 
@@ -28,6 +34,13 @@ using SocketHandle = SOCKET;
 #include <unistd.h>
 using SocketHandle = int;
 #endif
+
+void RunPinningTests();
+void TlsFeaturesTests();
+void RunControlProfileTests();
+void RunIntegrityOnlyTests();
+void RunNativeProviderTests(std::string_view library, std::string_view helper);
+void RunGostProviderTests(std::string_view library, std::string_view module);
 
 namespace {
 using net::httpps::Bytes;
@@ -96,6 +109,93 @@ Bytes Record(SocketHandle socket) {
   return bytes;
 }
 
+void AuthenticatorTest(SocketHandle socket, net::httpps::Client& client,
+                       const std::vector<std::string>& anchors,
+                       const char* leaf, const char* key) {
+  Bytes buffered;
+  auto receive = [&]() {
+    while (true) {
+      if (buffered.size() >= 4) {
+        size_t size = 0;
+        for (size_t i = 0; i < 4; ++i)
+          size = (size << 8) | buffered[i];
+        Require(size <= 1048576, "bounded application authenticator frame");
+        if (buffered.size() >= size + 4) {
+          Bytes result(buffered.begin() + 4, buffered.begin() + 4 + size);
+          buffered.erase(buffered.begin(), buffered.begin() + 4 + size);
+          return result;
+        }
+      }
+      Bytes data;
+      Require(client.Receive(Record(socket), &data) && !client.closed(), "authenticator application record");
+      buffered.insert(buffered.end(), data.begin(), data.end());
+      auto controls = client.TakeOutput();
+      if (!controls.empty())
+        Send(socket, controls);
+    }
+  };
+  auto send_frame = [&](const Bytes& data) {
+    Bytes framed;
+    for (int shift : {24, 16, 8, 0})
+      framed.push_back(static_cast<uint8_t>(data.size() >> shift));
+    framed.insert(framed.end(), data.begin(), data.end());
+    Bytes records;
+    Require(client.Send(framed, &records), "authenticator application encrypt");
+    Send(socket, records);
+  };
+  std::optional<net::httpps::ClientCredential> credential;
+  if (leaf && key) {
+    credential.emplace();
+    credential->certificates = {ReadFile(leaf)};
+    auto raw = ReadFile(key);
+    Require(raw.size() == 32, "EA selected key size");
+    std::copy(raw.begin(), raw.end(), credential->private_key.begin());
+    OPENSSL_cleanse(raw.data(), raw.size());
+  }
+  auto request = receive();
+  Bytes response;
+  Require(client.AuthenticateClient(request, credential ? &*credential : nullptr, &response), "EA client identity/refusal");
+  send_frame(response);
+  Require(!client.AuthenticateClient(request, credential ? &*credential : nullptr, &response), "EA client request replay rejected");
+  Bytes binding;
+  Require(client.ChannelBinding(&binding) && binding.size() == 32, "named channel binding");
+  send_frame(binding);
+  auto validate = [&](const net::httpps::AuthenticatorIdentity& identity,
+                      const std::map<uint16_t, Bytes>& offers, net::httpps::Secret* public_key) {
+    // This loopback fixture explicitly authorizes localhost under its lab CA;
+    // production callers must additionally check their application policy.
+    return offers.count(50) && identity.extensions.size() == identity.certificates.size() &&
+        net::httpps::VerifyLabChain(identity.certificates, anchors, "localhost", public_key);
+  };
+  bool authenticated = false;
+  Require(client.RequestServerAuthenticator(Bytes{1}, {}, &request), "EA server request");
+  send_frame(request);
+  response = receive();
+  Require(client.ValidateServerAuthenticator(response, validate, &authenticated, request) && authenticated, "EA server MAC and Finished");
+  Require(!client.ValidateServerAuthenticator(response, validate, &authenticated, request), "EA server replay rejected");
+  Require(client.RequestServerAuthenticator(Bytes{2}, {}, &request), "EA refusal request");
+  send_frame(request);
+  response = receive();
+  Require(client.ValidateServerAuthenticator(response, validate, &authenticated, request) && !authenticated, "EA authenticated refusal is not identity");
+  Require(client.RequestServerAuthenticator(Bytes{3}, {}, &request) && client.CancelAuthenticator(request), "EA cancellation consumes secret");
+  Require(!client.RequestServerAuthenticator(Bytes{3}, {}, &request), "EA cancellation does not reopen context");
+  response = receive();
+  Require(client.ValidateServerAuthenticator(response, validate, &authenticated) && authenticated, "spontaneous server EA retained scalar");
+  Require(!client.ValidateServerAuthenticator(response, validate, &authenticated), "spontaneous EA replay rejected");
+  Require(client.RequestServerAuthenticator(Bytes{4}, {}, &request), "EA invalid response request");
+  send_frame(request);
+  response = receive();
+  Require(!client.ValidateServerAuthenticator(response, validate, &authenticated, request) && !authenticated, "EA tampered proof rejected");
+  Require(!client.RequestServerAuthenticator(Bytes{4}, {}, &request), "EA failed proof consumes context");
+  Require(client.RequestKeyUpdate(true, &response), "EA key update");
+  Send(socket, response);
+  Bytes after;
+  Require(client.ChannelBinding(&after) && after == binding, "channel binding stable across KeyUpdate");
+  send_frame(Bytes{'O', 'K'});
+  client.DisableAuthenticators();
+  Require(!client.RequestServerAuthenticator(Bytes{5}, {}, &request), "EA disabled erases capability");
+}
+
 int Get(const char* host,
         const char* port,
         const char* root,
@@ -103,13 +203,25 @@ int Get(const char* host,
         bool resume_test = false,
         bool expect_early_acceptance = true,
         const char* client_leaf = nullptr,
-        const char* client_key = nullptr) {
+        const char* client_key = nullptr,
+        net::httpps::ClientOptions options = {},
+        const char* client_grant = nullptr,
+        bool cache_test = false,
+        bool authenticator_test = false,
+        bool pinning_test = false,
+        const net::httpps::ClientCredential* selected_credential = nullptr) {
 #if defined(_WIN32)
   WSADATA data;
   Require(WSAStartup(MAKEWORD(2, 2), &data) == 0, "winsock init");
 #endif
   std::optional<net::httpps::SessionTicket> session;
-  for (int round = 0; round < (resume_test ? 3 : 1); ++round) {
+  net::httpps::PinningCache pins;
+  for (int round = 0; round < (resume_test || cache_test || pinning_test ? 3 : 1); ++round) {
+  if (pinning_test) {
+    options.pinning = pins.Begin(host, static_cast<uint16_t>(ParseUnsigned(port)), "loopback-fixture");
+    Require(options.pinning != nullptr, "pinning scope accepted");
+    options.cipher_suites = {static_cast<uint16_t>(round == 1 ? 0x1302 : 0x1301)};
+  }
   SocketHandle stream = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
   sockaddr_in address{};
   address.sin_family = AF_INET;
@@ -123,17 +235,28 @@ int Get(const char* host,
   const std::vector<std::string> anchors{ReadFile(root)};
   net::httpps::Client client(
       host, external_verification ? std::vector<std::string>{} : anchors,
-      external_verification);
+      external_verification, options);
+  if (selected_credential)
+    Require(client.SetClientCredential(*selected_credential), "explicit prepared credential");
   if (client_leaf && client_key) {
     net::httpps::ClientCredential credential;
     credential.certificates.push_back(ReadFile(client_leaf));
+    if (client_grant) {
+      auto grant = ReadFile(client_grant);
+      credential.delegation.assign(grant.begin(), grant.end());
+    }
+    net::httpps::Secret raw_public;
+    if (net::httpps::ExtractRawPublicKey(net::httpps::StringBytes(credential.certificates.front()),
+                                       &raw_public))
+      credential.certificate_type = 2;
     auto key = ReadFile(client_key);
     Require(key.size() == credential.private_key.size(), "raw client X25519 key length");
     std::copy(key.begin(), key.end(), credential.private_key.begin());
     Require(client.SetClientCredential(credential), "explicit client credential selection");
     OPENSSL_cleanse(key.data(), key.size());
   }
-  const bool early = round == 2;
+  const bool early = (resume_test && round == 2) || (!resume_test && !options.external_psks.empty() &&
+                                    options.external_psks.front().max_early_data != 0);
   std::string request = "GET / HTTP/1.1\r\nHost: " + std::string(host) +
                         "\r\nConnection: close\r\n\r\n";
   Require(client.Start(session ? &*session : nullptr, {}, early), "start handshake");
@@ -158,7 +281,9 @@ int Get(const char* host,
       net::httpps::Secret key;
       bool trusted = net::httpps::VerifyLabChain(client.certificates(), anchors,
                                                  host, &key);
-      Require(client.CompleteCertificateVerification(trusted),
+      Require(client.CompleteCertificateVerification(trusted,
+                  net::httpps::ValidatedPrivateIssuer(client.certificates(), anchors, host, client.delegated()),
+                  net::httpps::ValidatedPrivatePath(client.certificates(), anchors, host, client.delegated())),
               "external certificate decision and buffered proof");
     }
     auto output = client.TakeOutput();
@@ -168,6 +293,8 @@ int Get(const char* host,
     }
   }
   Bytes output;
+  if (authenticator_test)
+    AuthenticatorTest(stream, client, anchors, client_leaf, client_key);
   if (resume_test) {
     Require(client.resumed() == (round != 0), "expected session resumption");
     Require(client.early_data_accepted() == (early && expect_early_acceptance),
@@ -185,7 +312,7 @@ int Get(const char* host,
       request.insert(request.size() - 2, "X-Test-Exporter: " + value + "\r\n");
     }
   }
-  if (!early || !client.early_data_accepted()) {
+  if (!authenticator_test && (!early || !client.early_data_accepted())) {
     if (resume_test) {
       Require(client.RequestKeyUpdate(true, &output), "request key update");
       Send(stream, output);
@@ -196,9 +323,88 @@ int Get(const char* host,
   }
   while (!client.closed()) {
     Require(client.Receive(Record(stream), &output), "application decrypt");
+    auto controls = client.TakeOutput();
+    if (!controls.empty()) {
+      Send(stream, controls);
+      Require(client.OutputFlushed(), "post-handshake response flush");
+    }
     auto tickets = client.TakeTickets();
-    if (!tickets.empty()) {
+    if (!tickets.empty() && !cache_test && !pinning_test) {
       session = std::move(tickets.back());
+      if (options.its_policy) {
+        auto reject_cached = [&](net::httpps::SessionTicket changed) {
+          net::httpps::Client rejected(host, anchors, false, options);
+          if (selected_credential)
+            Require(rejected.SetClientCredential(*selected_credential), "ITS cached test selected identity");
+          Require(!rejected.Start(&changed, {}, true) && rejected.TakeOutput().empty(),
+                  "invalid ITS cached policy/evidence/deadline cannot emit CH or early data");
+        };
+        auto changed = *session;
+        changed.its_policy_context.front() ^= 1;
+        reject_cached(changed);
+        changed = *session;
+        changed.its_expires_unix_milliseconds = 0;
+        reject_cached(changed);
+        changed = *session;
+        changed.certificates.front().back() ^= 1;
+        reject_cached(changed);
+      }
+      if (options.password) {
+        if (session->authentication == net::httpps::Authentication::kPassword)
+          Require(session->certificates.empty(), "password ticket has no invented CA identity");
+        auto tampered = *session;
+        tampered.password_context[0] ^= 1;
+        net::httpps::Client foreign(host, anchors, false, options);
+        Require(!foreign.Start(&tampered, {}, true) && foreign.TakeOutput().empty(), "password ticket context before CH/early");
+        auto changed = options;
+        auto credential = std::make_shared<net::httpps::PasswordCredential>(*options.password);
+        credential->password.push_back('x');
+        changed.password = credential;
+        net::httpps::Client wrong_password(host, anchors, false, changed);
+        Require(!wrong_password.Start(&*session, {}, true) && wrong_password.TakeOutput().empty(),
+                "changed password cannot reuse cached authorization");
+        auto narrowed = options;
+        narrowed.cipher_suites = {static_cast<uint16_t>(
+            net::httpps::SuiteHashLength(session->cipher_suite) == 48 ? 0xc0b0 : 0xc0b1)};
+        net::httpps::Client incompatible(host, anchors, false, narrowed);
+        Require(!incompatible.Start(&*session, {}, true) && incompatible.TakeOutput().empty(),
+                "cached password ticket cannot override newly restricted suite hash");
+        if (session->cipher_suite == 0x1304) {
+          narrowed.cipher_suites = {0xc0b0};
+          net::httpps::Client no_old_early_cipher(host, anchors, false, narrowed);
+          Require(no_old_early_cipher.Start(&*session, {}, true) && !no_old_early_cipher.early_data_available(),
+                  "same-hash resumption never emits early data under a removed AEAD");
+        }
+      }
+      if (options.ct_v2_policy) {
+        auto tampered = *session;
+        Require(!tampered.certificate_extensions.empty() &&
+                    !tampered.certificate_extensions.front()[52].empty(), "CT ticket evidence saved");
+        tampered.certificate_extensions.front()[52].back() ^= 1;
+        net::httpps::Client changed_evidence(host, anchors, false, options);
+        Require(!changed_evidence.Start(&tampered, {}, true) && changed_evidence.TakeOutput().empty(),
+                "tampered cached CT cannot authorize CH or early data");
+        tampered = *session;
+        tampered.ct_policy_context.front() ^= 1;
+        net::httpps::Client changed_policy(host, anchors, false, options);
+        Require(!changed_policy.Start(&tampered, {}, true), "cached CT policy scope enforced");
+      }
+      if (options.dane_policy) {
+        auto tampered = *session;
+        Require(!tampered.dane_policy_context.empty(), "DANE policy context saved");
+        tampered.dane_policy_context.front() ^= 1;
+        net::httpps::Client changed_policy(host, anchors, false, options);
+        Require(!changed_policy.Start(&tampered, {}, true), "cached DANE policy scope enforced");
+        tampered = *session;
+        tampered.dane_expires_unix_seconds = 0;
+        net::httpps::Client expired_dns(host, anchors, false, options);
+        Require(!expired_dns.Start(&tampered, {}, true), "cached DNS TTL cannot restart on resumption");
+        tampered = *session;
+        tampered.certificate_extensions.front().erase(59);
+        net::httpps::Client missing_evidence(host, anchors, false, options);
+        Require(!missing_evidence.Start(&tampered, {}, true) && missing_evidence.TakeOutput().empty(),
+                "cached DANE must be revalidated before CH or early data");
+      }
       if (client_leaf) {
         net::httpps::Client removed_identity(host, anchors);
         Require(!removed_identity.Start(&*session),
@@ -210,6 +416,10 @@ int Get(const char* host,
   }
   if (client.Close(&output)) {
     Send(stream, output);
+  }
+  if (cache_test) {
+    options.cached_certificates = {{client.server_certificate_type(), client.certificates()}};
+    options.cached_request_templates = client.authenticated_request_templates();
   }
 #if defined(_WIN32)
   closesocket(stream);
@@ -226,6 +436,30 @@ int Get(const char* host,
 }
 
 void SelfTest() {
+  TlsFeaturesTests();
+  RunPinningTests();
+  RunControlProfileTests();
+  RunIntegrityOnlyTests();
+  for (uint16_t suite : {0xc0b4, 0xc0b5}) {
+    net::httpps::ClientOptions options;
+    options.cipher_suites = {suite};
+    net::httpps::Client denied("localhost", {}, true, options);
+    Require(!denied.Start(), "integrity-only is never an implicit fallback");
+    options.allow_integrity_only = true;
+    net::httpps::Client still_denied("localhost", {}, true, options);
+    Require(!still_denied.Start(), "ordinary HTTPPS cannot enable integrity-only");
+    options.ordinary_httpps = false;
+    net::httpps::Client allowed("localhost", {}, true, options);
+    Require(allowed.Start() && !allowed.confidential(), "explicit generic non-confidential application");
+    const Bytes secret(net::httpps::SuiteHashLength(suite), 7), data{1, 2, 3};
+    net::httpps::RecordCipher sender(secret, suite), receiver(secret, suite);
+    Bytes record, recovered;
+    uint8_t type = 0;
+    Require(sender.Seal(data, 23, &record, 3) &&
+        std::equal(data.begin(), data.end(), record.begin() + 5) &&
+        receiver.Open(record, &type, &recovered) && type == 23 && recovered == data,
+        "integrity-only record retains plaintext and authenticates it");
+  }
   using net::httpps::Client;
   using net::httpps::Hash;
   using net::httpps::Label;
@@ -329,9 +563,369 @@ void SelfTest() {
 }  // namespace
 
 int main(int argc, char** argv) {
+  if (argc == 4 && std::string_view(argv[1]) == "--gost-provider-test") {
+    RunGostProviderTests(argv[2], argv[3]);
+    return 0;
+  }
 #if defined(_WIN32)
   _setmode(_fileno(stdout), _O_BINARY);
 #endif
+  if ((argc == 3 || argc == 4) && std::string_view(argv[1]) == "--native-provider-test") {
+    RunNativeProviderTests(argv[2], argc == 4 ? argv[3] : "");
+    return 0;
+  }
+  if (argc >= 4 && std::string_view(argv[1]) == "--certificate-algorithms") {
+    std::vector<std::string> chain;
+    for (int i = 3; i < argc; ++i)
+      chain.push_back(ReadFile(argv[i]));
+    return net::httpps::CertificateAlgorithmsAllowed(chain,
+        {static_cast<uint16_t>(ParseUnsigned(argv[2], 16))}) ? 0 : 1;
+  }
+  if (argc == 6 && std::string_view(argv[1]) == "--get-integrity") {
+    net::httpps::ClientOptions options;
+    options.ordinary_httpps = false;
+    options.allow_integrity_only = true;
+    options.cipher_suites = {static_cast<uint16_t>(ParseUnsigned(argv[5], 16))};
+    return Get(argv[2], argv[3], argv[4], false, true, true, nullptr, nullptr, options);
+  }
+  if (argc == 8 && std::string_view(argv[1]) == "--get-native-provider") {
+    net::httpps::ClientOptions options;
+    options.native_provider = net::httpps::NativeProvider::Load(argv[5]);
+    Require(options.native_provider != nullptr, "explicit native provider available");
+    options.certificate_signature_algorithms.push_back(0x0708);
+    options.grant_signature_algorithms.push_back(0x0708);
+    options.delegated_credentials = true;
+    options.groups = {static_cast<uint16_t>(ParseUnsigned(argv[6]))};
+    options.cipher_suites = {static_cast<uint16_t>(ParseUnsigned(argv[7], 16))};
+    return Get(argv[2], argv[3], argv[4], false, true, true, nullptr, nullptr, options);
+  }
+  if (argc == 6 && std::string_view(argv[1]) == "--get-ct") {
+    auto policy = std::make_shared<net::httpps::CTv2Policy>();
+    net::httpps::CTLog log;
+    log.id = {0x2b, 0x06, 0x01, 0x04, 0x01};
+    auto key = ReadFile(argv[5]);
+    log.public_key_spki.assign(key.begin(), key.end());
+    policy->logs.push_back(std::move(log));
+    net::httpps::ClientOptions options;
+    options.ct_v2_policy = std::move(policy);
+    return Get(argv[2], argv[3], argv[4], false, true, true, nullptr, nullptr, options);
+  }
+  if (argc == 8 && std::string_view(argv[1]) == "--get-dane") {
+    auto policy = std::make_shared<net::httpps::DANEPolicy>();
+    policy->provider = net::httpps::DNSSECProvider::Load(argv[5]);
+    Require(policy->provider != nullptr, "explicit DNSSEC provider available");
+    auto anchor = ReadFile(argv[6]);
+    policy->trust_anchors.assign(anchor.begin(), anchor.end());
+    policy->port = static_cast<uint16_t>(ParseUnsigned(argv[3]));
+    policy->application_policy_context = {'l','o','o','p','b','a','c','k','-','f','i','x','t','u','r','e'};
+    const std::string hostname = argv[2];
+    policy->dane_path_validator = [hostname](const std::vector<Bytes>& input, const Bytes& ca) {
+      std::vector<std::string> path;
+      for (const auto& der : input)
+        path.emplace_back(der.begin(), der.end());
+      net::httpps::Secret ignored;
+      return net::httpps::VerifyLabChain(path, {std::string(ca.begin(), ca.end())}, hostname, &ignored);
+    };
+    net::httpps::ClientOptions options;
+    options.dane_policy = std::move(policy);
+    if (std::string_view(argv[7]) == "raw")
+      options.server_certificate_types = {2};
+    else
+      Require(std::string_view(argv[7]) == "certificate", "DANE fixture credential kind");
+    return Get(argv[2], argv[3], argv[4], false, true, true, nullptr, nullptr, options);
+  }
+#if defined(PHROMIUM_HTTPPS_TEST_DIAGNOSTICS)
+  if (argc == 6 && std::string_view(argv[1]) == "--get-diagnostics") {
+    net::httpps::ClientOptions options;
+    std::string_view mode = argv[5];
+    options.authorize_test_diagnostics = mode != "off";
+    options.authorize_exporter_diagnostics = mode == "exporters";
+    std::vector<std::string> labels;
+    options.diagnostic_sink = [&](std::string_view entry) {
+      auto first = entry.find(' '), second = entry.find(' ', first + 1);
+      Require(first != std::string_view::npos && second == first + 65 &&
+                  entry.size() == second + 66 && entry.back() == '\n', "diagnostic complete exact entry");
+      labels.emplace_back(entry.substr(0, first));
+      return mode != "failure";
+    };
+    int result = Get(argv[2], argv[3], argv[4], false, true, true, nullptr, nullptr, options);
+    Require(labels.size() == (mode == "off" ? 0u : mode == "failure" ? 3u : mode == "exporters" ? 17u : 13u),
+            "diagnostic gates, derivation events and sink failure");
+    for (const auto& label : labels)
+      Require(label.starts_with("TLS20_") && label.find("SECRET_1") == std::string::npos &&
+              (mode == "exporters" || label.find("EXPORTER") == std::string::npos), "diagnostic protocol and category separation");
+    return result;
+  }
+#endif
+  if (argc == 6 && std::string_view(argv[1]) == "--get-grease") {
+    net::httpps::ClientOptions options;
+    options.grease = true;
+    options.client_hello_padding = ParseUnsigned(argv[5]);
+    return Get(argv[2], argv[3], argv[4], false, true, true, nullptr, nullptr, options);
+  }
+  if (argc == 5 && std::string_view(argv[1]) == "--get-grease-once") {
+    net::httpps::ClientOptions options;
+    options.grease = true;
+    options.client_hello_padding = 20000;
+    return Get(argv[2], argv[3], argv[4], false, false, false, nullptr, nullptr, options);
+  }
+  if ((argc == 5 || argc == 6) && std::string_view(argv[1]) == "--get-controls") {
+    net::httpps::ClientOptions options;
+    options.ticket_request = net::httpps::TicketRequest{3, 2};
+    net::httpps::SignalingBinding signaling;
+    signaling.local_hash = Bytes(32, 0x11);
+    signaling.peer_hash = Bytes(32, 0x22);
+    std::string local = "client-0123456789012345", peer = "server-0123456789012345";
+    signaling.local_session_id.assign(local.begin(), local.end());
+    signaling.peer_session_id.assign(peer.begin(), peer.end());
+    options.signaling = signaling;
+    return Get(argv[2], argv[3], argv[4], false, true, true, nullptr, nullptr, options);
+  }
+  if (argc == 9 && std::string_view(argv[1]) == "--get-bootstrap") {
+    net::httpps::ClientOptions options;
+    options.cipher_suites = {static_cast<uint16_t>(ParseUnsigned(argv[5], 16))};
+    net::httpps::BootstrapBinding binding;
+    auto spki = ReadFile(argv[6]);
+    binding.spki.assign(spki.begin(), spki.end());
+    binding.service = argv[2];
+    binding.scope = "loopback-provisioning";
+    binding.provisioning_trust = std::string_view(argv[8]) == "provisioning";
+    options.bootstrap = binding;
+    options.ordinary_httpps = !binding.provisioning_trust;
+    return Get(argv[2], argv[3], argv[4], false, true, true, argv[6], argv[7], options);
+  }
+  if (argc == 5 && std::string_view(argv[1]) == "--get-pinning") {
+    return Get(argv[2], argv[3], argv[4], false, false, true, nullptr, nullptr,
+               {}, nullptr, false, false, true);
+  }
+  if (argc == 8 && std::string_view(argv[1]) == "--get-authenticator") {
+    net::httpps::ClientOptions options;
+    options.spontaneous_authenticators = true;
+    options.cipher_suites = {static_cast<uint16_t>(ParseUnsigned(argv[5], 16))};
+    return Get(argv[2], argv[3], argv[4], false, false, true,
+               std::string_view(argv[6]) == "-" ? nullptr : argv[6],
+               std::string_view(argv[7]) == "-" ? nullptr : argv[7], options, nullptr, false, true);
+  }
+  if (argc == 8 && std::string_view(argv[1]) == "--get-cache") {
+    net::httpps::ClientOptions options;
+    if (ParseUnsigned(argv[5]))
+      options.certificate_compression = {static_cast<uint16_t>(ParseUnsigned(argv[5]))};
+    options.post_handshake_auth = true;
+    return Get(argv[2], argv[3], argv[4], false, false, true,
+               std::string_view(argv[6]) == "-" ? nullptr : argv[6],
+               std::string_view(argv[7]) == "-" ? nullptr : argv[7], options, nullptr, true);
+  }
+  if (argc == 8 && std::string_view(argv[1]) == "--get-delegation") {
+    net::httpps::ClientOptions options;
+    options.delegated_credentials = true;
+    options.certificate_compression = {1, 2, 3};
+    return Get(argv[2], argv[3], argv[4], false, true, true,
+               std::string_view(argv[5]) == "-" ? nullptr : argv[5],
+               std::string_view(argv[6]) == "-" ? nullptr : argv[6], options,
+               std::string_view(argv[7]) == "-" ? nullptr : argv[7]);
+  }
+  if (argc == 8 && std::string_view(argv[1]) == "--get-compression") {
+    net::httpps::ClientOptions options;
+    options.certificate_compression = {static_cast<uint16_t>(ParseUnsigned(argv[5]))};
+    options.post_handshake_auth = true;
+    return Get(argv[2], argv[3], argv[4], false, false, true,
+               std::string_view(argv[6]) == "-" ? nullptr : argv[6],
+               std::string_view(argv[7]) == "-" ? nullptr : argv[7], options);
+  }
+  if (argc == 8 && std::string_view(argv[1]) == "--get-rpk") {
+    net::httpps::ClientOptions options;
+    options.server_certificate_types = {2};
+    auto pin = ReadFile(argv[5]);
+    options.server_raw_public_keys.emplace_back(pin.begin(), pin.end());
+    return Get(argv[2], argv[3], argv[4], false, true, true,
+               std::string_view(argv[6]) == "-" ? nullptr : argv[6],
+               std::string_view(argv[7]) == "-" ? nullptr : argv[7], options);
+  }
+  if ((argc == 11 || argc == 12) && (std::string_view(argv[1]) == "--get-password" ||
+                                    std::string_view(argv[1]) == "--get-password-mixed")) {
+    net::httpps::ClientOptions options;
+    options.native_provider = net::httpps::NativeProvider::Load(argv[5]);
+    Require(options.native_provider != nullptr, "explicit PAKE native provider");
+    auto credential = std::make_shared<net::httpps::PasswordCredential>();
+    credential->service = argv[2];
+    credential->helper_path = argv[6];
+    credential->username = "alice";
+    credential->password = argv[9];
+    if (argc == 12) {
+      const auto spki = ReadFile(argv[11]);
+      credential->protection_spki.assign(spki.begin(), spki.end());
+    }
+    options.password = credential;
+    options.cipher_suites = {static_cast<uint16_t>(ParseUnsigned(argv[7], 16))};
+    if (std::string_view(argv[1]) == "--get-password-mixed") {
+      options.cipher_suites.push_back(0x1301);
+      options.cipher_suites.push_back(0x1302);
+    }
+    options.groups = {static_cast<uint16_t>(ParseUnsigned(argv[8]))};
+    return Get(argv[2], argv[3], argv[4], false,
+        std::string_view(argv[10]) == "resume", true, nullptr, nullptr, options);
+  }
+  if (argc == 9 && std::string_view(argv[1]) == "--get-password-authenticator") {
+    net::httpps::ClientOptions options;
+    options.native_provider = net::httpps::NativeProvider::Load(argv[5]);
+    auto credential = std::make_shared<net::httpps::PasswordCredential>();
+    credential->service = argv[2]; credential->helper_path = argv[6];
+    credential->username = "alice"; credential->password = "correct horse";
+    options.password = credential;
+    options.cipher_suites = {0xc0b1}; options.groups = {24};
+    options.spontaneous_authenticators = true;
+    return Get(argv[2], argv[3], argv[4], false, false, true,
+        std::string_view(argv[7]) == "-" ? nullptr : argv[7],
+        std::string_view(argv[8]) == "-" ? nullptr : argv[8], options, nullptr, false, true);
+  }
+  if (argc == 9 && std::string_view(argv[1]) == "--get-gost") {
+    net::httpps::ClientOptions options;
+    options.native_provider = net::httpps::NativeProvider::Load(argv[5], argv[6]);
+    Require(options.native_provider && options.native_provider->SupportsGost(), "explicit GOST native provider");
+    options.cipher_suites = {static_cast<uint16_t>(ParseUnsigned(argv[7], 16))};
+    options.groups = {static_cast<uint16_t>(ParseUnsigned(argv[8]))};
+    for (uint16_t algorithm = 0x0709; algorithm <= 0x070f; ++algorithm) {
+      options.certificate_signature_algorithms.push_back(algorithm);
+      options.grant_signature_algorithms.push_back(algorithm);
+    }
+    options.delegated_credentials = true;
+    return Get(argv[2], argv[3], argv[4], false, true, true, nullptr, nullptr, options);
+  }
+  if (argc == 8 && std::string_view(argv[1]) == "--get-its") {
+    const std::filesystem::path directory(argv[6]);
+    auto read = [&](const char* name) { return ReadFile((directory / name).string().c_str()); };
+    const auto wire = read("live-policy.bin");
+    net::httpps::ByteSpan cursor = net::httpps::StringBytes(wire).subspan(4u);
+    auto number = [&](size_t count) {
+      Require(cursor.size() >= count, "ITS fixture integer");
+      uint64_t value = 0;
+      for (auto byte : cursor.first(count)) value = (value << 8) | byte;
+      cursor = cursor.subspan(count);
+      return value;
+    };
+    auto vector = [&](size_t width) {
+      const size_t count = number(width);
+      Require(count <= cursor.size(), "ITS fixture vector");
+      auto bytes = cursor.first(count); cursor = cursor.subspan(count);
+      return Bytes(bytes.begin(), bytes.end());
+    };
+    auto policy = std::make_shared<net::httpps::ITSPolicy>();
+    policy->provider = net::httpps::ITSProvider::Load(argv[5]);
+    policy->identity = argv[2]; policy->tai_utc_offset = 37;
+    number(8);
+    policy->inventory_valid_until = number(8);
+    policy->max_grant_lifetime_microseconds = number(8);
+    policy->role = number(1); policy->psid = number(8);
+    policy->application_scope = vector(2); policy->ssp_coer = vector(2);
+    const auto root = read("live-root.coer"), leaf = read("live-leaf.coer");
+    policy->trust_roots.emplace_back(root.begin(), root.end());
+    const auto leaf_hash = net::httpps::Hash(net::httpps::StringBytes(leaf));
+    policy->authorized_leaves.emplace_back(leaf_hash.begin(), leaf_hash.end());
+    const std::string_view mode = argv[7];
+    if (mode == "revoked") policy->revoked = policy->authorized_leaves;
+    if (mode == "expired") policy->inventory_valid_until = 1;
+    if (mode == "wrong-role") policy->role = 1;
+    if (mode == "wrong-service") policy->identity = "other.test";
+    net::httpps::ClientOptions options;
+    options.its_policy = policy; options.server_certificate_types = {3};
+    options.post_handshake_auth = mode == "client";
+    std::optional<net::httpps::ClientCredential> credential;
+    if (mode == "client") {
+      credential.emplace(); credential->certificate_type = 3;
+      credential->certificates = {read("live-client.bin")};
+      credential->private_key.fill(9);
+      auto client_policy = std::make_shared<net::httpps::ITSPolicy>(*policy);
+      client_policy->role = 1;
+      credential->its_policy = std::move(client_policy);
+    }
+    return Get(argv[2], argv[3], argv[4], false, true, true, nullptr, nullptr,
+               options, nullptr, false, false, false, credential ? &*credential : nullptr);
+  }
+  if (argc == 6 && std::string_view(argv[1]) == "--get-public-signature") {
+    net::httpps::ClientOptions options;
+    options.native_provider = net::httpps::NativeProvider::Load(argv[5]);
+    Require(options.native_provider != nullptr, "explicit signature provider");
+    for (uint16_t algorithm : {0x0808, 0x0809, 0x080a, 0x080b, 0x081a, 0x081b, 0x081c}) {
+      options.certificate_signature_algorithms.push_back(algorithm);
+      options.grant_signature_algorithms.push_back(algorithm);
+    }
+    options.delegated_credentials = true;
+    return Get(argv[2], argv[3], argv[4], false, true, true, nullptr, nullptr, options);
+  }
+  if (argc == 6 && std::string_view(argv[1]) == "--check-ocsp-request") {
+    net::httpps::ClientOptions options;
+    auto id = ReadFile(argv[2]), extensions = ReadFile(argv[3]), response = ReadFile(argv[4]);
+    if (!id.empty()) options.ocsp_responder_ids.emplace_back(id.begin(), id.end());
+    options.ocsp_request_extensions.assign(extensions.begin(), extensions.end());
+    auto name = ReadFile(argv[5]);
+    if (!name.empty()) options.certificate_authorities.emplace_back(name.begin(), name.end());
+    if (!net::httpps::CredentialRequestOptionsValid(options)) return 2;
+    return net::httpps::OCSPRequestMatchesResponse(options, net::httpps::StringBytes(response)) ? 0 : 1;
+  }
+  if (argc == 8 && std::string_view(argv[1]) == "--get-credential-request") {
+    net::httpps::ClientOptions options;
+    const auto name = ReadFile(argv[5]), id = ReadFile(argv[6]), extensions = ReadFile(argv[7]);
+    options.request_ocsp = true;
+    options.certificate_authorities.emplace_back(name.begin(), name.end());
+    options.ocsp_responder_ids.emplace_back(id.begin(), id.end());
+    options.ocsp_request_extensions.assign(extensions.begin(), extensions.end());
+    return Get(argv[2], argv[3], argv[4], false, true, true, nullptr, nullptr, options);
+  }
+  if (argc == 6 && std::string_view(argv[1]) == "--check-delegated-credential") {
+    auto provider = net::httpps::NativeProvider::Load(argv[5]);
+    const auto certificate = ReadFile(argv[2]), root = ReadFile(argv[3]), grant = ReadFile(argv[4]);
+    const std::string leaf(certificate.begin(), certificate.end()), anchor(root.begin(), root.end());
+    net::httpps::Secret key;
+    Require(provider != nullptr, "signature provider");
+    Require(net::httpps::VerifyLabChain({leaf}, {anchor}, "example.test", &key, true, provider.get()), "delegated parent path");
+    Require(net::httpps::ValidateDelegation(leaf, net::httpps::StringBytes(grant), true,
+        {0x0808, 0x0809, 0x080a, 0x080b, 0x081a, 0x081b, 0x081c}, &key, provider.get()), "delegated grant signature");
+    return 0;
+  }
+  if (argc == 7 && std::string_view(argv[1]) == "--get-limit") {
+    net::httpps::ClientOptions options;
+    options.record_size_limit = static_cast<uint16_t>(ParseUnsigned(argv[5]));
+    options.record_padding_multiple = ParseUnsigned(argv[6]);
+    return Get(argv[2], argv[3], argv[4], false, true, true, nullptr, nullptr, options);
+  }
+  if (argc == 12 && std::string_view(argv[1]) == "--get-psk") {
+    net::httpps::ClientOptions options;
+    net::httpps::ExternalPSK psk;
+    psk.identity = Unhex(argv[5]);
+    psk.secret = Unhex(argv[6]);
+    psk.hostname = argv[2];
+    psk.cipher_suite = static_cast<uint16_t>(std::stoul(argv[7], nullptr, 16));
+    psk.imported = std::string_view(argv[9]) == "imp";
+    psk.combined = std::string_view(argv[10]) == "combined";
+    psk.max_early_data = std::string_view(argv[11]) == "early" ? 16384 : 0;
+    options.cipher_suites = {psk.cipher_suite};
+    options.psk_modes = {static_cast<uint8_t>(ParseUnsigned(argv[8]))};
+    if (std::string_view(argv[11]) == "multiple") {
+      auto unknown = psk;
+      unknown.identity.push_back(0);
+      unknown.secret[0] ^= 1;
+      options.external_psks.push_back(std::move(unknown));
+    }
+    options.external_psks.push_back(std::move(psk));
+    return Get(argv[2], argv[3], argv[4], false, std::string_view(argv[11]) == "resume",
+               true, nullptr, nullptr, options);
+  }
+  if (argc == 7 && std::string_view(argv[1]) == "--get-pha") {
+    net::httpps::ClientOptions options;
+    options.post_handshake_auth = true;
+    return Get(argv[2], argv[3], argv[4], false, false, true,
+               std::string_view(argv[5]) == "-" ? nullptr : argv[5],
+               std::string_view(argv[6]) == "-" ? nullptr : argv[6], options);
+  }
+  if (argc == 7 && (std::string_view(argv[1]) == "--get-suite" ||
+                   std::string_view(argv[1]) == "--get-suite-resume")) {
+    net::httpps::ClientOptions options;
+    options.cipher_suites = {static_cast<uint16_t>(ParseUnsigned(argv[2], 16))};
+    options.groups = {static_cast<uint16_t>(ParseUnsigned(argv[3]))};
+    return Get(argv[4], argv[5], argv[6], false,
+               std::string_view(argv[1]) == "--get-suite-resume", true,
+               nullptr, nullptr, options);
+  }
   if (argc == 7 && (std::string_view(argv[1]) == "--get-client-auth" ||
                    std::string_view(argv[1]) == "--get-client-auth-resume")) {
     return Get(argv[2], argv[3], argv[4], false,

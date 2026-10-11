@@ -38,7 +38,9 @@ class NET_EXPORT_PRIVATE HttppsClientSocket final : public SSLClientSocket {
                      std::optional<httpps::SessionTicket> session = std::nullopt,
                      base::RepeatingCallback<void(httpps::SessionTicket)>
                          ticket_callback = {},
-                     bool early_data_enabled = false);
+                     bool early_data_enabled = false,
+                     httpps::ClientOptions options = {},
+                     std::optional<httpps::ClientCredential> credential = std::nullopt);
   ~HttppsClientSocket() override;
 
   int Connect(CompletionOnceCallback callback) override;
@@ -68,6 +70,7 @@ class NET_EXPORT_PRIVATE HttppsClientSocket final : public SSLClientSocket {
                            base::span<uint8_t> out) override;
   std::vector<uint8_t> GetECHRetryConfigs() override;
   std::vector<std::vector<uint8_t>> GetServerTrustAnchorIDs() override;
+  httpps::Authentication GetHttppsAuthentication() const;
 
  private:
   int HandshakeLoop(int result);
@@ -75,6 +78,8 @@ class NET_EXPORT_PRIVATE HttppsClientSocket final : public SSLClientSocket {
   int VerifySessionCertificate();
   int PopulateSSLInfo();
   int StartUserWrite();
+  int FlushControlOutput(int result = OK);
+  void ResumeAfterControlOutput();
   void SaveTickets();
   void FinishHandshakeOperation(int result);
   int ReadOneRecord(int result);
@@ -104,19 +109,27 @@ class NET_EXPORT_PRIVATE HttppsClientSocket final : public SSLClientSocket {
   std::optional<httpps::SessionTicket> session_;
   base::RepeatingCallback<void(httpps::SessionTicket)> ticket_callback_;
   bool early_data_enabled_ = false;
+  httpps::ClientOptions options_;
+  std::optional<httpps::ClientCredential> credential_;
   bool early_connect_complete_ = false;
   bool early_data_sent_ = false;
   bool verifying_session_ = false;
   bool session_verified_ = false;
+  std::string session_validated_issuer_;
+  std::vector<std::string> session_validated_path_;
   bool confirming_ = false;
   bool handshake_waiting_for_write_ = false;
   bool write_waiting_for_handshake_ = false;
+  bool control_writing_ = false;
+  bool read_waiting_for_control_ = false;
+  bool write_waiting_for_control_ = false;
   std::unique_ptr<httpps::Client> client_;
   SSLInfo ssl_info_;
   base::OneShotTimer handshake_timer_;
   CompletionOnceCallback connect_callback_, read_callback_, write_callback_;
   scoped_refptr<DrainableIOBuffer> raw_read_, raw_write_;
   httpps::Bytes record_, application_data_;
+  httpps::Bytes control_output_;
   scoped_refptr<IOBuffer> user_read_buffer_;
   scoped_refptr<IOBuffer> user_write_buffer_;
   int user_read_length_ = 0;

@@ -209,7 +209,15 @@ void VerifySSLSocketParams(
   EXPECT_EQ(params->network_anonymization_key(), network_anonymization_key);
 }
 
-void VerifyHttppsConfig(const SSLConfig& config, bool early_data = false) {
+NextProtoVector HttppsAlpn(ConnectJobFactory::AlpnMode mode) {
+  return mode == ConnectJobFactory::AlpnMode::kHttpAll
+             ? NextProtoVector({NextProto::kProtoHTTP2, NextProto::kProtoHTTP11})
+             : NextProtoVector({NextProto::kProtoHTTP11});
+}
+
+void VerifyHttppsConfig(const SSLConfig& config,
+                       ConnectJobFactory::AlpnMode mode,
+                       bool early_data = false) {
   EXPECT_TRUE(config.is_httpps);
   EXPECT_FALSE(config.ignore_certificate_errors);
   EXPECT_TRUE(config.allowed_bad_certs.empty());
@@ -218,7 +226,7 @@ void VerifyHttppsConfig(const SSLConfig& config, bool early_data = false) {
   EXPECT_FALSE(config.renego_allowed_default);
   EXPECT_TRUE(config.renego_allowed_for_protos.empty());
   EXPECT_TRUE(config.application_settings.empty());
-  EXPECT_EQ(config.alpn_protos, NextProtoVector({NextProto::kProtoHTTP11}));
+  EXPECT_EQ(config.alpn_protos, HttppsAlpn(mode));
   EXPECT_TRUE(config.ech_config_list.empty());
   EXPECT_FALSE(config.trust_anchor_ids.has_value());
 }
@@ -232,34 +240,36 @@ void VerifyHttppsDestinationParams(
     const ProxyChain& proxy_chain,
     PrivacyMode privacy_mode,
     const NetworkAnonymizationKey& network_anonymization_key,
-    bool early_data) {
+    bool early_data,
+    ConnectJobFactory::AlpnMode mode) {
   SSLConfig expected;
   expected.is_httpps = true;
   expected.disable_cert_verification_network_fetches = true;
-  expected.alpn_protos = {NextProto::kProtoHTTP11};
+  expected.alpn_protos = HttppsAlpn(mode);
   expected.proxy_chain = proxy_chain;
   expected.proxy_chain_index = proxy_chain.length();
   expected.early_data_enabled = early_data;
   VerifySSLSocketParams(params, "HTTPPS destination", destination, expected,
                         privacy_mode, network_anonymization_key);
-  VerifyHttppsConfig(params->ssl_config(), early_data);
+  VerifyHttppsConfig(params->ssl_config(), mode, early_data);
 }
 
 void VerifyHttppsProxyParams(
     scoped_refptr<SSLSocketParams>& params,
     const HostPortPair& proxy,
     const ProxyChain& proxy_chain,
-    const NetworkAnonymizationKey& network_anonymization_key) {
+    const NetworkAnonymizationKey& network_anonymization_key,
+    ConnectJobFactory::AlpnMode mode) {
   SSLConfig expected;
   expected.is_httpps = true;
   expected.disable_cert_verification_network_fetches = true;
-  expected.alpn_protos = {NextProto::kProtoHTTP11};
+  expected.alpn_protos = HttppsAlpn(mode);
   expected.proxy_chain = proxy_chain;
   expected.session_usage = SessionUsage::kProxy;
   VerifySSLSocketParams(params, "HTTPPS proxy", proxy, expected,
                         PrivacyMode::PRIVACY_MODE_DISABLED,
                         network_anonymization_key);
-  VerifyHttppsConfig(params->ssl_config());
+  VerifyHttppsConfig(params->ssl_config(), mode);
 }
 
 // Calculate the ALPN protocols for the given ALPN mode.
@@ -447,7 +457,7 @@ TEST_P(ConnectJobParamsFactoryTest, HttppsUsesIsolatedTls20Config) {
   EXPECT_FALSE(config.renego_allowed_default);
   EXPECT_TRUE(config.renego_allowed_for_protos.empty());
   EXPECT_TRUE(config.application_settings.empty());
-  EXPECT_EQ(config.alpn_protos, NextProtoVector({NextProto::kProtoHTTP11}));
+  EXPECT_EQ(config.alpn_protos, HttppsAlpn(alpn_mode()));
   auto transport = ssl_params->GetDirectConnectionParams();
   EXPECT_EQ(transport->destination(),
             TransportSocketParams::Endpoint(endpoint));
@@ -498,7 +508,7 @@ TEST_P(ConnectJobParamsFactoryTest, HttppsEndpointViaHttpConnectProxy) {
   ASSERT_TRUE(params.is_ssl());
   auto endpoint_params = params.take_ssl();
   VerifyHttppsDestinationParams(endpoint_params, destination, proxy_chain,
-                                privacy_mode(), kEndpointNak, true);
+                                privacy_mode(), kEndpointNak, true, alpn_mode());
   ASSERT_EQ(endpoint_params->GetConnectionType(), SSLSocketParams::HTTP_PROXY);
   auto proxy_params = endpoint_params->GetHttpProxyConnectionParams();
   ASSERT_TRUE(proxy_params);
@@ -533,7 +543,7 @@ TEST_P(ConnectJobParamsFactoryTest, HttppsEndpointViaHttpsConnectProxy) {
   ASSERT_TRUE(params.is_ssl());
   auto endpoint_params = params.take_ssl();
   VerifyHttppsDestinationParams(endpoint_params, destination, proxy_chain,
-                                privacy_mode(), kEndpointNak, true);
+                                privacy_mode(), kEndpointNak, true, alpn_mode());
   ASSERT_EQ(endpoint_params->GetConnectionType(), SSLSocketParams::HTTP_PROXY);
   auto proxy_params = endpoint_params->GetHttpProxyConnectionParams();
   ASSERT_TRUE(proxy_params);
@@ -585,7 +595,7 @@ TEST_P(ConnectJobParamsFactoryTest, HttppsEndpointViaSocks4AndSocks5Proxy) {
     ASSERT_TRUE(params.is_ssl());
     auto endpoint_params = params.take_ssl();
     VerifyHttppsDestinationParams(endpoint_params, destination, proxy_chain,
-                                  privacy_mode(), kEndpointNak, true);
+                                  privacy_mode(), kEndpointNak, true, alpn_mode());
     ASSERT_EQ(endpoint_params->GetConnectionType(),
               SSLSocketParams::SOCKS_PROXY);
     auto socks_params = endpoint_params->GetSocksProxyConnectionParams();
@@ -640,11 +650,14 @@ TEST_P(ConnectJobParamsFactoryTest, HttpsEndpointViaHttppsConnectProxy) {
   ASSERT_TRUE(proxy_params->is_over_ssl());
   auto proxy_httpps_params = proxy_params->ssl_params();
   VerifyHttppsProxyParams(proxy_httpps_params, proxy, proxy_chain,
-                          kEndpointNak);
+                          kEndpointNak, alpn_mode());
   ASSERT_EQ(proxy_httpps_params->GetConnectionType(), SSLSocketParams::DIRECT);
   auto transport_params = proxy_httpps_params->GetDirectConnectionParams();
   VerifyTransportSocketParams(transport_params, "TCP to HTTPPS proxy", proxy,
-                              secure_dns_policy(), kProxyDnsNak, {"http/1.1"});
+                              secure_dns_policy(), kProxyDnsNak,
+                              alpn_mode() == ConnectJobFactory::AlpnMode::kDisabled
+                                  ? base::flat_set<std::string>{"http/1.1"}
+                                  : AlpnProtoStringsForMode(alpn_mode()));
 }
 
 TEST_P(ConnectJobParamsFactoryTest, HttppsEndpointViaHttppsConnectProxy) {
@@ -664,7 +677,7 @@ TEST_P(ConnectJobParamsFactoryTest, HttppsEndpointViaHttppsConnectProxy) {
   auto endpoint_params = params.take_ssl();
   VerifyHttppsDestinationParams(endpoint_params,
                                 HostPortPair("target.test", 343), proxy_chain,
-                                privacy_mode(), kEndpointNak, true);
+                                privacy_mode(), kEndpointNak, true, alpn_mode());
   ASSERT_EQ(endpoint_params->GetConnectionType(), SSLSocketParams::HTTP_PROXY);
   auto proxy_params = endpoint_params->GetHttpProxyConnectionParams();
   ASSERT_TRUE(proxy_params);
@@ -677,11 +690,14 @@ TEST_P(ConnectJobParamsFactoryTest, HttppsEndpointViaHttppsConnectProxy) {
   ASSERT_TRUE(proxy_params->is_over_ssl());
   auto proxy_httpps_params = proxy_params->ssl_params();
   VerifyHttppsProxyParams(proxy_httpps_params, proxy, proxy_chain,
-                          kEndpointNak);
+                          kEndpointNak, alpn_mode());
   ASSERT_EQ(proxy_httpps_params->GetConnectionType(), SSLSocketParams::DIRECT);
   auto transport_params = proxy_httpps_params->GetDirectConnectionParams();
   VerifyTransportSocketParams(transport_params, "TCP to HTTPPS proxy", proxy,
-                              secure_dns_policy(), kProxyDnsNak, {"http/1.1"});
+                              secure_dns_policy(), kProxyDnsNak,
+                              alpn_mode() == ConnectJobFactory::AlpnMode::kDisabled
+                                  ? base::flat_set<std::string>{"http/1.1"}
+                                  : AlpnProtoStringsForMode(alpn_mode()));
 }
 
 TEST_P(ConnectJobParamsFactoryTest, HttpEndpointViaHttppsProxy) {
@@ -710,11 +726,14 @@ TEST_P(ConnectJobParamsFactoryTest, HttpEndpointViaHttppsProxy) {
   ASSERT_TRUE(proxy_params->is_over_ssl());
   auto proxy_httpps_params = proxy_params->ssl_params();
   VerifyHttppsProxyParams(proxy_httpps_params, proxy, proxy_chain,
-                          kEndpointNak);
+                          kEndpointNak, alpn_mode());
   ASSERT_EQ(proxy_httpps_params->GetConnectionType(), SSLSocketParams::DIRECT);
   auto transport_params = proxy_httpps_params->GetDirectConnectionParams();
   VerifyTransportSocketParams(transport_params, "TCP to HTTPPS proxy", proxy,
-                              secure_dns_policy(), kProxyDnsNak, {"http/1.1"});
+                              secure_dns_policy(), kProxyDnsNak,
+                              alpn_mode() == ConnectJobFactory::AlpnMode::kDisabled
+                                  ? base::flat_set<std::string>{"http/1.1"}
+                                  : AlpnProtoStringsForMode(alpn_mode()));
 }
 
 // A connect to a endpoint without SSL, specified as a `SchemelessEndpoint`,

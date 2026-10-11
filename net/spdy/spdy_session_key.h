@@ -38,7 +38,8 @@ class NET_EXPORT_PRIVATE SpdySessionKey {
                  const NetworkAnonymizationKey& network_anonymization_key,
                  SecureDnsPolicy secure_dns_policy,
                  bool disable_cert_verification_network_fetches,
-                 handles::NetworkHandle target_network);
+                 handles::NetworkHandle target_network,
+                 bool is_httpps = false);
 
   SpdySessionKey(const SpdySessionKey& other);
 
@@ -95,6 +96,10 @@ class NET_EXPORT_PRIVATE SpdySessionKey {
 
   handles::NetworkHandle target_network() const { return target_network_; }
 
+  // The same authority can serve both HTTPS and HTTPPS on the same port.
+  // They must never share a connection or an IP-coalesced pool alias.
+  bool is_httpps() const { return is_httpps_; }
+
  private:
   HostPortPair host_port_pair_;
   // If enabled, then session cannot be tracked by the server.
@@ -108,6 +113,7 @@ class NET_EXPORT_PRIVATE SpdySessionKey {
   SecureDnsPolicy secure_dns_policy_ = SecureDnsPolicy::kAllow;
   bool disable_cert_verification_network_fetches_ = false;
   handles::NetworkHandle target_network_ = handles::kInvalidNetworkHandle;
+  bool is_httpps_ = false;
 };
 
 NET_EXPORT_PRIVATE std::ostream& operator<<(std::ostream& os,
