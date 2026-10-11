@@ -52,6 +52,7 @@
 #include "chrome/common/chrome_content_client.h"
 #include "chrome/common/chrome_features.h"
 #include "chrome/common/chrome_paths_internal.h"
+#include "chrome/common/httpps_profiles.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/webui_url_constants.h"
 #include "components/certificate_transparency/pref_names.h"
@@ -1347,6 +1348,18 @@ void ProfileNetworkContextService::ConfigureNetworkContextParamsInternal(
       ->ConfigureDefaultNetworkContextParams(network_context_params);
 
   network_context_params->accept_language = ComputeAcceptLanguage();
+  // Trusted local identity selection applies only to the regular browser
+  // profile's default partition, never system fetches, guests or private mode.
+  const auto* httpps_command = base::CommandLine::ForCurrentProcess();
+  auto httpps_profile_name = httpps_command->GetSwitchValuePath("profile-directory");
+  if (httpps_profile_name.empty()) {
+    httpps_profile_name = base::FilePath(FILE_PATH_LITERAL("Default"));
+  }
+  if (!profile_->IsOffTheRecord() && !profile_->IsGuestSession() &&
+      relative_partition_path.empty() &&
+      profile_->GetPath().BaseName() == httpps_profile_name) {
+    network_context_params->httpps_profile_config = chrome::GetHttppsProfiles();
+  }
   network_context_params->enable_referrers = enable_referrers_.GetValue();
 
   base::CommandLine* command_line = base::CommandLine::ForCurrentProcess();

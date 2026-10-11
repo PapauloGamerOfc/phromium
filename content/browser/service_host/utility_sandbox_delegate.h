@@ -52,8 +52,10 @@ class CONTENT_EXPORT UtilitySandboxedProcessLauncherDelegate
   bool PreSpawnTarget(sandbox::TargetPolicy* policy) override;
   // Set preload libraries to transfer as part of the sandbox delegate data,
   // which will used in utility_main to preload these libraries before lockdown.
-  void SetPreloadLibraries(const std::vector<base::FilePath>& preloads) {
+  void SetPreloadLibraries(const std::vector<base::FilePath>& preloads,
+                          bool required = true) {
     preload_libraries_ = preloads;
+    preload_libraries_required_ = required;
   }
   // Set the event used for bootstrap info. Takes a duplicate of the passed
   // event and ensures it is passed to the utility process.
@@ -87,6 +89,7 @@ class CONTENT_EXPORT UtilitySandboxedProcessLauncherDelegate
   void AddDelegateData(sandbox::TargetPolicy* policy);
 
   std::vector<base::FilePath> preload_libraries_;
+  bool preload_libraries_required_ = true;
 
   std::optional<base::win::ScopedHandle> event_handle_to_inherit_;
 #endif  // BUILDFLAG(IS_WIN)

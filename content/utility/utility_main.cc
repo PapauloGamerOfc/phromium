@@ -13,6 +13,7 @@
 #include "base/feature_list.h"
 #include "base/functional/bind.h"
 #include "base/immediate_crash.h"
+#include "base/logging.h"
 #include "base/message_loop/message_pump_type.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/power_monitor/power_monitor.h"
@@ -200,6 +201,14 @@ bool PreLockdownSandboxHook(base::span<const uint8_t> delegate_blob) {
       HMODULE h_mod = base::LoadNativeLibrary(library_path, &lib_error);
       // We deliberately "leak" `h_mod` so that the module stays loaded.
       if (!h_mod) {
+        if (!sandbox_config->preload_libraries_required) {
+          // An optional provider must not prevent unrelated service functions
+          // from starting. Its consumer still checks LoadNativeLibrary after
+          // lockdown and fails closed if the module is unavailable.
+          LOG(ERROR) << "Optional native library preload failed; platform error "
+                     << lib_error.code;
+          continue;
+        }
         // The browser should not request libraries that do not exist, so crash
         // on failure. Record info to distinguish crash signatures.
         base::debug::Alias(&lib_error);

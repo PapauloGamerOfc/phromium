@@ -52,6 +52,14 @@ ITSBytes PolicyBytes(const ITSPolicy& policy, uint64_t now) {
   ObjectList(result, policy.trust_roots);
   HashList(result, policy.authorized_leaves); HashList(result, policy.revoked);
   ObjectList(result, policy.allowed_regions);
+  if (!policy.geographic_containment.empty()) {
+    result.insert(result.end(), {'G', 'E', 'O', '1'});
+    ITSBytes pairs;
+    for (const auto& [parent, child] : policy.geographic_containment) {
+      Vector(pairs, parent, 3); Vector(pairs, child, 3);
+    }
+    Vector(result, pairs, 3);
+  }
   return result;
 }
 }  // namespace
@@ -112,7 +120,8 @@ bool ITSPolicy::IsValid() const {
       tai_utc_offset > 100 || !inventory_valid_until || !max_grant_lifetime_microseconds ||
       application_scope.size() > 65535 || ssp_coer.size() > 65535 ||
       trust_roots.empty() || trust_roots.size() > 32 || authorized_leaves.empty() ||
-      authorized_leaves.size() > 1024 || revoked.size() > 4096 || allowed_regions.size() > 32) return false;
+      authorized_leaves.size() > 1024 || revoked.size() > 4096 || allowed_regions.size() > 32 ||
+      geographic_containment.size() > 256) return false;
   size_t budget = 100 + application_scope.size() + ssp_coer.size();
   for (const auto* objects : {&trust_roots, &allowed_regions})
     for (const auto& object : *objects) {
@@ -124,6 +133,11 @@ bool ITSPolicy::IsValid() const {
       if (hash.size() != 32) return false;
       budget += 32;
     }
+  if (!geographic_containment.empty()) budget += 7;
+  for (const auto& [parent, child] : geographic_containment) {
+    if (parent.empty() || child.empty() || parent.size() > 16384 || child.size() > 16384) return false;
+    budget += 6 + parent.size() + child.size();
+  }
   return budget <= kMaxInput;
 }
 ITSBytes ITSPolicy::Context() const {

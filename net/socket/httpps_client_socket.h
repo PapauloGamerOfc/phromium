@@ -71,6 +71,18 @@ class NET_EXPORT_PRIVATE HttppsClientSocket final : public SSLClientSocket {
   std::vector<uint8_t> GetECHRetryConfigs() override;
   std::vector<std::vector<uint8_t>> GetServerTrustAnchorIDs() override;
   httpps::Authentication GetHttppsAuthentication() const;
+  int ExportEarlyKeyingMaterial(std::string_view label,
+      base::span<const uint8_t> context, base::span<uint8_t> out) override;
+  bool RequestHttppsServerAuthenticator(httpps::ByteSpan context,
+      const std::map<uint16_t, httpps::Bytes>& extensions,
+      httpps::Bytes* request) override;
+  bool CancelHttppsAuthenticator(httpps::ByteSpan request) override;
+  bool CreateHttppsClientAuthenticator(httpps::ByteSpan request,
+      const httpps::ClientCredential* credential,
+      httpps::Bytes* authenticator) override;
+  bool ValidateHttppsServerAuthenticator(httpps::ByteSpan authenticator,
+      const httpps::AuthenticatorValidator& validator, bool* authenticated,
+      httpps::ByteSpan exact_request = {}) override;
 
  private:
   int HandshakeLoop(int result);

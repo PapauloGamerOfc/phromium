@@ -208,6 +208,33 @@ class CDPTest(unittest.IsolatedAsyncioTestCase):
             self.assertIsNone(browser.process)
             self.assertTrue(browser.log.closed)
 
+    async def test_startup_retries_transient_active_port_file_lock(self):
+        with tempfile.TemporaryDirectory(prefix="httpps-startup-file-lock-") as temporary:
+            folder = Path(temporary)
+            browser = Browser(folder / "fixture.exe", folder / "profile")
+            process = Mock(returncode=None)
+            process.wait = AsyncMock(return_value=0)
+            cdp = Mock()
+            cdp.command = AsyncMock()
+
+            async def spawn(*args, **kwargs):
+                (browser.profile / "DevToolsActivePort").write_text("12345\n/browser/test\n")
+                return process
+
+            with patch("browser_e2e_test.OwnedProcess.start", side_effect=spawn), \
+                 patch.object(Path, "read_text", side_effect=[PermissionError("writer still open"),
+                                                              "12345\n/browser/test\n"]) as read, \
+                 patch("browser_e2e_test.debug_targets", new=AsyncMock(return_value=[
+                     {"type": "page", "webSocketDebuggerUrl": "ws://127.0.0.1:12345/test"}])) as targets, \
+                 patch("browser_e2e_test.CDP.connect", new=AsyncMock(return_value=cdp)), \
+                 patch("browser_e2e_test.close_writer", new=AsyncMock()):
+                async with browser as selected:
+                    self.assertIs(selected, cdp)
+                self.assertEqual(read.call_count, 2)
+                targets.assert_awaited_once_with(12345)
+            process.kill.assert_not_called()
+            self.assertTrue(browser.log.closed)
+
     async def test_startup_failure_survives_forced_process_cleanup(self):
         for failure in (RuntimeError("original WebSocket failure"),
                         asyncio.CancelledError("startup cancelled")):

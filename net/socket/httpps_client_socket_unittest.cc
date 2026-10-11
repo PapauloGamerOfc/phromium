@@ -192,11 +192,12 @@ class Peer : public SocketDataProvider {
     }
   }
 
-  void RequestClientAuth(uint8_t context = 1) {
+  void RequestClientAuth(uint8_t context = 1, ByteSpan extra = {}) {
     Secret private_key{}, public_key{};
     X25519_keypair(public_key.data(), private_key.data());
     Bytes extensions{0, 50, 0, 4, 0, 2, 8, 7, 0xff, 3, 0, 32};
     Append(extensions, public_key);
+    Append(extensions, extra);
     Bytes body{1, context};
     U16(body, extensions.size());
     Append(body, extensions);
@@ -206,6 +207,20 @@ class Peer : public SocketDataProvider {
     Append(pha_transcript_, request);
     Bytes encrypted;
     ASSERT_TRUE(sender_->Seal(request, 22, &encrypted));
+    server_bytes_.append(encrypted.begin(), encrypted.end());
+  }
+
+  void Alert(uint8_t description) {
+    Bytes encrypted;
+    ASSERT_TRUE(sender_->Seal(Bytes{1, description}, 21, &encrypted));
+    server_bytes_.append(encrypted.begin(), encrypted.end());
+  }
+
+  void NewTicket() {
+    // lifetime=3600, age_add=0, one-byte nonce/ticket, no extensions.
+    const Bytes body{0, 0, 14, 16, 0, 0, 0, 0, 1, 7, 0, 1, 9, 0, 0};
+    Bytes encrypted;
+    ASSERT_TRUE(sender_->Seal(Frame(4, body), 22, &encrypted));
     server_bytes_.append(encrypted.begin(), encrypted.end());
   }
 
@@ -292,8 +307,18 @@ class Peer : public SocketDataProvider {
   bool hold_writes = false;
   bool fail_writes = false;
   bool tamper = false;
+  bool bad_proof = false;
   bool accept_early_data = true;
   bool reject_ticket = false;
+  bool omit_alpn = false;
+  bool send_initial_cr = false;
+  bool client_offered_alpn = false;
+  bool client_offered_pha = false;
+  bool client_offered_pinning = false;
+  Bytes client_pin;
+  std::optional<Bytes> pin_response;
+  Bytes initial_cr_extra;
+  uint8_t last_client_alert = 0;
   std::optional<httpps::SessionTicket> resume_ticket;
   IoMode mode = ASYNC;
   size_t read_chunk = 1;
@@ -354,6 +379,7 @@ class Peer : public SocketDataProvider {
     received_early.clear();
     discarded_early_bytes = 0;
     client_hellos = 0;
+    last_client_alert = 0;
     client_finished = 0;
     end_of_early_data = 0;
     pha_empty_certificates = pha_finished = key_updates = close_notifies = 0;
@@ -391,6 +417,10 @@ class Peer : public SocketDataProvider {
       return;
     }
     ASSERT_TRUE(receiver_->Open(record, &type, &plaintext));
+    if (type == 21 && plaintext.size() == 2 && plaintext[0] == 2) {
+      last_client_alert = plaintext[1];
+      return;
+    }
     if (finished_) {
       ASSERT_EQ(type, 22);
       auto expected = httpps::Mac(httpps::Label(c_hs_, "finished", {}, 32),
@@ -516,6 +546,18 @@ class Peer : public SocketDataProvider {
 
     Bytes extensions = {0, 19, 0,   0,   0,   0,   0,   16,  0,   11, 0,
                         9, 8,  'h', 't', 't', 'p', '/', '1', '.', '1'};
+    HelloExtension(hello, 16, &client_offered_alpn);
+    HelloExtension(hello, 49, &client_offered_pha);
+    client_pin = HelloExtension(hello, 32, &client_offered_pinning);
+    if (omit_alpn) extensions = {0, 4, 0, 0, 0, 0};
+    if (pin_response) {
+      const size_t size = extensions.size() - 2 + 4 + pin_response->size();
+      extensions[0] = static_cast<uint8_t>(size >> 8);
+      extensions[1] = static_cast<uint8_t>(size);
+      U16(extensions, 32);
+      U16(extensions, pin_response->size());
+      Append(extensions, *pin_response);
+    }
     if (early_accepted_) {
       extensions[1] += 4;
       extensions.insert(extensions.end(), {0, 42, 0, 0});
@@ -523,6 +565,19 @@ class Peer : public SocketDataProvider {
     Bytes flight = Frame(8, extensions);
     Append(transcript_, flight);
     if (!resumed) {
+      if (send_initial_cr) {
+        Secret verifier_private{}, verifier_public{};
+        X25519_keypair(verifier_public.data(), verifier_private.data());
+        Bytes offered{0, 50, 0, 4, 0, 2, 8, 7, 0xff, 3, 0, 32};
+        Append(offered, verifier_public);
+        Append(offered, initial_cr_extra);
+        Bytes request{0};
+        U16(request, offered.size());
+        Append(request, offered);
+        const auto frame = Frame(13, request);
+        Append(transcript_, frame);
+        Append(flight, frame);
+      }
       std::string certificate = chain_[0]->GetDER();
       Bytes entry;
       U24(entry, certificate.size());
@@ -553,6 +608,7 @@ class Peer : public SocketDataProvider {
       Append(proof_context, httpps::Hash(transcript_));
       Bytes proof_body{0xfe, 0, 0, 32};
       Append(proof_body, httpps::Mac(proof_key, proof_context));
+      if (bad_proof) proof_body.back() ^= 1;
       auto proof = Frame(15, proof_body);
       Append(transcript_, proof);
       Append(flight, proof);
@@ -889,6 +945,108 @@ TEST_F(HttppsClientSocketProxyTest, ContextDoesNotFallBackToOtherRoleTrust) {
   }
 }
 
+TEST_F(HttppsClientSocketProxyTest, ContextPinningPersistsAndPartitionsAttempts) {
+  Peer peer;
+  peer.write_chunk = 65536;
+  peer.pin_response = Bytes{0, 0, 1, 0x77, 0, 0, 0x0e, 0x10};
+  MockCertVerifier verifier;
+  verifier.set_default_result(ERR_CERT_AUTHORITY_INVALID);
+  TransportSecurityState security_state;
+  SSLClientContext context(nullptr, &verifier, &security_state, nullptr, nullptr);
+  context.SetHttppsTrustAnchors({peer.root});
+  SSLConfig config;
+  config.is_httpps = true;
+  httpps::ClientOptions options;
+  options.continuity_pinning = true;
+  const HostPortPair destination("localhost", 343);
+  ASSERT_TRUE(context.SetHttppsOptions(destination, config, options));
+  TestCompletionCallback done;
+  auto socket = context.CreateSSLClientSocket(MakeTransport(peer), destination, config);
+  ASSERT_EQ(OK, done.GetResult(socket->Connect(done.callback())));
+  EXPECT_TRUE(peer.client_offered_pinning);
+  EXPECT_TRUE(peer.client_pin.empty());
+  socket.reset();
+  peer.pin_response.reset();
+  socket = context.CreateSSLClientSocket(MakeTransport(peer), destination, config);
+  EXPECT_EQ(ERR_SSL_SERVER_CERT_BAD_FORMAT,
+            done.GetResult(socket->Connect(done.callback())));
+  EXPECT_EQ(peer.client_pin, (Bytes{0, 1, 0x77}));
+  EXPECT_EQ(peer.last_client_alert, 40);
+  socket.reset();
+  auto other = config;
+  other.privacy_mode = PRIVACY_MODE_ENABLED;
+  ASSERT_TRUE(context.SetHttppsOptions(destination, other, options));
+  socket = context.CreateSSLClientSocket(MakeTransport(peer), destination, other);
+  EXPECT_EQ(OK, done.GetResult(socket->Connect(done.callback())));
+  EXPECT_TRUE(peer.client_offered_pinning);
+  EXPECT_TRUE(peer.client_pin.empty());
+  socket.reset();
+  // The first partition retains its pin after an unrelated partition is used.
+  socket = context.CreateSSLClientSocket(MakeTransport(peer), destination, config);
+  EXPECT_EQ(ERR_SSL_SERVER_CERT_BAD_FORMAT,
+            done.GetResult(socket->Connect(done.callback())));
+  EXPECT_EQ(peer.client_pin, (Bytes{0, 1, 0x77}));
+}
+
+TEST_F(HttppsClientSocketProxyTest, OmitCredentialsProfileFailsBeforeClientHello) {
+  Peer peer;
+  MockCertVerifier verifier;
+  TransportSecurityState security_state;
+  SSLClientContext context(nullptr, &verifier, &security_state, nullptr, nullptr);
+  context.SetHttppsTrustAnchors({peer.root});
+  context.SetHttppsProfileProvider(base::BindLambdaForTesting(
+      [](const HostPortPair& server, const SSLConfig&,
+         httpps::ClientOptions* options,
+         std::optional<httpps::ClientCredential>*,
+         std::vector<std::string>*) -> std::optional<bool> {
+        auto password = std::make_shared<httpps::PasswordCredential>();
+        password->service = server.host();
+        password->username = "fixture-account";
+        password->password = "fixture-secret";
+        options->password = std::move(password);
+        return true;
+      }));
+  SSLConfig config;
+  config.is_httpps = true;
+  config.privacy_mode = PRIVACY_MODE_ENABLED_WITHOUT_CLIENT_CERTS;
+  auto socket = context.CreateSSLClientSocket(
+      MakeTransport(peer), HostPortPair("localhost", 343), config);
+  TestCompletionCallback done;
+  EXPECT_EQ(ERR_SSL_PROTOCOL_ERROR, done.GetResult(socket->Connect(done.callback())));
+  EXPECT_EQ(peer.client_hellos, 0);
+  EXPECT_TRUE(peer.received_application.empty());
+}
+
+TEST_F(HttppsClientSocketProxyTest, ConfiguredPostHandshakeAuthChoiceIsRespected) {
+  Peer peer;
+  MockCertVerifier verifier;
+  TransportSecurityState security_state;
+  SSLClientContext context(nullptr, &verifier, &security_state, nullptr, nullptr);
+  context.SetHttppsTrustAnchors({peer.root});
+  SSLConfig config;
+  config.is_httpps = true;
+  const HostPortPair destination("localhost", 343);
+  httpps::ClientCredential credential;
+  credential.certificate_type = 2;
+  Secret public_key{};
+  X25519_keypair(public_key.data(), credential.private_key.data());
+  Bytes spki{0x30, 0x2a, 0x30, 5, 6, 3, 0x2b, 0x65, 0x6e, 3, 0x21, 0};
+  Append(spki, public_key);
+  credential.certificates.emplace_back(spki.begin(), spki.end());
+  ASSERT_TRUE(context.SetHttppsClientCredential(destination, config, credential));
+  for (bool enable : {false, true}) {
+    httpps::ClientOptions options;
+    options.post_handshake_auth = enable;
+    ASSERT_TRUE(context.SetHttppsOptions(destination, config, options));
+    auto socket = context.CreateSSLClientSocket(MakeTransport(peer), destination, config);
+    TestCompletionCallback done;
+    ASSERT_EQ(OK, done.GetResult(socket->Connect(done.callback())));
+    EXPECT_EQ(peer.client_offered_pha, enable);
+  }
+  config.privacy_mode = PRIVACY_MODE_ENABLED_WITHOUT_CLIENT_CERTS;
+  EXPECT_FALSE(context.SetHttppsClientCredential(destination, config, credential));
+}
+
 TEST_F(HttppsClientSocketProxyTest, ContextSelectsIndependentRoleTrustStores) {
   struct TestCase {
     const char* description;
@@ -1137,6 +1295,177 @@ TEST_F(HttppsClientSocketTest, PartialAsyncHandshakeAndApplication) {
   EXPECT_EQ(0, read.GetResult(result));
 }
 
+TEST_F(HttppsClientSocketTest, KnownExtensionsAreRejectedInCertificateRequest) {
+  peer_.write_chunk = 65536;
+  for (uint16_t type : {0, 1, 10, 13, 15, 16, 17, 19, 20, 21, 25, 28,
+                        29, 30, 31, 32, 33, 41, 42, 43, 44, 45, 49, 51,
+                        55, 56, 58, 59, 0xff02}) {
+    SCOPED_TRACE(type);
+    peer_.send_initial_cr = true;
+    peer_.initial_cr_extra.clear();
+    U16(peer_.initial_cr_extra, type);
+    U16(peer_.initial_cr_extra, 0);
+    auto socket = Make();
+    TestCompletionCallback connected;
+    EXPECT_EQ(ERR_SSL_PROTOCOL_ERROR, connected.GetResult(socket->Connect(connected.callback())));
+    EXPECT_EQ(peer_.client_finished, 0);
+    EXPECT_EQ(peer_.last_client_alert, 47);
+  }
+}
+
+TEST_F(HttppsClientSocketTest, MalformedCertificateRequestVectorsSendDecodeError) {
+  peer_.write_chunk = 65536;
+  for (uint16_t type : {27, 34, 47, 48, 0xff04}) {
+    for (const Bytes& malformed : {Bytes{}, Bytes{0, 0}, Bytes{0, 3, 4},
+                                  Bytes{0, 2, 4, 3, 0}}) {
+      // Empty authority/filter lists are legal, unlike empty signature lists.
+      if ((type == 47 || type == 48) && malformed == Bytes({0, 0}))
+        continue;
+      SCOPED_TRACE(type);
+      peer_.send_initial_cr = true;
+      peer_.initial_cr_extra.clear();
+      U16(peer_.initial_cr_extra, type);
+      U16(peer_.initial_cr_extra, malformed.size());
+      Append(peer_.initial_cr_extra, malformed);
+      if (type == 34 || type == 0xff04) {
+        U16(peer_.initial_cr_extra, type == 34 ? 0xff04 : 34);
+        U16(peer_.initial_cr_extra, 4);
+        Append(peer_.initial_cr_extra, Bytes{0, 2, 4, 3});
+      }
+      auto socket = Make();
+      TestCompletionCallback connected;
+      EXPECT_EQ(ERR_SSL_PROTOCOL_ERROR,
+                connected.GetResult(socket->Connect(connected.callback())));
+      EXPECT_EQ(peer_.client_finished, 0);
+      EXPECT_EQ(peer_.last_client_alert, 50);
+    }
+  }
+}
+
+TEST_F(HttppsClientSocketTest, UserCanceledWaitsForCloseNotify) {
+  auto socket = Make();
+  TestCompletionCallback done;
+  ASSERT_EQ(OK, done.GetResult(socket->Connect(done.callback())));
+  peer_.Alert(90);
+  peer_.Application("still readable");
+  peer_.Alert(90);
+  peer_.Alert(0);
+  auto buffer = base::MakeRefCounted<IOBufferWithSize>(100);
+  EXPECT_EQ(14, done.GetResult(socket->Read(buffer.get(), 100, done.callback())));
+  EXPECT_EQ(0, done.GetResult(socket->Read(buffer.get(), 100, done.callback())));
+}
+
+TEST_F(HttppsClientSocketTest, NoAlpnRequiresExplicitHttp11Profile) {
+  peer_.write_chunk = 65536;
+  peer_.omit_alpn = true;
+  auto socket = Make();
+  TestCompletionCallback done;
+  EXPECT_EQ(ERR_SSL_PROTOCOL_ERROR, done.GetResult(socket->Connect(done.callback())));
+  EXPECT_EQ(peer_.last_client_alert, 109);
+  socket.reset();
+  httpps::ClientOptions options;
+  options.no_alpn_http11 = true;
+  socket = Make(true, nullptr, std::nullopt, false, options);
+  EXPECT_EQ(OK, done.GetResult(socket->Connect(done.callback())));
+  EXPECT_FALSE(peer_.client_offered_alpn);
+  EXPECT_EQ(socket->GetNegotiatedProtocol(), NextProto::kProtoHTTP11);
+}
+
+TEST_F(HttppsClientSocketTest, UnauthenticatedLibraryModeCannotReachBrowser) {
+  httpps::ClientOptions options;
+  options.allow_unauthenticated = true;
+  auto socket = Make(false, nullptr, std::nullopt, false, options);
+  TestCompletionCallback done;
+  EXPECT_EQ(ERR_SSL_PROTOCOL_ERROR, done.GetResult(socket->Connect(done.callback())));
+  EXPECT_EQ(peer_.client_hellos, 0);
+}
+
+TEST(HttppsLibraryTest, UnauthenticatedOptInStillChecksMacAndPreservesTicketLineage) {
+  for (bool bad_proof : {false, true}) {
+    Peer peer;
+    peer.mode = SYNCHRONOUS;
+    peer.write_chunk = peer.read_chunk = 65536;
+    peer.bad_proof = bad_proof;
+    httpps::ClientOptions options;
+    options.ordinary_httpps = false;
+    options.allow_unauthenticated = true;
+    httpps::Client client("localhost", {}, false, options);
+    ASSERT_TRUE(client.Start());
+    auto output = client.TakeOutput();
+    ASSERT_EQ(static_cast<int>(output.size()), peer.OnWrite(
+        std::string(output.begin(), output.end())).result);
+    ASSERT_TRUE(client.OutputFlushed());
+    const auto wire = peer.OnRead();
+    auto bytes = Octets(wire.data);
+    Bytes application;
+    bool accepted = true;
+    while (!bytes.empty() && accepted) {
+      ASSERT_GE(bytes.size(), 5u);
+      const size_t length = 5 + (size_t(bytes[3]) << 8) + bytes[4];
+      ASSERT_LE(length, bytes.size());
+      accepted = client.Receive(bytes.first(length), &application);
+      bytes = bytes.subspan(length);
+    }
+    EXPECT_EQ(accepted, !bad_proof);
+    if (bad_proof) {
+      EXPECT_FALSE(client.established());
+      continue;
+    }
+    EXPECT_EQ(client.authentication(), httpps::Authentication::kUnauthenticated);
+    EXPECT_FALSE(client.certificate_verification_pending());
+    output = client.TakeOutput();
+    ASSERT_FALSE(output.empty());
+    EXPECT_EQ(static_cast<int>(output.size()), peer.OnWrite(
+        std::string(output.begin(), output.end())).result);
+    EXPECT_TRUE(client.OutputFlushed());
+    EXPECT_TRUE(client.established());
+    auto ticket = peer.Ticket();
+    ticket.authentication = httpps::Authentication::kUnauthenticated;
+    httpps::Client authenticated("localhost", {peer.root});
+    EXPECT_FALSE(authenticated.Start(&ticket));
+    httpps::Client unauthenticated("localhost", {}, false, options);
+    EXPECT_TRUE(unauthenticated.Start(&ticket));
+    ticket.authentication = httpps::Authentication::kCertificate;
+    httpps::Client no_downgrade("localhost", {}, false, options);
+    EXPECT_FALSE(no_downgrade.Start(&ticket));
+  }
+}
+
+TEST_F(HttppsClientSocketTest, ApplicationAuthenticatorApiHasConnectionLifetime) {
+  auto socket = Make();
+  SSLClientSocket* api = socket.get();
+  Bytes request;
+  EXPECT_FALSE(api->RequestHttppsServerAuthenticator(Bytes{1}, {}, &request));
+  TestCompletionCallback done;
+  ASSERT_EQ(OK, done.GetResult(socket->Connect(done.callback())));
+  ASSERT_TRUE(api->RequestHttppsServerAuthenticator(Bytes{1}, {}, &request));
+  EXPECT_EQ(request.front(), 17);
+  EXPECT_TRUE(api->CancelHttppsAuthenticator(request));
+  EXPECT_FALSE(api->CancelHttppsAuthenticator(request));
+  EXPECT_FALSE(api->RequestHttppsServerAuthenticator(Bytes{1}, {}, &request));
+  EXPECT_FALSE(api->RequestHttppsServerAuthenticator(Bytes(256), {}, &request));
+  EXPECT_TRUE(peer_.received_application.empty());  // No invented HTTP framing.
+  socket->Disconnect();
+  EXPECT_FALSE(api->RequestHttppsServerAuthenticator(Bytes{2}, {}, &request));
+  bool authenticated = true;
+  EXPECT_FALSE(api->ValidateHttppsServerAuthenticator({}, {}, &authenticated));
+  EXPECT_FALSE(authenticated);
+}
+
+TEST_F(HttppsClientSocketTest, EarlyExporterApiRequiresLivePskConnection) {
+  peer_.resume_ticket = peer_.Ticket();
+  auto socket = Make(true, nullptr, peer_.resume_ticket, true);
+  SSLClientSocket* api = socket.get();
+  std::array<uint8_t, 32> exported{};
+  EXPECT_EQ(ERR_SOCKET_NOT_CONNECTED, api->ExportEarlyKeyingMaterial("test", {}, exported));
+  TestCompletionCallback done;
+  ASSERT_EQ(OK, done.GetResult(socket->Connect(done.callback())));
+  EXPECT_EQ(OK, api->ExportEarlyKeyingMaterial("test", {}, exported));
+  EXPECT_NE(exported, (std::array<uint8_t, 32>{}));
+  socket->Disconnect();
+  EXPECT_EQ(ERR_SOCKET_NOT_CONNECTED, api->ExportEarlyKeyingMaterial("test", {}, exported));
+}
+
 TEST_F(HttppsClientSocketTest, ResumptionWithoutEarlyDataCompletesHandshake) {
   peer_.resume_ticket = peer_.Ticket();
   auto socket = Make(true, nullptr, peer_.resume_ticket);
@@ -1149,6 +1478,87 @@ TEST_F(HttppsClientSocketTest, ResumptionWithoutEarlyDataCompletesHandshake) {
   ASSERT_TRUE(socket->GetSSLInfo(&info));
   EXPECT_EQ(SSLInfo::HANDSHAKE_RESUME, info.handshake_type);
   EXPECT_FALSE(info.early_data_accepted);
+}
+
+TEST_F(HttppsClientSocketTest, EarlyExporterDoesNotRequireEarlyDataPermission) {
+  peer_.resume_ticket = peer_.Ticket();
+  peer_.resume_ticket->max_early_data = 0;
+  auto socket = Make(true, nullptr, peer_.resume_ticket);
+  TestCompletionCallback connect;
+  ASSERT_EQ(OK, connect.GetResult(socket->Connect(connect.callback())));
+  std::array<uint8_t, 32> exported{};
+  EXPECT_EQ(OK, socket->ExportEarlyKeyingMaterial("test", {}, exported));
+  EXPECT_NE(exported, (std::array<uint8_t, 32>{}));
+  EXPECT_TRUE(peer_.received_early.empty());
+}
+
+TEST_F(HttppsClientSocketTest, RejectedTicketInvalidatesEarlyExporter) {
+  peer_.resume_ticket = peer_.Ticket();
+  peer_.reject_ticket = true;
+  auto socket = Make(true, nullptr, peer_.resume_ticket);
+  TestCompletionCallback connect;
+  ASSERT_EQ(OK, connect.GetResult(socket->Connect(connect.callback())));
+  std::array<uint8_t, 32> exported{};
+  EXPECT_EQ(ERR_SOCKET_NOT_CONNECTED,
+            socket->ExportEarlyKeyingMaterial("test", {}, exported));
+  SSLInfo info;
+  ASSERT_TRUE(socket->GetSSLInfo(&info));
+  EXPECT_EQ(SSLInfo::HANDSHAKE_FULL, info.handshake_type);
+}
+
+TEST(HttppsLibraryTest, TicketModesCannotBroadenAcrossSuccessors) {
+  Peer peer;
+  peer.mode = SYNCHRONOUS;
+  peer.write_chunk = peer.read_chunk = 65536;
+  auto ticket = peer.Ticket();
+  ticket.allowed_psk_modes = {1};
+  peer.resume_ticket = ticket;
+  httpps::ClientOptions options;
+  options.psk_modes = {0, 1};
+  httpps::Client client("localhost", {peer.root}, false, options);
+  ASSERT_TRUE(client.Start(&ticket));
+  auto output = client.TakeOutput();
+  const auto hello = ByteSpan(output).subspan(httpps::kPreface.size() + 5);
+  EXPECT_EQ(HelloExtension(hello, 45), (Bytes{1, 1}));
+  ASSERT_EQ(static_cast<int>(output.size()), peer.OnWrite(
+      std::string(output.begin(), output.end())).result);
+  ASSERT_TRUE(client.OutputFlushed());
+  auto receive = [&] {
+    const auto wire = peer.OnRead();
+    auto bytes = Octets(wire.data);
+    Bytes application;
+    while (!bytes.empty()) {
+      ASSERT_GE(bytes.size(), 5u);
+      const size_t length = 5 + (size_t(bytes[3]) << 8) + bytes[4];
+      ASSERT_LE(length, bytes.size());
+      ASSERT_TRUE(client.Receive(bytes.first(length), &application));
+      bytes = bytes.subspan(length);
+    }
+  };
+  receive();
+  output = client.TakeOutput();
+  ASSERT_FALSE(output.empty());
+  ASSERT_EQ(static_cast<int>(output.size()), peer.OnWrite(
+      std::string(output.begin(), output.end())).result);
+  ASSERT_TRUE(client.OutputFlushed());
+  ASSERT_TRUE(client.established());
+  peer.NewTicket();
+  receive();
+  auto successors = client.TakeTickets();
+  ASSERT_EQ(successors.size(), 1u);
+  EXPECT_EQ(successors.front().allowed_psk_modes, (std::vector<uint8_t>{1}));
+
+  options.psk_modes = {0};
+  httpps::Client fresh("localhost", {peer.root}, false, options);
+  ASSERT_TRUE(fresh.Start(&ticket, {}, true));
+  output = fresh.TakeOutput();
+  bool offered = true;
+  HelloExtension(ByteSpan(output).subspan(httpps::kPreface.size() + 5), 41, &offered);
+  EXPECT_FALSE(offered);
+  EXPECT_FALSE(fresh.early_data_available());
+  httpps::Client early("localhost", {peer.root}, false, options);
+  EXPECT_FALSE(early.Start(&ticket, Bytes{1}));
+  EXPECT_TRUE(early.TakeOutput().empty());
 }
 
 TEST_F(HttppsClientSocketTest, EarlyDataWaitsForCachedCertificateVerification) {

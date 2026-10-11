@@ -19,6 +19,7 @@
 #include "net/httpps/certificate_features.h"
 #include "net/ssl/ssl_connection_status_flags.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
+#include "third_party/boringssl/src/include/openssl/mem.h"
 
 namespace net {
 namespace {
@@ -158,7 +159,7 @@ int HttppsClientSocket::Connect(CompletionOnceCallback callback) {
 }
 
 int HttppsClientSocket::BeginHandshake() {
-  if (!options_.ordinary_httpps || options_.allow_integrity_only ||
+  if (!options_.ordinary_httpps || options_.allow_unauthenticated || options_.allow_integrity_only ||
       (options_.dane_policy && options_.dane_policy->port != destination_.port()) ||
       (options_.bootstrap && options_.bootstrap->provisioning_trust))
     return Abort(ERR_SSL_PROTOCOL_ERROR);
@@ -992,7 +993,43 @@ int HttppsClientSocket::ExportKeyingMaterial(
                                   out.size(), &bytes))
     return ERR_SOCKET_NOT_CONNECTED;
   out.copy_from(bytes);
+  OPENSSL_cleanse(bytes.data(), bytes.size());
   return OK;
+}
+int HttppsClientSocket::ExportEarlyKeyingMaterial(
+    std::string_view label, base::span<const uint8_t> context,
+    base::span<uint8_t> out) {
+  httpps::Bytes bytes;
+  if (!client_ || fatal_error_ != OK || !transport_->IsConnected() ||
+      !client_->ExportEarly(label, context, out.size(), &bytes))
+    return ERR_SOCKET_NOT_CONNECTED;
+  out.copy_from(bytes);
+  OPENSSL_cleanse(bytes.data(), bytes.size());
+  return OK;
+}
+bool HttppsClientSocket::RequestHttppsServerAuthenticator(
+    httpps::ByteSpan context,
+    const std::map<uint16_t, httpps::Bytes>& extensions, httpps::Bytes* request) {
+  return IsConnected() && client_ && client_->established() && request &&
+      client_->RequestServerAuthenticator(context, extensions, request);
+}
+bool HttppsClientSocket::CancelHttppsAuthenticator(httpps::ByteSpan request) {
+  return IsConnected() && client_ && client_->established() &&
+      client_->CancelAuthenticator(request);
+}
+bool HttppsClientSocket::CreateHttppsClientAuthenticator(
+    httpps::ByteSpan request, const httpps::ClientCredential* credential,
+    httpps::Bytes* authenticator) {
+  return IsConnected() && client_ && client_->established() && authenticator &&
+      client_->AuthenticateClient(request, credential, authenticator);
+}
+bool HttppsClientSocket::ValidateHttppsServerAuthenticator(
+    httpps::ByteSpan authenticator, const httpps::AuthenticatorValidator& validator,
+    bool* authenticated, httpps::ByteSpan exact_request) {
+  if (authenticated) *authenticated = false;
+  return IsConnected() && client_ && client_->established() && authenticated &&
+      validator && client_->ValidateServerAuthenticator(
+          authenticator, validator, authenticated, exact_request);
 }
 std::vector<uint8_t> HttppsClientSocket::GetECHRetryConfigs() {
   return {};

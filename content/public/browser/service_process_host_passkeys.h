@@ -27,6 +27,7 @@ class PlatformRuntimeHost;
 namespace content {
 class VideoCaptureServiceLauncher;
 class WebNNBrowserHostImpl;
+class NetworkServiceInstancePrivate;
 shape_detection::mojom::ShapeDetectionService* GetShapeDetectionService();
 
 class ServiceProcessHostPreloadLibraries {
@@ -42,6 +43,7 @@ class ServiceProcessHostPreloadLibraries {
   friend class on_device_translation::OnDeviceTranslationServiceLauncherImpl;
   friend class request_header_integrity::PlatformRuntimeHost;
   friend class content::WebNNBrowserHostImpl;
+  friend class content::NetworkServiceInstancePrivate;
   friend shape_detection::mojom::ShapeDetectionService*
   content::GetShapeDetectionService();
 
@@ -54,6 +56,8 @@ class ServiceProcessHostPreloadLibraries {
                            PreloadLibraryModName);
   FRIEND_TEST_ALL_PREFIXES(ServiceProcessHostBrowserTest,
                            PreloadLibraryBadPath);
+  FRIEND_TEST_ALL_PREFIXES(ServiceProcessHostBrowserTest,
+                           PreloadLibraryOptionalFailures);
 };
 
 class ServiceProcessHostGpuClient {

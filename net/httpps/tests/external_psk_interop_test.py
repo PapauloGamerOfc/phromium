@@ -28,6 +28,7 @@ async def main(args):
                  for mode, combined, extra in ((0, False, "plain"), (1, False, "multiple"),
                                                 (1, True, "plain"), (1, False, "early"),
                                                 (1, False, "resume"), (1, True, "resume"))]
+        cases += [(0x1301, "ext", 1, combined, "lost-ticket") for combined in (False, True)]
         for suite, kind, mode, combined, extra in cases:
             if kind == "imp":
                 key = import_psk(bytes(range(48)), b"native identity", b"native fixture scope",
@@ -51,11 +52,12 @@ async def main(args):
 
                 try:
                     async with asyncio.timeout(8):
+                        lost_ticket = extra == "lost-ticket" and bool(results)
                         channel = await server_handshake(
-                            reader, writer, credentials, "localhost", external_psks=(key,),
+                            reader, writer, credentials, "localhost", external_psks=() if lost_ticket else (key,),
                             cipher_suites=(suite,), psk_modes=(mode,), max_early_data=16384,
                             external_early_replay=lambda key, digest: True, on_early_data=on_early,
-                            ticket_store=store)
+                            ticket_store=TicketStore() if lost_ticket else store)
                         request = b"".join(early) or await channel.recv()
                         assert request.startswith(b"GET / HTTP/1.1\r\n")
                         results.append(channel.early_data_accepted)
@@ -76,11 +78,15 @@ async def main(args):
                 process = await asyncio.create_subprocess_exec(
                     str(args.native.resolve()), "--get-psk", "localhost", str(server.sockets[0].getsockname()[1]),
                     str(root), key.identity.hex(), key.psk.hex(), f"{suite:x}", str(mode), kind,
-                    "combined" if combined else "plain", extra,
+                    "combined" if combined else "plain", "resume" if extra == "lost-ticket" else extra,
                     stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
                 output, error = await asyncio.wait_for(process.communicate(), 15)
                 if handlers:
                     await asyncio.gather(*handlers)
+                if extra == "lost-ticket":
+                    assert process.returncode != 0 and errors, (error, errors)
+                    assert results == [False], results  # No certificate-only application exchange.
+                    continue
                 assert process.returncode == 0 and not errors, ((suite, kind, mode, combined, extra), error, errors)
                 assert b"HTTP/1.1 200 OK" in output
                 assert results == ([False, False, True] if extra == "resume" else [extra == "early"]), results

@@ -238,7 +238,8 @@ delegation-grant signatures are negotiated independently of online MACs.
 
 Browser connections enable bounded certificate compression and delegation;
 cached certificate bytes come only from the same partitioned ticket context and
-receive fresh validation. Optional RPK/PSK provisioning is an embedding API, not
+receive fresh validation. Optional RPK/PSK provisioning uses an embedding API or
+the explicit local profile file, not
 a web-facing capability. Non-X.509 identities do not manufacture certificates or
 claim CA validation in the browser UI. HTTPPS does not coalesce HTTP/2 connections
 across origins: an existing ordinary connection cannot bypass another origin's
@@ -276,8 +277,39 @@ profiles for an exact origin/port and privacy/network/route partition. It does
 not expose secrets to web content, change HTTPS, or apply an origin's account to
 a proxy. Replacing or clearing a profile invalidates outstanding tickets and
 pooled connections. A one-use pin exchange must be created per socket rather
-than stored in these reusable options. There is no graphical profile/credential
-importer yet; a programmatic embedding API is not such an importer.
+than stored in these reusable options: `continuity_pinning` asks the context to
+create that attempt from a separate exact-partition cache, forces a fresh
+credential handshake and disables early data. An unrelated partition cannot
+erase or reuse its pin. Explicit profile replacement/clearing is trusted local
+continuity recovery; pins are not persisted across browser restarts.
+
+`SSLClientContext::SetHttppsProfileProvider` connects trusted provisioning to the
+first actual socket in each partition. No profile means ordinary validation;
+an invalid selected profile fails closed before ClientHello. Origin roots and
+client identities never become proxy or HTTPS roots/credentials. Its local
+resource limit refuses additional configured partitions instead of evicting
+live continuity state.
+
+The browser exposes this through an explicit local `--httpps-profile-file`
+configuration, scoped to the selected regular browser profile and exact origin
+partitions. See [local HTTPPS profiles](httpps-profiles.md) for the schema,
+credential handling, native-provider policy and production-path tests.
+
+The real `SSLClientSocket` interface exposes bounded application-authenticator
+creation, cancellation, verification and early export to trusted internal
+callers. These synchronous operations neither write HTTP bytes nor expose keys
+to JavaScript. Applications must negotiate their own framing and independently
+authorize the returned identity. Requests are scoped to that connection, and
+cancellation, failure and disconnect cannot reopen a consumed context.
+
+`no_alpn_http11` is an explicit profile for a service that has separately agreed
+to HTTP/1.1 without ALPN. It emits no ALPN extension, rejects unsolicited ALPN
+and never implies HTTP/2. The standalone engine additionally exposes the spec's
+explicit `allow_unauthenticated` library mode, but only with
+`ordinary_httpps=false`; browser sockets reject it before ClientHello. It still
+checks credential structure, algorithm compatibility, delegated-grant crypto,
+ServerMAC and Finished. It reports `kUnauthenticated`, preserves that ticket
+lineage and cannot convert it into authenticated browser or combined-PSK trust.
 
 Selected password and CT/DANE/ITS policy data are copied into this context, not
 aliased to a caller's mutable policy object. To update them, call the setter
@@ -357,7 +389,7 @@ client/server and native engine test IPv4 and IPv6 full/resumed/early exchanges.
   for ordinary HTTP/HTTPS is unchanged. HTTPPS Alt-Svc is ignored.
 - Device-bound sessions, service workers, WebSockets, early hints and generated
   script-code caches have not been opted into HTTPPS in this alpha.
-- Optional profiles require explicit trusted embedding configuration; they are
+- Optional profiles require explicit trusted local or embedding configuration; they are
   not implicitly enabled by a website. Native engine interoperability tests,
   browser adapter tests and complete browser navigation tests are separate
   validation scopes. Graphical identity/profile selection remains unimplemented.
@@ -435,7 +467,54 @@ the distinction between engine, async-adapter and real-browser coverage.
 
 ### Local validation status
 
-#### Optional-profile expansion: 2026-10-11
+#### Conformance and local-profile completion: 2026-10-11
+
+The Windows x64 browser and `net_unittests` were rebuilt. All **1,074 focused**
+and **9,806 broader** network, certificate, proxy, cookie, HTTP and SSL tests
+passed with two jobs and zero automatic retries. These selections overlap;
+do not add them as distinct tests. Seven failures in the first broad run came
+from Git's Windows CRLF conversion of five byte-compared HTTP text fixtures.
+Explicit LF attributes preserve their existing payloads; no assertion was
+weakened. The complete broad selection passed after correcting the checkout.
+
+The production local-profile file/IPC path passed **28 real-browser cases**
+with upstream sandbox defaults and the same **28 cases** with
+`NetworkServiceSandbox` explicitly enabled. This includes client MAC,
+RPK/PSK/imported and combined PSK, X448, SM, GOST, password and mixed
+authentication, CT v2, DNSSEC/DANE and ITS, with negative credential/evidence
+cases. Missing and invalid provider DLLs refuse their HTTPPS profile without
+crashing the network service or breaking normal HTTP navigation. The DLLs
+were staged as public executable dependencies under the browser output with
+inherited sandbox read/execute access; credential files stayed private.
+Neither original-file ACLs nor sandbox policy were changed.
+
+The general real-browser suite additionally passed **38 assertions** covering
+HTTP/2 multiplexing, actual resumption, 0-RTT received before client Finished,
+HTTP 425 retry, persistent cookie isolation and certificate rejection before
+HTTP application data. Its 15 harness self-tests include a Windows regression
+for a transiently locked DevTools discovery file. Nine branding checks passed.
+
+Standalone provider interoperability, independent certificate/evidence oracles
+and the pinned-spec oracle supplement these integrated checks. These results
+do not imply a formal security audit, full-browser validation on Linux/macOS,
+installer validation, or automatic provisioning of optional credentials.
+The optional-preload `content_browsertests` source was separately compiled;
+its complete test executable was not linked or run. Historical service,
+component and earlier-browser results below remain historical.
+
+The matching reference-server revision is
+`aa3be3ecc6764e282bf4292f95532a6557a0fdf7`; its final native suite ran 534
+tests with two Windows-specific skips. The browser CI and clean-checkout
+integration harness pin that revision. The independent specification oracle
+pins `dee31da9826e10bd590f58acc0f9f46143505fd1`.
+Current local logs are `out/Phromium/spec-completion-focused-after-alert.log`,
+`out/Phromium/spec-completion-broad-after-alert.log`,
+`out/Phromium/profile-final-default.log`,
+`out/Phromium/profile-final-sandbox.log`,
+`out/Phromium/profile-final-harness.log` and
+`out/Phromium/spec-completion-browser-pinned.json`.
+
+#### Historical baseline — optional-profile expansion: 2026-10-11
 
 The complete Windows x64 browser and `net_unittests` were rebuilt successfully.
 All **894 targeted** network/HTTPPS checks and **7,236 broader** proxy, cookie,

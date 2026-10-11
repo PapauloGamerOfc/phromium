@@ -20,4 +20,8 @@ struct UtilityConfig {
   // This cannot be a platform<handle> because this structure is manually
   // marshalled to the utility process by the sandbox.
   uint32 bootstrap_event_handle;
+
+  // Required preloads abort startup on a load failure. Optional preloads leave
+  // availability checks to the service without changing its sandbox policy.
+  bool preload_libraries_required = true;
 };

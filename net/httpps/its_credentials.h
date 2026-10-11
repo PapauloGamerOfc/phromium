@@ -10,6 +10,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 #include "net/httpps/portable.h"
 #if defined(PHROMIUM_HTTPPS_STANDALONE)
@@ -58,6 +59,9 @@ struct HTTPPS_ITS_EXPORT ITSPolicy {
   std::vector<ITSBytes> authorized_leaves;
   std::vector<ITSBytes> revoked;
   std::vector<ITSBytes> allowed_regions;
+  // Exact COER (parent, child) region pairs authenticated by a locally trusted
+  // geometry authority. Not peer data or trust on first use. Bound into tickets.
+  std::vector<std::pair<ITSBytes, ITSBytes>> geographic_containment;
   uint64_t inventory_valid_until = 0;  // IEEE Time64, NOT Unix time
   uint64_t max_grant_lifetime_microseconds = 0;
   // Explicit deployment-maintained time offset; no implicit leap-second guess.

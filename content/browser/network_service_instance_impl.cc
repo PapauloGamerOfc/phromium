@@ -14,6 +14,7 @@
 #include "base/base_paths.h"
 #include "base/callback_list.h"
 #include "base/check.h"
+#include "base/check_op.h"
 #include "base/command_line.h"
 #include "base/environment.h"
 #include "base/feature_list.h"
@@ -94,6 +95,8 @@
 
 #if BUILDFLAG(IS_WIN)
 #include "content/browser/network/network_service_process_tracker_win.h"
+#include "content/public/browser/network_service_preloads.h"
+#include "content/public/browser/service_process_host_passkeys.h"
 #endif
 
 #if BUILDFLAG(IS_ANDROID) || BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS)
@@ -132,6 +135,18 @@ ObservedServiceRemote<network::mojom::NetworkService>*
     g_observed_network_service = nullptr;
 network::NetworkConnectionTracker* g_network_connection_tracker;
 bool g_network_service_is_responding = false;
+
+#if BUILDFLAG(IS_WIN)
+struct NetworkPreloads {
+  std::vector<base::FilePath> libraries;
+  bool configured = false;
+};
+
+NetworkPreloads& GetNetworkPreloads() {
+  static base::NoDestructor<NetworkPreloads> state;
+  return *state;
+}
+#endif
 
 // When enabled, sets the in-process network service thread to
 // base::ThreadType::kPresentation during startup.
@@ -604,6 +619,16 @@ net::NetLogFileFormat GetNetLogFileFormatFromCommandLineForTesting(  // IN-TEST
 
 class NetworkServiceInstancePrivate {
  public:
+#if BUILDFLAG(IS_WIN)
+  static void ApplyPreloads(ServiceProcessHost::Options& options) {
+    const auto& libraries = GetNetworkPreloads().libraries;
+    if (!libraries.empty()) {
+      options.WithPreloadedLibraries(
+          libraries, ServiceProcessHostPreloadLibraries::GetPassKey(),
+          /*required=*/false);
+    }
+  }
+#endif
   // Opens the specified file, blocking until the file is open. Used to open
   // files specified by net::switches::kLogNetLog or
   // network::switches::kSSLKeyLogFile. Since these arguments can be used to
@@ -620,6 +645,25 @@ class NetworkServiceInstancePrivate {
     return base::File(path, file_flags);
   }
 };
+
+#if BUILDFLAG(IS_WIN)
+void SetNetworkServicePreloadLibraries(std::vector<base::FilePath> libraries) {
+  auto& state = GetNetworkPreloads();
+  CHECK(!state.configured);
+  CHECK(!g_observed_network_service);
+  // At most six explicitly named providers per bounded local profile. This is
+  // a startup resource budget, not a new peer-controlled loader interface.
+  CHECK_LE(libraries.size(), 384u);
+  for (const auto& path : libraries) {
+    CHECK(path.IsAbsolute());
+    CHECK(!path.ReferencesParent());
+    CHECK_LE(path.value().size(), 32767u);
+    CHECK_EQ(path.value().find(L'\0'), std::wstring::npos);
+  }
+  state.libraries = std::move(libraries);
+  state.configured = true;
+}
+#endif
 
 network::mojom::NetworkService* GetNetworkService() {
   if (!g_observed_network_service) {
@@ -653,6 +697,9 @@ network::mojom::NetworkService* GetNetworkService() {
                           "restarting service.";
           ServiceProcessHost::Options options;
           options.WithDisplayName(u"Network Service");
+#if BUILDFLAG(IS_WIN)
+          NetworkServiceInstancePrivate::ApplyPreloads(options);
+#endif
           if (g_network_service_crashes_on_next_startup) {
             g_network_service_crashes_on_next_startup = false;
             options.WithExtraCommandLineSwitches(

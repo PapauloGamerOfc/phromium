@@ -143,8 +143,10 @@ bool ParseRequest(ByteSpan wire, Request* request) {
   if (share == request->extensions.end() || share->second.size() != 32 ||
       request->extensions.count(request->server ? 0xff03 : 0xff02))
     return false;
-  for (uint16_t misplaced : {10, 16, 19, 20, 21, 28, 32, 41, 42, 43, 44, 45, 49, 51})
-    if (request->extensions.count(misplaced))
+  for (const auto& [code, data] : request->extensions)
+    if (!RequestExtensionAllowed(code, request->server
+            ? RequestExtensionContext::kServerAuthenticator
+            : RequestExtensionContext::kClientAuthenticator))
       return false;
   if (!request->server && request->extensions.count(0))
     return false;

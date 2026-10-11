@@ -7,6 +7,8 @@
 #include <iostream>
 #include <barrier>
 #include <thread>
+#include <chrono>
+#include <filesystem>
 
 namespace {
 using namespace net::httpps;
@@ -149,6 +151,25 @@ void RunGostProviderTests(std::string_view library, std::string_view module) {
   using namespace net::httpps;
   auto provider = NativeProvider::Load(library, module);
   Check(provider && provider->SupportsGost(), "explicit GOST capability");
+#if defined(_WIN32)
+  // A trusted JSON profile encodes paths as UTF-8, including characters outside
+  // the current Windows ANSI code page. This is intentionally constructed here
+  // rather than passed through the test driver's narrow main(argc, argv).
+  auto copied_module = std::filesystem::temp_directory_path() /
+      (std::filesystem::path(u8"httpps-gost-\u6d4b\u8bd5-\u00e7-").native() +
+       std::to_wstring(std::chrono::steady_clock::now().time_since_epoch().count()) + L".dll");
+  Check(std::filesystem::copy_file(std::filesystem::u8path(module), copied_module),
+        "copy explicitly selected Unicode GOST fixture");
+  const auto utf8 = copied_module.u8string();
+  {
+    const auto unicode_provider = NativeProvider::Load(library,
+        std::string_view(reinterpret_cast<const char*>(utf8.data()), utf8.size()));
+    Check(unicode_provider && unicode_provider->SupportsGost() &&
+          unicode_provider->GostHash({}) == provider->GostHash({}),
+          "Unicode GOST module exact load and private-context hashing");
+  }
+  Check(std::filesystem::remove(copied_module), "Unicode GOST fixture releases DLL before cleanup");
+#endif
   Bytes key(32); for (size_t i = 0; i < key.size(); ++i) key[i] = static_cast<uint8_t>(i);
   const auto message = Hex("0126bdb87800af214341456563780100");
   Check(provider->GostMac(key, message) == Hex("a1aa5f7de402d7b3d323f2991c8d4534013137010a83754fd0af6d7cd4922ed9"), "RFC7836 Streebog256 HMAC");

@@ -6,6 +6,7 @@
 
 Three real connections cover fresh server MAC authentication, PSK resumption
 with P-256 HelloRetryRequest and its binder, and an accepted 0-RTT request.
+Four independent malformed SH/HRR peers also require the exact version alert.
 The only tls20-server import generates temporary certificates; wire codecs,
 transcript construction, KDF, exporter, AES-GCM and state transitions below
 do not use the server's implementation. This is not a security proof.
@@ -235,7 +236,64 @@ async def main(args):
         finally:
             server.close()
             await server.wait_closed()
-    print("Current-spec oracle passed: MAC, KDF, HRR, binders, exporters, tickets, 0-RTT, KeyUpdate")
+
+        # Handcrafted wire, independent of the reference-server parser/encoder:
+        # invalid legacy_version is protocol_version, while selecting a version
+        # absent from the offer is illegal_parameter (including an HRR).
+        for retry, legacy in ((False, True), (True, True), (False, False), (True, False)):
+            rejected, rejection_errors = [], []
+            finished = asyncio.Event()
+            expected_alert = 70 if legacy else 47
+
+            async def malformed_peer(reader, writer):
+                try:
+                    async with asyncio.timeout(5):
+                        assert await reader.readexactly(len(spec.BOOTSTRAP)) == spec.BOOTSTRAP
+                        ext_values((await record(reader))[5:])
+                        version = spec.NEGOTIATED_VERSION if legacy else 0x0304
+                        extensions = extension(43, version.to_bytes(2, "big"))
+                        if retry:
+                            extensions += extension(51, b"\x00\x17")
+                        else:
+                            public = x25519.X25519PrivateKey.generate().public_key().public_bytes_raw()
+                            extensions += extension(51, b"\x00\x1d" + vec(public))
+                        legacy_version = b"\x03\x02" if legacy else b"\x03\x03"
+                        hello = frame(2, legacy_version + (retry_random if retry else os.urandom(32))
+                                      + b"\x00\x13\x01\x00" + vec(extensions))
+                        writer.write(plain(hello))
+                        await writer.drain()
+                        alert = await record(reader)
+                        assert alert == bytes([21, 3, 3, 0, 2, 2, expected_alert]), alert
+                        rejected.append(expected_alert)
+                except BaseException as failure:
+                    rejection_errors.append(repr(failure))
+                finally:
+                    writer.close()
+                    try:
+                        await writer.wait_closed()
+                    except OSError:
+                        pass
+                    finished.set()
+
+            server = await asyncio.start_server(malformed_peer, "127.0.0.1", 0)
+            try:
+                process = await asyncio.create_subprocess_exec(str(args.native.resolve()), "--get",
+                    "localhost", str(server.sockets[0].getsockname()[1]), str(root),
+                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+                try:
+                    output, error = await asyncio.wait_for(process.communicate(), 10)
+                except BaseException:
+                    process.kill()
+                    await process.wait()
+                    raise
+                await asyncio.wait_for(finished.wait(), 6)
+                assert process.returncode != 0 and not output, (retry, legacy, output, error)
+                assert rejected == [expected_alert] and not rejection_errors, (
+                    retry, legacy, rejected, rejection_errors)
+            finally:
+                server.close()
+                await server.wait_closed()
+    print("Current-spec oracle passed: MAC, KDF, HRR, binders, exporters, tickets, 0-RTT, KeyUpdate; 4 exact version-alert negatives")
 
 
 if __name__ == "__main__":

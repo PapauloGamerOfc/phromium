@@ -150,6 +150,8 @@ static_library("common_lib") {
     "common_message_generator.cc",
     "common_message_generator.h",
     "content_restriction.h",
+    "httpps_profiles.cc",
+    "httpps_profiles.h",
     "crash_keys.cc",
     "crash_keys.h",
     "google_url_loader_throttle.cc",

@@ -230,6 +230,14 @@ async def main(args):
             response = await run("--get-resume", "localhost", secure_port, root)
             assert response.count(body) == 3
             assert hits == 12 and early_hits == 1, (hits, early_hits)
+            # Explicit generic-library mode accepts no CA identity, but its
+            # full and resumed connections must retain the unauthenticated
+            # label. Ordinary HTTPPS above still rejects this unrelated CA.
+            response = await run("--get-unauthenticated", "localhost", secure_port, wrong_root)
+            assert response.endswith(body)
+            response = await run("--get-unauthenticated-resume", "localhost", secure_port, wrong_root)
+            assert response.count(body) == 3
+            assert hits == 16
         finally:
             await proxy.close()
             http.close()

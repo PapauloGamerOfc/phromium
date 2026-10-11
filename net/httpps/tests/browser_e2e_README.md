@@ -8,7 +8,7 @@ disables the sandbox, or bypasses a browser certificate error through CDP.
 
 Prerequisites: Python 3.11+, the reference server's `requirements-dev.txt`
 (including the `h2` fixture dependency), and a clean checkout of
-`tls20-server` at `18e04497259e21549c996dfb8ad45ea4ce590760`. The revision is
+`tls20-server` at `aa3be3ecc6764e282bf4292f95532a6557a0fdf7`. The revision is
 checked before importing its protocol implementation. No dependencies are
 downloaded by the script.
 
@@ -86,10 +86,10 @@ Initial client-certificate authentication has a separate scope: the portable
 engine accepts an explicitly supplied `ClientCredential` and produces the
 client's X25519 MAC proof (`0xfe01`). With no selected credential it answers an
 initial CertificateRequest with an empty Certificate, which may be accepted or
-rejected by the server's optional/required-client policy. The browser currently
-does not select or prompt for a client identity. Its default is that empty
-response; the real-browser harness does not test successful client identity
-selection through a GUI. Embedders can explicitly provision an identity through
+rejected by the server's optional/required-client policy. The browser does not
+automatically discover or prompt for a client identity. Its default is that empty
+response; the production-profile tests below cover an explicitly provisioned
+identity, not selection through a GUI. Embedders can explicitly provision an identity through
 `SSLClientContext::SetHttppsClientCredential`, scoped to the exact origin,
 network/privacy context and proxy role. That route supports initial/PHA MAC
 authentication; HTTP/2 never advertises or permits TLS PHA. The default remains
@@ -143,6 +143,54 @@ exceptions. A full run of these binaries is recommended after the targeted pass.
 List tests with `--gtest_list_tests` before interpreting a filtered run: an empty
 matching set is not a passing validation. The build may require separate test
 data targets depending on the GN configuration.
+
+## Production profile provisioning tests
+
+`browser_profiles_test.py` launches the actual browser with temporary,
+origin/partition-scoped `--httpps-profile-file` files. Only the file path appears
+on the command line; fixture passwords and private keys stay in the temporary
+file. These tests do not disable the browser sandbox or certificate validation,
+and do not change the OS trust store.
+
+```powershell
+python net/httpps/tests/browser_profiles_test.py --browser out/Default/chrome.exe --server-source ../tls20-server
+python net/httpps/tests/browser_profiles_test.py --browser out/Default/chrome.exe --server-source ../tls20-server --manifest ../tls20-server/build/repro-providers/providers.json
+python net/httpps/tests/browser_profiles_test.py --browser out/Default/chrome.exe --server-source ../tls20-server --manifest ../tls20-server/build/repro-providers/providers.json --enable-network-sandbox
+```
+
+On Windows, providers loaded by the network service also need read/execute
+access under its sandbox identity. An arbitrary sibling build directory need
+not have the browser output's AppContainer ACL. For these public test libraries,
+add `--stage-native-libraries` to copy exactly the five manifest-selected DLLs
+and the existing `openssl_prefix/bin/libssl-3-x64.dll` dependency into a fresh
+UUID-named subdirectory of the browser output. It inherits the output ACL,
+prints only a boolean diagnostic for restricted-AppContainer inherited access,
+and is removed after the test. No existing ACL is changed; no PATH search is
+used. Profile files, passwords and private keys remain in a separate private
+temporary directory and are never staged alongside the libraries. A normal
+Windows `TemporaryDirectory` has a deliberately private DACL, so it is unsuitable
+for this public-library staging even when placed under the browser output.
+Run both the default-policy and explicit-sandbox commands with the same staging
+option when comparing results. Use `--case native-x448` for a focused load check.
+
+The base cases cover private roots, explicit no-ALPN HTTP/1.1, client MAC
+credentials, raw keys, direct/imported/combined PSKs, HRR cookies, hybrid key
+exchange, signed/tampered CT v2 evidence, and invalid
+credentials/configuration/partition scope. Missing or invalid DLL profiles must
+reject HTTPPS without crashing the network service; normal HTTP navigation is
+checked before and after each rejection. The provider
+manifest additionally exercises actual network-service DLL loading for X448,
+SM, GOST, password/mixed authentication, DNSSEC/DANE and IEEE ITS, including
+wrong-password, wrong-TLSA-association and revoked-ITS-grant negatives.
+ITS requires freshly generated fixtures: the live grants deliberately expire
+after 25 minutes, so regenerate them after a long browser build rather than
+weakening expiry checks. A portable-engine provider test is not a substitute for these
+browser navigation checks.
+
+Record the default-policy and explicit `NetworkServiceSandbox` runs separately:
+absence of `--no-sandbox` alone does not prove the network-service sandbox is
+enabled on a platform whose upstream feature default is disabled. The last
+command explicitly enables it without disabling other mitigations.
 
 ## Test-harness self-checks
 

@@ -3243,6 +3243,7 @@ URLRequestContextOwner NetworkContext::MakeURLRequestContext(
       copy_httpps_roots(params_->httpps_trust_anchors);
   session_params.httpps_proxy_trust_anchors =
       copy_httpps_roots(params_->httpps_proxy_trust_anchors);
+  session_params.httpps_profile_config = params_->httpps_profile_config;
 
   builder.set_http_network_session_params(session_params);
   builder.set_quic_context(std::move(quic_context));

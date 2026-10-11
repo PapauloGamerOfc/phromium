@@ -126,7 +126,8 @@ class CONTENT_EXPORT UtilityProcessHost final
 #if BUILDFLAG(IS_WIN)
     // Specifies libraries to preload before the sandbox is locked down. Paths
     // should be absolute.
-    Options& WithPreloadLibraries(const std::vector<base::FilePath>& preloads);
+    Options& WithPreloadLibraries(const std::vector<base::FilePath>& preloads,
+                                 bool required = true);
 #endif  // BUILDFLAG(IS_WIN)
 
     // Allows the child process to bind viz.mojom.Gpu.
@@ -191,6 +192,7 @@ class CONTENT_EXPORT UtilityProcessHost final
 #if BUILDFLAG(IS_WIN)
     // Libraries to load before sandbox lockdown. Only used on Windows.
     std::vector<base::FilePath> preload_libraries_;
+    bool preload_libraries_required_ = true;
 #endif  // BUILDFLAG(IS_WIN)
 
 #if BUILDFLAG(USE_ZYGOTE)

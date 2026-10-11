@@ -127,9 +127,13 @@ class CONTENT_EXPORT ServiceProcessHost {
     // Note that preloading does not occur with --no-sandbox - hence the need to
     // load in the utility with the full path - this api exists to make the
     // libraries available for later loading in the sandbox.
+    // A failed preload aborts startup unless `required` is false. Optional
+    // callers must still handle a failed load after lockdown; this does not
+    // grant any additional sandbox access or guarantee library availability.
     Options& WithPreloadedLibraries(
         std::vector<base::FilePath> preload_libraries,
-        base::PassKey<ServiceProcessHostPreloadLibraries> passkey);
+        base::PassKey<ServiceProcessHostPreloadLibraries> passkey,
+        bool required = true);
 #endif  // BUILDFLAG(IS_WIN)
 
     // Allows the viz.mojom.Gpu client to be bound via the process host on
@@ -155,6 +159,7 @@ class CONTENT_EXPORT ServiceProcessHost {
     base::WeakPtr<Observer> observer;
 #if BUILDFLAG(IS_WIN)
     std::vector<base::FilePath> preload_libraries;
+    bool preload_libraries_required = true;
 #endif  // BUILDFLAG(IS_WIN)
     std::optional<bool> allow_gpu_client;
     std::optional<base::Process::Priority> priority;

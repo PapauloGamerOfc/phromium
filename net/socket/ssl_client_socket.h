@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "base/containers/flat_set.h"
+#include "base/functional/callback.h"
 #include "base/memory/raw_ptr.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
@@ -20,6 +21,7 @@
 #include "net/base/net_export.h"
 #include "net/cert/cert_database.h"
 #include "net/cert/cert_verifier.h"
+#include "net/httpps/draft01.h"
 #include "net/socket/ssl_socket.h"
 #include "net/ssl/ssl_client_auth_cache.h"
 #include "net/ssl/ssl_config_service.h"
@@ -120,6 +122,20 @@ class NET_EXPORT SSLClientSocket : public SSLSocket {
   // advertised in DNS.
   virtual std::vector<std::vector<uint8_t>> GetServerTrustAnchorIDs() = 0;
 
+  // Trusted embedding APIs only. They create/consume bounded application
+  // messages; the caller must negotiate and frame them in its own protocol.
+  // They never inject bytes into HTTP, expose secrets to script, or perform I/O.
+  virtual int ExportEarlyKeyingMaterial(std::string_view label,
+      base::span<const uint8_t> context, base::span<uint8_t> out);
+  virtual bool RequestHttppsServerAuthenticator(httpps::ByteSpan context,
+      const std::map<uint16_t, httpps::Bytes>& extensions, httpps::Bytes* request);
+  virtual bool CancelHttppsAuthenticator(httpps::ByteSpan request);
+  virtual bool CreateHttppsClientAuthenticator(httpps::ByteSpan request,
+      const httpps::ClientCredential* credential, httpps::Bytes* authenticator);
+  virtual bool ValidateHttppsServerAuthenticator(httpps::ByteSpan authenticator,
+      const httpps::AuthenticatorValidator& validator, bool* authenticated,
+      httpps::ByteSpan exact_request = {});
+
   // Log SSL key material to |logger|. Must be called before any
   // SSLClientSockets are created.
   //
@@ -203,6 +219,15 @@ class NET_EXPORT SSLClientContext : public SSLConfigService::Observer,
   bool SetHttppsOptions(const HostPortPair& server, const SSLConfig& config,
                         const httpps::ClientOptions& options);
   bool ClearHttppsOptions(const HostPortPair& server, const SSLConfig& config);
+
+  // Called on first use of each exact origin/privacy/network/route partition.
+  // nullopt: no configured profile; false: fail closed; true: prepared profile.
+  // The trusted embedder owns file loading, policy and secret provisioning.
+  // Never called for HTTPS or proxy-role connections. Install before use.
+  using HttppsProfileProvider = base::RepeatingCallback<std::optional<bool>(
+      const HostPortPair&, const SSLConfig&, httpps::ClientOptions*,
+      std::optional<httpps::ClientCredential>*, std::vector<std::string>*)>;
+  void SetHttppsProfileProvider(HttppsProfileProvider provider);
 
   SSLConfigService* ssl_config_service() { return ssl_config_service_; }
   CertVerifier* cert_verifier() { return cert_verifier_; }
@@ -316,6 +341,9 @@ class NET_EXPORT SSLClientContext : public SSLConfigService::Observer,
       const HostPortPair& server, const SSLConfig& config) const;
   const httpps::ClientOptions* GetHttppsOptions(
       const HostPortPair& server, const SSLConfig& config) const;
+  bool PrepareHttppsOptions(const HostPortPair& server, const SSLConfig& config,
+      const httpps::ClientOptions& options, httpps::ClientOptions* prepared) const;
+  bool ProvisionHttppsProfile(const HostPortPair& server, const SSLConfig& config);
 
   std::vector<std::string> httpps_trust_anchors_;
   std::vector<std::string> httpps_proxy_trust_anchors_;

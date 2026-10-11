@@ -361,6 +361,11 @@ struct NetworkContextParams {
   // Default browser trust applies; private origin roots are never a fallback.
   array<array<uint8>> httpps_proxy_trust_anchors;
 
+  // Trusted browser-provisioned credentials/policy. Never exposed to renderers,
+  // Web APIs, diagnostic logs or proxy connections. Null means not configured;
+  // a malformed (including empty) configured value fails HTTPPS closed.
+  string? httpps_profile_config;
+
   // The user agent string.
   string user_agent;
 

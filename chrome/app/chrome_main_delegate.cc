@@ -7,7 +7,9 @@
 #include <stddef.h>
 
 #include <string>
+#include <utility>
 #include <variant>
+#include <vector>
 
 #include "base/base_paths.h"
 #include "base/check.h"
@@ -56,6 +58,7 @@
 #include "chrome/common/profiler/core_unwinders.h"
 #include "chrome/common/profiler/main_thread_stack_sampling_profiler.h"
 #include "chrome/common/profiler/process_type.h"
+#include "chrome/common/httpps_profiles.h"
 #include "chrome/common/url_constants.h"
 #include "chrome/grit/generated_resources.h"
 #include "chrome/renderer/chrome_content_renderer_client.h"
@@ -84,6 +87,10 @@
 #include "extensions/buildflags/buildflags.h"
 #include "net/http/http_cache.h"
 #include "net/url_request/url_request.h"
+#if BUILDFLAG(IS_WIN)
+#include "content/public/browser/network_service_preloads.h"
+#include "net/httpps/profile_config.h"
+#endif
 #include "pdf/buildflags.h"
 #include "printing/buildflags/buildflags.h"
 #include "services/tracing/public/cpp/stack_sampling/tracing_sampler_profiler.h"
@@ -1541,6 +1548,28 @@ void ChromeMainDelegate::PreSandboxStartup() {
       *base::CommandLine::ForCurrentProcess();
   std::string process_type =
       command_line.GetSwitchValueASCII(switches::kProcessType);
+  if (process_type.empty()) {
+    chrome::LoadHttppsProfiles();
+#if BUILDFLAG(IS_WIN)
+    // Only the browser's immutable local snapshot may select executable code.
+    // Do this before sandboxed network-process startup, never from web content
+    // or a child command line. Missing files remain a fail-closed profile error
+    // on use rather than crashing every network-service launch.
+    std::vector<base::FilePath> libraries;
+    if (const auto& profiles = chrome::GetHttppsProfiles(); profiles) {
+      if (auto collected = net::httpps::CollectProfileLibraries(*profiles)) {
+        for (const auto& name : *collected) {
+          auto path = base::FilePath::FromUTF8Unsafe(name);
+          if (path.IsAbsolute() && !path.ReferencesParent() &&
+              base::PathExists(path) && !base::DirectoryExists(path)) {
+            libraries.push_back(std::move(path));
+          }
+        }
+      }
+    }
+    content::SetNetworkServicePreloadLibraries(std::move(libraries));
+#endif
+  }
 
 #if BUILDFLAG(IS_LINUX) || BUILDFLAG(IS_CHROMEOS) || BUILDFLAG(IS_ANDROID) || \
     BUILDFLAG(IS_MAC)

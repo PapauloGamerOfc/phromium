@@ -155,6 +155,10 @@ class SSLClientContextHttppsTestPeer {
       const SSLConfig& config) {
     return context.GetHttppsOptions(server, config);
   }
+  static bool Provision(SSLClientContext& context, const HostPortPair& server,
+                        const SSLConfig& config) {
+    return context.ProvisionHttppsProfile(server, config);
+  }
   static httpps::SessionTicket Ticket(std::string host = "cache.test") {
     httpps::SessionTicket ticket;
     ticket.identity = {1, 2, 3};
@@ -7188,6 +7192,67 @@ TEST_F(SSLClientSocketTest, HttppsProfilesAreExplicitPartitionedAndInvalidateTic
   EXPECT_FALSE(context_->ClearHttppsOptions(server, config));
 }
 
+TEST_F(SSLClientSocketTest, HttppsProfileProviderIsPartitionedAndAtomic) {
+  using Peer = SSLClientContextHttppsTestPeer;
+  const HostPortPair server("cache.test", 343);
+  SSLConfig config;
+  config.is_httpps = true;
+  config.network_anonymization_key = NetworkAnonymizationKey::CreateSameSite(
+      SchemefulSite(GURL("https://first.test")));
+  int calls = 0;
+  context_->SetHttppsProfileProvider(base::BindLambdaForTesting(
+      [&](const HostPortPair& destination, const SSLConfig& scope,
+          httpps::ClientOptions* options,
+          std::optional<httpps::ClientCredential>* credential,
+          std::vector<std::string>* roots) -> std::optional<bool> {
+        ++calls;
+        EXPECT_EQ(destination, server);
+        EXPECT_EQ(scope.session_usage, SessionUsage::kDestination);
+        options->no_alpn_http11 = true;
+        options->continuity_pinning = true;
+        return scope.privacy_mode == PRIVACY_MODE_DISABLED;
+      }));
+  const auto generation = Peer::Generation(*context_);
+  EXPECT_TRUE(Peer::Provision(*context_, server, config));
+  EXPECT_TRUE(Peer::Provision(*context_, server, config));
+  EXPECT_EQ(calls, 1);
+  ASSERT_NE(Peer::Options(*context_, server, config), nullptr);
+  EXPECT_TRUE(Peer::Options(*context_, server, config)->continuity_pinning);
+  EXPECT_EQ(Peer::Generation(*context_), generation);  // No reentrant notify.
+  auto other = config;
+  other.privacy_mode = PRIVACY_MODE_ENABLED;
+  EXPECT_FALSE(Peer::Provision(*context_, server, other));
+  EXPECT_FALSE(Peer::Provision(*context_, server, other));
+  EXPECT_EQ(Peer::Options(*context_, server, other), nullptr);
+  EXPECT_EQ(calls, 2);
+  other = config;
+  other.session_usage = SessionUsage::kProxy;
+  EXPECT_TRUE(Peer::Provision(*context_, server, other));
+  EXPECT_EQ(calls, 2);
+  other = config;
+  other.network_anonymization_key = NetworkAnonymizationKey::CreateSameSite(
+      SchemefulSite(GURL("https://second.test")));
+  EXPECT_TRUE(Peer::Provision(*context_, server, other));
+  EXPECT_EQ(calls, 3);
+  context_->SetHttppsProfileProvider({});
+  EXPECT_EQ(Peer::Options(*context_, server, config), nullptr);
+  EXPECT_GT(Peer::Generation(*context_), generation);
+}
+
+TEST_F(SSLClientSocketTest, HttppsUnauthenticatedProfilesAndTicketsAreRejected) {
+  using Peer = SSLClientContextHttppsTestPeer;
+  const HostPortPair server("cache.test", 343);
+  SSLConfig config;
+  config.is_httpps = true;
+  httpps::ClientOptions options;
+  options.allow_unauthenticated = true;
+  EXPECT_FALSE(context_->SetHttppsOptions(server, config, options));
+  auto ticket = Peer::Ticket();
+  ticket.authentication = httpps::Authentication::kUnauthenticated;
+  Peer::Store(*context_, Peer::Generation(*context_), server, config, ticket);
+  EXPECT_FALSE(Peer::Take(*context_, server, config));
+}
+
 TEST_F(SSLClientSocketTest, HttppsTrustPoliciesAreSnapshots) {
   using Peer = SSLClientContextHttppsTestPeer;
   const HostPortPair server("cache.test", 343);
@@ -7293,7 +7358,7 @@ TEST_F(SSLClientSocketTest, HttppsTicketsRejectExpiredMalformedAndOversized) {
   const HostPortPair server("cache.test", 343);
   SSLConfig config;
   config.is_httpps = true;
-  std::vector<httpps::SessionTicket> tickets(26, Peer::Ticket());
+  std::vector<httpps::SessionTicket> tickets(30, Peer::Ticket());
   tickets[0].lifetime = 0;
   tickets[1].lifetime = 604801;
   tickets[2].received_milliseconds = -1;
@@ -7320,6 +7385,10 @@ TEST_F(SSLClientSocketTest, HttppsTicketsRejectExpiredMalformedAndOversized) {
   tickets[23].its_policy_context.resize(33);
   tickets[24].client_certificate_type = 1;
   tickets[25].client_certificate_type = 255;
+  tickets[26].allowed_psk_modes.clear();
+  tickets[27].allowed_psk_modes = {2};
+  tickets[28].allowed_psk_modes = {1, 1};
+  tickets[29].allowed_psk_modes = {1, 0, 1};
   for (size_t i = 0; i < tickets.size(); ++i) {
     SCOPED_TRACE(i);
     Peer::Store(*context_, Peer::Generation(*context_), server, config,

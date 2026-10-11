@@ -906,7 +906,7 @@ bool Client::Fail(Error error, uint8_t alert) {
   // Do not create an alert that skips already-encrypted unflushed records.
   // The transport may also suppress it if an application write is in flight.
   if (state_ != State::kNew && output_.empty() && alert && error != Error::kTimeout) {
-    Bytes value{2, error == Error::kCertificate ? uint8_t{42} : alert};
+    Bytes value{2, error == Error::kCertificate && alert == 47 ? uint8_t{42} : alert};
     if (sender_)
       sender_->Seal(value, 21, &fatal_alert_);
     else if (state_ == State::kHello) {
@@ -991,6 +991,29 @@ bool Client::SetClientCredential(const ClientCredential& credential) {
   return true;
 }
 
+bool RequestExtensionAllowed(uint16_t code, RequestExtensionContext context) {
+  using Context = RequestExtensionContext;
+  switch (code) {
+    case 5: case 18: case 34: case 47: case 48: case 50: case 52: case 0xff04:
+      return context != Context::kNewSessionTicket;
+    case 27:
+      return context == Context::kCertificateRequest;
+    case 0xff03:
+      return context == Context::kCertificateRequest || context == Context::kClientAuthenticator;
+    case 0: case 0xff02:
+      return context == Context::kServerAuthenticator;
+    case 42:
+      return context == Context::kNewSessionTicket;
+    case 1: case 10: case 13: case 15: case 16: case 17: case 19: case 20:
+    case 21: case 25: case 28: case 29: case 30: case 31: case 32: case 33:
+    case 41: case 43: case 44: case 45: case 49: case 51: case 55: case 56:
+    case 58: case 59:
+      return false;
+    default:
+      return true;  // Unknown, well-formed offers are extensible.
+  }
+}
+
 bool Client::AcceptCertificateRequest(ByteSpan frame, bool post_handshake) {
   auto body = frame.subspan(4u);
   Bytes reconstructed;
@@ -1014,22 +1037,31 @@ bool Client::AcceptCertificateRequest(ByteSpan frame, bool post_handshake) {
     Vector16(&reconstructed, extensions);
     body = reconstructed;
   }
-  if (body.empty() || body[0] > body.size() - 1 ||
-      (post_handshake ? body[0] == 0 : body[0] != 0))
-    return Fail();
+  if (body.empty() || body[0] > body.size() - 1)
+    return Fail(Error::kProtocol, 50);
+  if (post_handshake ? body[0] == 0 : body[0] != 0)
+    return Fail(Error::kProtocol, 47);
   Bytes context(body.begin() + 1, body.begin() + 1 + body[0]);
   if (post_handshake && (!options_.post_handshake_auth || alpn_ == "h2" ||
       (authentication_ == Authentication::kPassword && !resumed_) ||
       client_auth_contexts_.size() >= 256 || !client_auth_contexts_.insert(context).second))
     return Fail();
   std::map<uint16_t, Bytes> extensions;
-  if (!Extensions(body.subspan(size_t{1} + body[0]), &extensions) ||
-      !extensions.count(0xff03) || extensions[0xff03].size() != 32 ||
-      (client_certificate_type_ == 0 && !extensions.count(50)) ||
-      extensions.count(13) || extensions.count(0xff02) ||
+  if (!Extensions(body.subspan(size_t{1} + body[0]), &extensions))
+    return Fail(Error::kProtocol, 50);
+  // Unknown request offers remain extensible. Known extensions must obey their
+  // message placement, including reconstructed cached requests and PHA.
+  for (const auto& [type, value] : extensions) {
+    if (!RequestExtensionAllowed(type, RequestExtensionContext::kCertificateRequest))
+      return Fail(Error::kProtocol, 47);
+  }
+  if (!extensions.count(0xff03) ||
+      (client_certificate_type_ == 0 && !extensions.count(50)))
+    return Fail(Error::kProtocol, 109);
+  if (extensions[0xff03].size() != 32 ||
       (extensions.count(50) && (extensions[50].size() < 4 || extensions[50].size() % 2 ||
       Read16(ByteSpan(extensions[50]).first(2u)) != extensions[50].size() - 2)))
-    return Fail();
+    return Fail(Error::kProtocol, 50);
   Bytes learned;
   if (!RequestTemplate(body.subspan(size_t{1} + body[0]), &learned))
     return Fail();
@@ -1046,14 +1078,15 @@ bool Client::AcceptCertificateRequest(ByteSpan frame, bool post_handshake) {
   }
   client_grant_algorithms_.clear();
   client_delegation_offered_ = false;
-  if (extensions.count(34) != extensions.count(0xff04) ||
-      (extensions.count(34) && !extensions.count(50)))
-    return Fail();
+  if (extensions.count(34) && (!extensions.count(0xff04) || !extensions.count(50)))
+    return Fail(Error::kProtocol, 109);
+  if (extensions.count(0xff04) && !extensions.count(34))
+    return Fail(Error::kProtocol, 47);
   if (extensions.count(34)) {
     for (uint16_t code : {uint16_t{34}, uint16_t{0xff04}}) {
       const auto& values = extensions[code];
       if (values.size() < 4 || values.size() % 2 || Read16(ByteSpan(values).first(2u)) != values.size() - 2)
-        return Fail();
+        return Fail(Error::kProtocol, 50);
       for (size_t i = 2; i < values.size(); i += 2) {
         const uint16_t value = Read16(ByteSpan(values).subspan(i, 2u));
         if (code == 34)
@@ -1070,14 +1103,14 @@ bool Client::AcceptCertificateRequest(ByteSpan frame, bool post_handshake) {
   if (extensions.count(47)) {
     ByteSpan names = extensions[47];
     if (names.size() < 2 || Read16(names.first(2u)) != names.size() - 2)
-      return Fail();
+      return Fail(Error::kProtocol, 50);
     names = names.subspan(2u);
     while (!names.empty()) {
       if (names.size() < 2)
-        return Fail();
+        return Fail(Error::kProtocol, 50);
       const auto size = Read16(names.first(2u));
       if (size == 0 || size > names.size() - 2)
-        return Fail();
+        return Fail(Error::kProtocol, 50);
       client_authorities_.emplace_back(names.begin() + 2, names.begin() + 2 + size);
       names = names.subspan(size + 2);
     }
@@ -1086,16 +1119,18 @@ bool Client::AcceptCertificateRequest(ByteSpan frame, bool post_handshake) {
   if (extensions.count(48)) {
     ByteSpan filters = extensions[48];
     if (filters.size() < 2 || Read16(filters.first(2u)) != filters.size() - 2)
-      return Fail();
+      return Fail(Error::kProtocol, 50);
     filters = filters.subspan(2u);
     std::set<Bytes> oids;
     while (!filters.empty()) {
       const size_t oid_size = filters[0];
       if (!oid_size || filters.size() < oid_size + 3)
-        return Fail();
+        return Fail(Error::kProtocol, 50);
       Bytes oid(filters.begin() + 1, filters.begin() + 1 + oid_size);
       size_t size = Read16(filters.subspan(oid_size + 1, 2u));
-      if (!oids.insert(oid).second || size > filters.size() - oid_size - 3)
+      if (size > filters.size() - oid_size - 3)
+        return Fail(Error::kProtocol, 50);
+      if (!oids.insert(oid).second)
         return Fail();
       auto value = filters.subspan(oid_size + 3, size);
       client_oid_filters_.emplace_back(std::move(oid), Bytes(value.begin(), value.end()));
@@ -1107,7 +1142,7 @@ bool Client::AcceptCertificateRequest(ByteSpan frame, bool post_handshake) {
   if (extensions.count(27)) {
     const auto& algorithms = extensions[27];
     if (algorithms.size() < 3 || algorithms[0] != algorithms.size() - 1 || algorithms[0] % 2)
-      return Fail();
+      return Fail(Error::kProtocol, 50);
     for (size_t i = 1; i < algorithms.size(); i += 2) {
       const auto algorithm = Read16(ByteSpan(algorithms).subspan(i, 2u));
       if (algorithm >= 1 && algorithm <= 3)
@@ -1273,6 +1308,40 @@ bool Client::SealHandshake(ByteSpan frame) {
 
 bool Client::Start(const SessionTicket* ticket, ByteSpan early_data,
                    bool enable_early_data) {
+  if (options_.allow_unauthenticated &&
+      (options_.ordinary_httpps || options_.bootstrap || options_.password ||
+       options_.pinning || options_.continuity_pinning || options_.dane_policy ||
+       options_.its_policy || options_.ct_v2_policy || !options_.external_psks.empty()))
+    return Fail(Error::kCertificate);
+  if (ticket && (ticket->authentication == Authentication::kUnauthenticated) !=
+                    options_.allow_unauthenticated)
+    return Fail(Error::kCertificate);
+  if (ticket) {
+    if (ticket->allowed_psk_modes.empty() || ticket->allowed_psk_modes.size() > 2 ||
+        std::any_of(ticket->allowed_psk_modes.begin(), ticket->allowed_psk_modes.end(),
+                    [](uint8_t value) { return value > 1; }) ||
+        (ticket->allowed_psk_modes.size() == 2 &&
+         ticket->allowed_psk_modes[0] == ticket->allowed_psk_modes[1]))
+      return Fail();
+    std::vector<uint8_t> modes;
+    for (uint8_t mode : options_.psk_modes) {
+      if (std::find(ticket->allowed_psk_modes.begin(), ticket->allowed_psk_modes.end(), mode) !=
+          ticket->allowed_psk_modes.end())
+        modes.push_back(mode);
+    }
+    if (modes.empty()) {
+      // A full handshake may establish a new lineage, but the old ticket must
+      // not authorize a mode which its original ClientHello did not offer.
+      if (!early_data.empty()) return Fail();
+      ticket = nullptr;
+      enable_early_data = false;
+    } else {
+      options_.psk_modes = std::move(modes);
+    }
+  }
+  if (options_.no_alpn_http11 && options_.alpn_protocols !=
+                                      std::vector<std::string>{"http/1.1"})
+    return Fail();
   // A standalone caller may wait after selecting an ITS credential. Repeat
   // the local inventory/expiry check before any CH or cached early data.
   if (client_credential_ && client_credential_->certificate_type == 3) {
@@ -1358,7 +1427,7 @@ bool Client::Start(const SessionTicket* ticket, ByteSpan early_data,
       !early_data.empty() || enable_early_data))
     return Fail();
   if (state_ != State::kNew || !ValidServiceIdentity(hostname_) ||
-      (!use_external_verifier_ && anchors_.empty() && options_.external_psks.empty() &&
+      (!options_.allow_unauthenticated && !use_external_verifier_ && anchors_.empty() && options_.external_psks.empty() &&
        options_.server_raw_public_keys.empty() && !options_.dane_policy && !options_.password && !options_.its_policy) || anchors_.size() > 32) {
     return Fail(Error::kCertificate);
   }
@@ -1496,7 +1565,8 @@ bool Client::Start(const SessionTicket* ticket, ByteSpan early_data,
         ticket->authentication == Authentication::kITSAndPsk ||
         ticket->authentication == Authentication::kProvisioning;
     const bool certificate = ticket->authentication != Authentication::kExternalPsk &&
-        ticket->authentication != Authentication::kPassword;
+        ticket->authentication != Authentication::kPassword &&
+        ticket->authentication != Authentication::kUnauthenticated;
     if (ticket->hostname != hostname_ || ticket->identity.empty() ||
         std::none_of(options_.cipher_suites.begin(), options_.cipher_suites.end(),
             [&](uint16_t suite) {
@@ -1586,7 +1656,7 @@ bool Client::Start(const SessionTicket* ticket, ByteSpan early_data,
     if (provisioning && (!options_.bootstrap || !options_.bootstrap->provisioning_trust ||
         !ProvisioningKey(ticket->certificates, ticket->server_certificate_type, ticket->certificate_extensions, &unused)))
       return Fail(Error::kCertificate);
-    if ((!provisioning && raw && !raw_trusted && !dane_trusted) || (certificate && !provisioning && !raw && !its && !use_external_verifier_ && !dane_trusted &&
+    if ((!options_.allow_unauthenticated && !provisioning && raw && !raw_trusted && !dane_trusted) || (certificate && !provisioning && !raw && !its && !use_external_verifier_ && !dane_trusted &&
         !VerifyLabChain(ticket->certificates, anchors_, hostname_, &unused, !ticket->delegation.empty(), options_.native_provider.get())) ||
         (!ticket->delegation.empty() && (!options_.delegated_credentials ||
          !ValidateDelegation(ticket->certificates.front(), ticket->delegation, true,
@@ -1784,7 +1854,8 @@ bool Client::Start(const SessionTicket* ticket, ByteSpan early_data,
   if (protocols.size() > 65533)
     return Fail();
   Vector16(&alpn, protocols);
-  Extension(&extensions, 16, alpn);
+  if (!options_.no_alpn_http11)
+    Extension(&extensions, 16, alpn);
   if (options_.server_certificate_types != std::vector<uint8_t>{0}) {
     Bytes types{static_cast<uint8_t>(options_.server_certificate_types.size())};
     Append(&types, options_.server_certificate_types);
@@ -1853,19 +1924,21 @@ bool Client::Start(const SessionTicket* ticket, ByteSpan early_data,
     ++handshake_records_;
   }
   state_ = State::kHello;
-  if (early_offered_) {
+  if (!offered_psks_.empty()) {
     const uint16_t ps = offered_psks_.front().cipher_suite;
     const size_t hs = SuiteHashLength(ps);
     auto early = SuiteMac(ps, Bytes(hs), offered_psks_.front().secret, options_.native_provider.get());
-    auto traffic = SuiteLabel(ps, early, "c e traffic", SuiteHash(ps, transcript_, options_.native_provider.get()), hs, options_.native_provider.get());
     early_exporter_ = SuiteLabel(ps, early, "e exp master", SuiteHash(ps, transcript_, options_.native_provider.get()), hs, options_.native_provider.get());
-    Diagnostic("TLS20_CLIENT_EARLY_TRAFFIC_SECRET", traffic);
     Diagnostic("TLS20_EARLY_EXPORTER_SECRET", early_exporter_, true);
-    early_sender_ = std::make_unique<RecordCipher>(traffic, ps, options_.native_provider);
-    if (offered_ticket_)
-      early_sender_->SetLimit(offered_ticket_->peer_record_limit);
+    if (early_offered_) {
+      auto traffic = SuiteLabel(ps, early, "c e traffic", SuiteHash(ps, transcript_, options_.native_provider.get()), hs, options_.native_provider.get());
+      Diagnostic("TLS20_CLIENT_EARLY_TRAFFIC_SECRET", traffic);
+      early_sender_ = std::make_unique<RecordCipher>(traffic, ps, options_.native_provider);
+      if (offered_ticket_)
+        early_sender_->SetLimit(offered_ticket_->peer_record_limit);
+      OPENSSL_cleanse(traffic.data(), traffic.size());
+    }
     OPENSSL_cleanse(early.data(), early.size());
-    OPENSSL_cleanse(traffic.data(), traffic.size());
     while (!early_data.empty()) {
       Bytes record;
       size_t count = std::min(early_data.size(), kMaxRecordContent);
@@ -2097,6 +2170,8 @@ bool Client::RetryHello(ByteSpan frame, ByteSpan cookie, uint16_t group) {
     return Fail();
   early_offered_ = false;
   early_sender_.reset();
+  OPENSSL_cleanse(early_exporter_.data(), early_exporter_.size());
+  early_exporter_.clear();
   if (!AppendTranscript(hello))
     return false;
   output_.clear();
@@ -2214,8 +2289,11 @@ bool Client::AcceptFrame(ByteSpan frame) {
   auto body = frame.subspan(4u);
   switch (state_) {
     case State::kHello: {
-      if (frame[0] != 2 || body.size() < 40 || body[0] != 3 || body[1] != 3 ||
-          body[34] != 0 || body[37] != 0) {
+      if (frame[0] != 2) return Fail(Error::kProtocol, 10);
+      if (body.size() < 40) return Fail(Error::kProtocol, 50);
+      if (body[0] != 3 || body[1] != 3)
+        return Fail(Error::kProtocol, 70);
+      if (body[34] != 0 || body[37] != 0) {
         return Fail();
       }
       const auto selected_suite = static_cast<uint16_t>(Read16(body.subspan(35u, 2u)));
@@ -2224,9 +2302,14 @@ bool Client::AcceptFrame(ByteSpan frame) {
         return Fail();
       suite_ = selected_suite;
       std::map<uint16_t, Bytes> extensions;
-      if (!Extensions(body.subspan(38u), &extensions) ||
-          extensions[43] != Bytes({4, 0}))
-        return Fail();
+      if (!Extensions(body.subspan(38u), &extensions))
+        return Fail(Error::kProtocol, 50);
+      if (!extensions.count(43))
+        return Fail(Error::kProtocol, 109);
+      if (extensions.at(43).size() != 2)
+        return Fail(Error::kProtocol, 50);
+      if (extensions.at(43) != Bytes({4, 0}))
+        return Fail(Error::kProtocol, 47);
       constexpr std::array<uint8_t, 32> kRetryRandom = {
           0xcf,0x21,0xad,0x74,0xe5,0x9a,0x61,0x11,
           0xbe,0x1d,0x8c,0x02,0x1e,0x65,0xb8,0x91,
@@ -2269,6 +2352,15 @@ bool Client::AcceptFrame(ByteSpan frame) {
           return Fail();
       }
       resumed_ = psk_selected_ && selected_psk_ == 0 && offered_ticket_;
+      if (!psk_selected_ || selected_psk_ != 0) {
+        OPENSSL_cleanse(early_exporter_.data(), early_exporter_.size());
+        early_exporter_.clear();
+      }
+      // Provisioned PSKs remain an authentication requirement when offering a
+      // descendant ticket. A server losing its ticket store cannot silently
+      // replace this policy with certificate-only authentication.
+      if (!psk_selected_ && !options_.external_psks.empty() && !PasswordSuite(suite_))
+        return Fail(Error::kCertificate);
       if (options_.password && (PasswordSuite(suite_) ? (psk_selected_ || !password_state_)
                                                     : (password_only_ && !resumed_)))
         return Fail(Error::kCertificate);
@@ -2335,17 +2427,26 @@ bool Client::AcceptFrame(ByteSpan frame) {
     }
     case State::kExtensions: {
       std::map<uint16_t, Bytes> extensions;
-      if (frame[0] != 8 || !Extensions(body, &extensions) ||
+      if (frame[0] != 8) return Fail(Error::kProtocol, 10);
+      if (!Extensions(body, &extensions) ||
           !AppendTranscript(frame)) {
         return Fail(Error::kProtocol, 50);
       }
-      const auto& alpn = extensions[16];
       if (options_.signaling && !options_.signaling->Validate(extensions))
         return Fail();
-      if (alpn.size() < 4 || Read16(ByteSpan(alpn).first(2u)) != alpn.size() - 2 ||
-          alpn[2] != alpn.size() - 3)
-        return Fail();
-      alpn_.assign(alpn.begin() + 3, alpn.end());
+      if (options_.no_alpn_http11) {
+        if (extensions.count(16))
+          return Fail(Error::kProtocol, 110);
+        alpn_ = "http/1.1";
+      } else {
+        if (!extensions.count(16))
+          return Fail(Error::kProtocol, 109);
+        const auto& alpn = extensions.at(16);
+        if (alpn.size() < 4 || Read16(ByteSpan(alpn).first(2u)) != alpn.size() - 2 ||
+            alpn[2] != alpn.size() - 3)
+          return Fail(Error::kProtocol, 50);
+        alpn_.assign(alpn.begin() + 3, alpn.end());
+      }
       if (std::find(options_.alpn_protocols.begin(), options_.alpn_protocols.end(), alpn_) ==
           options_.alpn_protocols.end())
         return Fail();
@@ -2371,6 +2472,12 @@ bool Client::AcceptFrame(ByteSpan frame) {
       for (const auto& [type, data] : extensions) {
         if (type == 0 && data.empty() && !IsIpIdentity(hostname_))
           continue;
+        if (type == 10) {
+          if (data.size() < 4 || data.size() % 2 ||
+              Read16(ByteSpan(data).first(2u)) != data.size() - 2)
+            return Fail(Error::kProtocol, 50);
+          continue;  // RFC supported_groups preference, not a new key selection.
+        }
         if (type == 16)
           continue;
         if ((type == 55 || type == 56) && options_.signaling)
@@ -2440,6 +2547,11 @@ bool Client::AcceptFrame(ByteSpan frame) {
         server_certificate_type_ = offered_ticket_->server_certificate_type;
         client_certificate_type_ = offered_ticket_->client_certificate_type;
         authenticated_client_identity_ = offered_ticket_->client_identity;
+        if (authentication_ == Authentication::kUnauthenticated &&
+            options_.allow_unauthenticated) {
+          state_ = State::kFinished;
+          return true;
+        }
         if (server_certificate_type_ == 3) {
           const auto authorization = options_.its_policy->Verify(Octets(certificates_.front()),
               0, hostname_, WallMilliseconds());
@@ -2499,7 +2611,7 @@ bool Client::AcceptFrame(ByteSpan frame) {
           return Fail();
         body = decompressed;
       } else if (frame[0] != (cached_certificate_selected_ ? 253 : 11)) {
-        return Fail();
+        return Fail(Error::kProtocol, 10);
       }
       Bytes expanded;
       if (cached_certificate_selected_) {
@@ -2508,7 +2620,7 @@ bool Client::AcceptFrame(ByteSpan frame) {
         body = expanded;
       }
       if (!ParseCertificates(body, &certificates_, &certificate_extensions_)) {
-        return Fail(Error::kCertificate);
+        return Fail(Error::kProtocol, 50);
       }
       for (size_t i = 0; i < certificate_extensions_.size(); ++i) {
         for (const auto& [code, value] : certificate_extensions_[i]) {
@@ -2546,6 +2658,21 @@ bool Client::AcceptFrame(ByteSpan frame) {
             !AppendTranscript(frame))
           return Fail(Error::kCertificate);
         authentication_ = Authentication::kProvisioning;
+        return PrepareServerProof();
+      }
+      if (options_.allow_unauthenticated) {
+        // Selected before the attempt, never a fallback from failed validation.
+        // A delegated key still requires a cryptographically valid grant.
+        const bool key_ok = server_certificate_type_ == 2
+            ? certificates_.size() == 1 && ExtractRawPublicKey(Octets(certificates_[0]), &S_)
+            : server_certificate_type_ == 0 &&
+                CertificateAlgorithmsAllowed(certificates_, options_.certificate_signature_algorithms) &&
+                (delegated() ? ValidateDelegation(certificates_.front(), server_delegation_, true,
+                    options_.grant_signature_algorithms, &S_, options_.native_provider.get())
+                  : ExtractServerPublicKey(certificates_.front(), &S_));
+        if (!key_ok || combined_psk_ || !AppendTranscript(frame))
+          return Fail(Error::kCertificate);
+        authentication_ = Authentication::kUnauthenticated;
         return PrepareServerProof();
       }
       if (server_certificate_type_ == 3) {
@@ -2626,9 +2753,12 @@ bool Client::AcceptFrame(ByteSpan frame) {
       return PrepareServerProof();
     }
     case State::kProof:
-      if (frame[0] != 15 || body.size() != 4 + SuiteHashLength(suite_) || body[0] != 0xfe ||
-          body[1] != 0 || Read16(body.subspan(2u, 2u)) != SuiteHashLength(suite_) ||
-          !Equal(body.subspan(4u), expected_proof_) ||
+      if (frame[0] != 15) return Fail(Error::kProtocol, 10);
+      if (body.size() != 4 + SuiteHashLength(suite_) ||
+          Read16(body.subspan(2u, 2u)) != SuiteHashLength(suite_))
+        return Fail(Error::kProtocol, 50);
+      if (body[0] != 0xfe || body[1] != 0) return Fail(Error::kProtocol, 47);
+      if (!Equal(body.subspan(4u), expected_proof_) ||
           !AppendTranscript(frame)) {
         return Fail(Error::kProtocol, 51);
       }
@@ -2636,10 +2766,12 @@ bool Client::AcceptFrame(ByteSpan frame) {
       state_ = State::kFinished;
       return true;
     case State::kFinished: {
+      if (frame[0] != 20) return Fail(Error::kProtocol, 10);
+      if (body.size() != SuiteHashLength(suite_)) return Fail(Error::kProtocol, 50);
       if (server_certificate_type_ == 3 && its_expires_unix_milliseconds_ <= WallMilliseconds())
         return Fail(Error::kCertificate);
       auto expected = Finished(s_hs_, transcript_);
-      bool ok = frame[0] == 20 && Equal(body, expected);
+      bool ok = Equal(body, expected);
       OPENSSL_cleanse(expected.data(), expected.size());
       if (!ok || !AppendTranscript(frame)) {
         return Fail(Error::kProtocol, 51);
@@ -2715,6 +2847,12 @@ bool Client::Receive(ByteSpan record, Bytes* application_data) {
   Bytes content;
   uint8_t type = 0;
   if (state_ == State::kHello) {
+    if (record.size() == 7 && record[0] == 21 && record[1] == 3 && record[2] == 3 &&
+        record[3] == 0 && record[4] == 2) {
+      if (record[6] == 90)
+        return true;  // user_canceled is followed by close_notify or fatal alert.
+      return Fail(Error::kProtocol, 0);
+    }
     if (record.size() < 6 || record.size() > 16389 || record[0] != 22 ||
         Read16(record.subspan(3u, 2u)) != record.size() - 5) {
       return Fail();
@@ -2725,6 +2863,8 @@ bool Client::Receive(ByteSpan record, Bytes* application_data) {
     return Fail(Error::kProtocol, 20);
   }
   if (type == 21) {
+    if (content.size() == 2 && content[1] == 90)
+      return true;  // Does not close a direction or discard the pending message.
     if (!handshake && content.size() == 2 && content[1] == 0) {
       state_ = State::kClosed;
       DisableAuthenticators();
@@ -2823,8 +2963,8 @@ bool Client::AcceptPostHandshake(ByteSpan frame) {
     update_response_pending_ |= body[0] == 1;
     return true;
   }
-  if (frame[0] != 4 || body.size() < 13)
-    return Fail();
+  if (frame[0] != 4) return Fail(Error::kProtocol, 10);
+  if (body.size() < 13) return Fail(Error::kProtocol, 50);
   SessionTicket ticket;
   ticket.lifetime = Read32(body.first(4u));
   ticket.age_add = Read32(body.subspan(4u, 4u));
@@ -2841,6 +2981,8 @@ bool Client::AcceptPostHandshake(ByteSpan frame) {
   if (!Extensions(body.subspan(11 + nonce_length + ticket_length), &extensions))
     return Fail();
   for (const auto& [type, data] : extensions) {
+    if (!RequestExtensionAllowed(type, RequestExtensionContext::kNewSessionTicket))
+      return Fail(Error::kProtocol, 47);
     if (type != 42)
       continue;  // NewSessionTicket is extensible; unknown well-formed values.
     if (data.size() != 4)
@@ -2862,6 +3004,12 @@ bool Client::AcceptPostHandshake(ByteSpan frame) {
   ticket.server_certificate_type = server_certificate_type_;
   ticket.client_certificate_type = client_certificate_type_;
   ticket.authentication = authentication_;
+  ticket.allowed_psk_modes.clear();
+  for (uint8_t mode : options_.psk_modes) {
+    if (std::find(ticket.allowed_psk_modes.begin(), ticket.allowed_psk_modes.end(), mode) ==
+        ticket.allowed_psk_modes.end())
+      ticket.allowed_psk_modes.push_back(mode);
+  }
   ticket.external_psk_binding = external_psk_binding_;
   ticket.selected_client_identity = selected_client_identity_;
   ticket.bootstrap_policy = bootstrap_policy_;
@@ -2899,7 +3047,8 @@ bool Client::ExportEarly(std::string_view label, ByteSpan context, size_t length
                          Bytes* output) const {
   const uint16_t suite = early_suite_;
   const size_t size = SuiteHashLength(suite);
-  if (!early_offered_ || retried_ || state_ == State::kFailed ||
+  if (offered_psks_.empty() || retried_ || state_ == State::kFailed || closed() || close_sent_ ||
+      (state_ != State::kHello && (!psk_selected_ || selected_psk_ != 0)) ||
       early_exporter_.size() != size || label.size() > 249 || length > 255 * size)
     return false;
   auto secret = SuiteLabel(suite, early_exporter_, label, SuiteHash(suite, {}, options_.native_provider.get()), size, options_.native_provider.get());

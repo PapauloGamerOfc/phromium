@@ -230,8 +230,10 @@ UtilityProcessHost::Options::WithExtraCommandLineSwitchKeyValues(
 
 #if BUILDFLAG(IS_WIN)
 UtilityProcessHost::Options& UtilityProcessHost::Options::WithPreloadLibraries(
-    const std::vector<base::FilePath>& preloads) {
+    const std::vector<base::FilePath>& preloads,
+    bool required) {
   preload_libraries_ = preloads;
+  preload_libraries_required_ = required;
   return *this;
 }
 #endif  // BUILDFLAG(IS_WIN)
@@ -580,7 +582,8 @@ bool UtilityProcessHost::StartProcess() {
 
 #if BUILDFLAG(IS_WIN)
   if (!options_.preload_libraries_.empty()) {
-    delegate->SetPreloadLibraries(options_.preload_libraries_);
+    delegate->SetPreloadLibraries(options_.preload_libraries_,
+                                 options_.preload_libraries_required_);
   }
 
   // Not possible to transfer the event for an unsandboxed process.

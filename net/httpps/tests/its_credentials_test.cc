@@ -80,6 +80,16 @@ int main(int argc, char** argv) {
   }
   Cursor region_cursor{regions};
   while (!region_cursor.bytes.empty()) policy.allowed_regions.push_back(region_cursor.Vector(3));
+  if (!cursor.bytes.empty()) {
+    Check(cursor.Number(4) == 0x47454f31, "GEO1 containment framing");
+    const auto pairs = cursor.Vector(3);
+    Cursor pair_cursor{pairs};
+    while (!pair_cursor.bytes.empty()) {
+      auto parent = pair_cursor.Vector(3);
+      auto child = pair_cursor.Vector(3);
+      policy.geographic_containment.emplace_back(std::move(parent), std::move(child));
+    }
+  }
   Check(cursor.bytes.empty() && policy.IsValid(), "valid explicit fixture policy");
   const int64_t now_ms = static_cast<int64_t>(now_time64 / 1000) + (1072915200LL - 37) * 1000;
   auto authorization = policy.Verify(grant, 0, "example.test", now_ms);
@@ -94,6 +104,18 @@ int main(int argc, char** argv) {
   const auto context = policy.Context();
   Check(context.size() == 32, "ticket policy context");
   auto changed = policy;
+  if (!policy.geographic_containment.empty()) {
+    changed.geographic_containment.clear();
+    Check(!changed.Verify(grant, 0, "example.test", now_ms), "geography requires local authority");
+    changed = policy;
+    std::swap(changed.geographic_containment.front().first, changed.geographic_containment.front().second);
+    Check(changed.Context() != context && !changed.Verify(grant, 0, "example.test", now_ms),
+          "reversed local containment never grants authority");
+    changed = policy;
+    changed.geographic_containment.front().second = changed.geographic_containment.front().first;
+    Check(!changed.Verify(grant, 0, "example.test", now_ms), "different child is not the certified region");
+    changed = policy;
+  }
   changed.revoked = policy.authorized_leaves;
   Check(changed.Context() != context && !changed.Verify(grant, 0, "example.test", now_ms), "revocation binds tickets and fresh authorization");
   changed = policy; changed.authorized_leaves = {ITSBytes(32,1), ITSBytes(32,2)}; changed.revoked = {ITSBytes(32,3)};
@@ -106,6 +128,14 @@ int main(int argc, char** argv) {
   Check(!changed.Verify(grant, 0, "example.test", now_ms), "application scope authorization required");
   changed = policy; changed.trust_roots = {ITSBytes(16385, 0)};
   Check(!changed.IsValid(), "COER input bounded before FFI");
+  changed = policy; changed.geographic_containment = {{ITSBytes{1}, ITSBytes{2}}};
+  const auto geometry_context = changed.Context();
+  Check(geometry_context != context && !changed.Verify(grant, 0, "example.test", now_ms),
+        "geometry statements bind tickets and malformed COER fails closed");
+  changed.geographic_containment = {{ITSBytes{2}, ITSBytes{1}}};
+  Check(changed.Context() != geometry_context, "geometry authorization is directional");
+  changed.geographic_containment.front().second.clear();
+  Check(!changed.IsValid(), "empty geographic attestation rejected before FFI");
   for (size_t i = 0; i < grant.size(); ++i) {
     auto altered = grant; altered[i] ^= 0x80;
     Check(!policy.Verify(altered, 0, "example.test", now_ms), "altered credential rejected");

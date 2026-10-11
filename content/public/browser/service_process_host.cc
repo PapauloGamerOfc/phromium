@@ -79,8 +79,10 @@ ServiceProcessHost::Options& ServiceProcessHost::Options::WithObserver(
 ServiceProcessHost::Options&
 ServiceProcessHost::Options::WithPreloadedLibraries(
     std::vector<base::FilePath> preloads,
-    base::PassKey<ServiceProcessHostPreloadLibraries> passkey) {
+    base::PassKey<ServiceProcessHostPreloadLibraries> passkey,
+    bool required) {
   preload_libraries = std::move(preloads);
+  preload_libraries_required = required;
   return *this;
 }
 #endif  // #if BUILDFLAG(IS_WIN)

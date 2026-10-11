@@ -69,7 +69,9 @@ void LaunchServiceProcess(mojo::GenericPendingReceiver receiver,
   }
 #if BUILDFLAG(IS_WIN)
   if (!service_options.preload_libraries.empty()) {
-    utility_options.WithPreloadLibraries(service_options.preload_libraries);
+    utility_options.WithPreloadLibraries(
+        service_options.preload_libraries,
+        service_options.preload_libraries_required);
   }
 #endif  // BUILDFLAG(IS_WIN)
   if (service_options.allow_gpu_client.has_value() &&

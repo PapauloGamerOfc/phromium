@@ -20,6 +20,7 @@
 #include "build/build_config.h"
 #include "net/base/features.h"
 #include "net/dns/host_resolver.h"
+#include "net/httpps/profile_config.h"
 #include "net/http/http_auth_handler_factory.h"
 #include "net/http/http_response_body_drainer.h"
 #include "net/http/http_stream_factory.h"
@@ -197,6 +198,10 @@ HttpNetworkSession::HttpNetworkSession(const HttpNetworkSessionParams& params,
   ssl_client_context_.SetHttppsTrustAnchors(params.httpps_trust_anchors);
   ssl_client_context_.SetHttppsProxyTrustAnchors(
       params.httpps_proxy_trust_anchors);
+  if (params.httpps_profile_config) {
+    ssl_client_context_.SetHttppsProfileProvider(
+        httpps::CreateProfileProvider(*params.httpps_profile_config));
+  }
 
   normal_socket_pool_manager_ = std::make_unique<ClientSocketPoolManagerImpl>(
       CreateCommonConnectJobParams(false /* for_websockets */),

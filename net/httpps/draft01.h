@@ -31,6 +31,10 @@ namespace net::httpps {
 
 using Bytes = std::vector<uint8_t>;
 using Secret = std::array<uint8_t, 32>;
+enum class RequestExtensionContext {
+  kCertificateRequest, kServerAuthenticator, kClientAuthenticator, kNewSessionTicket
+};
+HTTPPS_EXPORT bool RequestExtensionAllowed(uint16_t code, RequestExtensionContext context);
 class PinAttempt;
 class NativeProvider;
 class NativeTrafficKey;
@@ -57,6 +61,7 @@ enum class Authentication {
   kPassword,
   kITS,
   kITSAndPsk,
+  kUnauthenticated,
 };
 
 // A credential, not a public cache entry. The owner MUST partition tickets by
@@ -71,6 +76,9 @@ struct HTTPPS_EXPORT SessionTicket {
   uint8_t server_certificate_type = 0;
   uint8_t client_certificate_type = 0;
   Authentication authentication = Authentication::kCertificate;
+  // Local ticket metadata, not an NST wire field. Successors may narrow, never
+  // broaden, the key-exchange modes offered by their originating handshake.
+  std::vector<uint8_t> allowed_psk_modes{1};
   Secret external_psk_binding{};
   Secret selected_client_identity{};
   Secret bootstrap_policy{};
@@ -165,6 +173,13 @@ struct HTTPPS_EXPORT ClientOptions {
   // Generic provisioning applications must opt out explicitly. Browser HTTPPS
   // must never change this to turn a failed website certificate into success.
   bool ordinary_httpps = true;
+  // Library-only, explicitly chosen before the handshake. MAC and Finished
+  // still verify; no authenticated identity is reported or inherited by tickets.
+  bool allow_unauthenticated = false;
+  // Explicit application agreement to HTTP/1.1 with no ALPN extension.
+  bool no_alpn_http11 = false;
+  // Browser context creates a fresh attempt in its partitioned continuity cache.
+  bool continuity_pinning = false;
   // Explicit non-confidential applications only; forbidden by browser HTTPPS.
   bool allow_integrity_only = false;
   std::optional<TicketRequest> ticket_request;

@@ -579,6 +579,7 @@ void UtilitySandboxedProcessLauncherDelegate::AddDelegateData(
   for (const auto& library_path : preload_libraries_) {
     sandbox_config->preload_libraries.push_back(library_path);
   }
+  sandbox_config->preload_libraries_required = preload_libraries_required_;
 
   if (event_handle_to_inherit_) {
     sandbox_config->bootstrap_event_handle =

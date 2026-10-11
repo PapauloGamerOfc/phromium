@@ -24,6 +24,7 @@
 #include "net/httpps/dnssec.h"
 #include "net/httpps/its_credentials.h"
 #include "net/httpps/opaque_string.h"
+#include "net/httpps/pinning.h"
 #include "net/httpps/transparency.h"
 #include "net/socket/httpps_client_socket.h"
 #include "net/socket/ssl_client_socket_impl.h"
@@ -121,6 +122,10 @@ struct SSLClientContext::HttppsSessionCache {
   std::map<Key, Entry> entries;
   std::map<Key, httpps::ClientCredential> client_credentials;
   std::map<Key, httpps::ClientOptions> profiles;
+  std::map<Key, std::unique_ptr<httpps::PinningCache>> pins;
+  HttppsProfileProvider provider;
+  std::map<Key, bool> provisioned;
+  std::map<Key, std::vector<std::string>> profile_roots;
   size_t bytes = 0;
   uint64_t next_order = 0;
   uint64_t ordinary_cache_generation = 0;
@@ -243,6 +248,22 @@ void SSLClientSocket::RecordSSLConnectResult(
 
 SSLClientSocket::SSLClientSocket() = default;
 
+int SSLClientSocket::ExportEarlyKeyingMaterial(std::string_view,
+    base::span<const uint8_t>, base::span<uint8_t>) {
+  return ERR_NOT_IMPLEMENTED;
+}
+bool SSLClientSocket::RequestHttppsServerAuthenticator(httpps::ByteSpan,
+    const std::map<uint16_t, httpps::Bytes>&, httpps::Bytes*) { return false; }
+bool SSLClientSocket::CancelHttppsAuthenticator(httpps::ByteSpan) { return false; }
+bool SSLClientSocket::CreateHttppsClientAuthenticator(httpps::ByteSpan,
+    const httpps::ClientCredential*, httpps::Bytes*) { return false; }
+bool SSLClientSocket::ValidateHttppsServerAuthenticator(httpps::ByteSpan,
+    const httpps::AuthenticatorValidator&, bool* authenticated,
+    httpps::ByteSpan) {
+  if (authenticated) *authenticated = false;
+  return false;
+}
+
 // static
 void SSLClientSocket::SetSSLKeyLogger(std::unique_ptr<SSLKeyLogger> logger) {
   SSLClientSocketImpl::SetSSLKeyLogger(std::move(logger));
@@ -359,6 +380,7 @@ bool SSLClientContext::SetHttppsClientCredential(
   if (!config.is_httpps || config.session_usage != SessionUsage::kDestination) {
     return false;
   }
+  if (config.privacy_mode == PRIVACY_MODE_ENABLED_WITHOUT_CLIENT_CERTS) return false;
   httpps::Client validator(server.host(), {}, true);
   if (!validator.SetClientCredential(credential)) {
     return false;
@@ -388,7 +410,8 @@ bool SSLClientContext::ClearHttppsClientCredential(
 
 const httpps::ClientCredential* SSLClientContext::GetHttppsClientCredential(
     const HostPortPair& server, const SSLConfig& config) const {
-  if (!config.is_httpps || config.session_usage != SessionUsage::kDestination) {
+  if (!config.is_httpps || config.session_usage != SessionUsage::kDestination ||
+      config.privacy_mode == PRIVACY_MODE_ENABLED_WITHOUT_CLIENT_CERTS) {
     return nullptr;
   }
   auto found = httpps_session_cache_->client_credentials.find(
@@ -400,8 +423,26 @@ const httpps::ClientCredential* SSLClientContext::GetHttppsClientCredential(
 bool SSLClientContext::SetHttppsOptions(
     const HostPortPair& server, const SSLConfig& config,
     const httpps::ClientOptions& options) {
+  httpps::ClientOptions prepared;
+  if (!PrepareHttppsOptions(server, config, options, &prepared)) return false;
+  const auto key = HttppsSessionCache::MakeKey(server, config);
+  httpps_session_cache_->profiles.insert_or_assign(key, std::move(prepared));
+  // Explicit local profile replacement is also explicit continuity recovery.
+  httpps_session_cache_->pins.erase(key);
+  NotifySSLConfigForServersChanged({server});
+  return true;
+}
+
+bool SSLClientContext::PrepareHttppsOptions(
+    const HostPortPair& server, const SSLConfig& config,
+    const httpps::ClientOptions& options, httpps::ClientOptions* output) const {
   if (!config.is_httpps || config.session_usage != SessionUsage::kDestination ||
-      !options.ordinary_httpps || options.allow_integrity_only || options.pinning ||
+      !options.ordinary_httpps || options.allow_unauthenticated ||
+      options.allow_integrity_only || options.pinning ||
+      (config.privacy_mode == PRIVACY_MODE_ENABLED_WITHOUT_CLIENT_CERTS &&
+       (options.password || !options.external_psks.empty() || options.bootstrap)) ||
+      (options.continuity_pinning && (!options.external_psks.empty() ||
+          options.password || options.its_policy || options.bootstrap)) ||
       (options.bootstrap && options.bootstrap->provisioning_trust) ||
       (options.dane_policy && options.dane_policy->port != server.port())) {
     return false;
@@ -443,9 +484,55 @@ bool SSLClientContext::SetHttppsOptions(
     password->prepare_text = httpps::PrepareOpaqueString;
     prepared.password = std::move(password);
   }
-  httpps_session_cache_->profiles.insert_or_assign(
-      HttppsSessionCache::MakeKey(server, config), std::move(prepared));
-  NotifySSLConfigForServersChanged({server});
+  *output = std::move(prepared);
+  return true;
+}
+
+void SSLClientContext::SetHttppsProfileProvider(HttppsProfileProvider provider) {
+  auto& cache = *httpps_session_cache_;
+  cache.provider = std::move(provider);
+  cache.provisioned.clear();
+  cache.profile_roots.clear();
+  cache.profiles.clear();
+  cache.client_credentials.clear();
+  cache.pins.clear();
+  NotifySSLConfigChanged(SSLConfigChangeType::kSSLConfigChanged);
+}
+
+bool SSLClientContext::ProvisionHttppsProfile(const HostPortPair& server,
+                                            const SSLConfig& config) {
+  auto& cache = *httpps_session_cache_;
+  if (!config.is_httpps || !cache.provider || config.session_usage != SessionUsage::kDestination)
+    return true;
+  const auto key = HttppsSessionCache::MakeKey(server, config);
+  if (const auto found = cache.provisioned.find(key); found != cache.provisioned.end())
+    return found->second;
+  httpps::ClientOptions options, prepared;
+  std::optional<httpps::ClientCredential> credential;
+  std::vector<std::string> roots;
+  const auto selection = cache.provider.Run(server, config, &options, &credential, &roots);
+  if (!selection) return true;  // Do not cache arbitrary unconfigured origins.
+  // Never evict continuity state to make room for attacker-created partitions.
+  if (cache.provisioned.size() >= 4096) return false;
+  bool valid = *selection && PrepareHttppsOptions(server, config, options, &prepared) &&
+      roots.size() <= 32 && std::all_of(roots.begin(), roots.end(), [](const auto& root) {
+        return !root.empty() && root.size() <= 1024 * 1024;
+      });
+  if (credential && config.privacy_mode == PRIVACY_MODE_ENABLED_WITHOUT_CLIENT_CERTS)
+    valid = false;
+  if (valid && credential) {
+    httpps::Client validator(server.host(), {}, true, prepared);
+    valid = validator.SetClientCredential(*credential);
+    if (valid && credential->its_policy)
+      credential->its_policy = std::make_shared<httpps::ITSPolicy>(*credential->its_policy);
+  }
+  cache.provisioned.emplace(key, valid);
+  if (!valid) return false;
+  // Atomic first-use installation; no observer callbacks while constructing a
+  // socket. The provider cannot supply state to a different partition.
+  cache.profiles.insert_or_assign(key, std::move(prepared));
+  cache.profile_roots.insert_or_assign(key, std::move(roots));
+  if (credential) cache.client_credentials.insert_or_assign(key, std::move(*credential));
   return true;
 }
 
@@ -457,6 +544,7 @@ bool SSLClientContext::ClearHttppsOptions(const HostPortPair& server,
     return false;
   }
   NotifySSLConfigForServersChanged({server});
+  httpps_session_cache_->pins.erase(HttppsSessionCache::MakeKey(server, config));
   return true;
 }
 
@@ -501,6 +589,11 @@ void SSLClientContext::StoreHttppsSession(uint64_t generation,
       generation != httpps_session_generation_ ||
       ticket.hostname != server.host() || ticket.identity.empty() ||
       ticket.identity.size() > 65535 ||
+      ticket.allowed_psk_modes.empty() || ticket.allowed_psk_modes.size() > 2 ||
+      std::any_of(ticket.allowed_psk_modes.begin(), ticket.allowed_psk_modes.end(),
+                  [](uint8_t mode) { return mode > 1; }) ||
+      (ticket.allowed_psk_modes.size() == 2 &&
+       ticket.allowed_psk_modes[0] == ticket.allowed_psk_modes[1]) ||
       (ticket.certificates.empty() &&
        ticket.authentication != httpps::Authentication::kExternalPsk &&
        ticket.authentication != httpps::Authentication::kPassword) ||
@@ -513,6 +606,12 @@ void SSLClientContext::StoreHttppsSession(uint64_t generation,
       (!ticket.dane_policy_context.empty() && ticket.dane_policy_context.size() != 32) ||
       (!ticket.its_policy_context.empty() && ticket.its_policy_context.size() != 32) ||
       ticket.authentication == httpps::Authentication::kProvisioning ||
+      ticket.authentication == httpps::Authentication::kUnauthenticated ||
+      (config.privacy_mode == PRIVACY_MODE_ENABLED_WITHOUT_CLIENT_CERTS &&
+       (ticket.client_identity != httpps::Secret{} ||
+        ticket.selected_client_identity != httpps::Secret{} ||
+        ticket.password_context != httpps::Secret{} ||
+        ticket.external_psk_binding != httpps::Secret{})) ||
       (!ticket.certificate_extensions.empty() &&
        ticket.certificate_extensions.size() != ticket.certificates.size()) ||
       ticket.certificates.size() > 64 ||
@@ -578,9 +677,10 @@ std::unique_ptr<SSLClientSocket> SSLClientContext::CreateSSLClientSocket(
     const HostPortPair& host_and_port,
     const SSLConfig& ssl_config) {
   if (ssl_config.is_httpps) {
+    const bool profile_valid = ProvisionHttppsProfile(host_and_port, ssl_config);
     // A proxy and an origin can have the same hostname/port but must not share
     // trust authority. In particular, missing proxy roots stay empty.
-    const auto& roots = ssl_config.session_usage == SessionUsage::kProxy
+    auto roots = ssl_config.session_usage == SessionUsage::kProxy
                             ? httpps_proxy_trust_anchors_
                             : httpps_trust_anchors_;
     auto ticket = TakeHttppsSession(host_and_port, ssl_config);
@@ -589,8 +689,21 @@ std::unique_ptr<SSLClientSocket> SSLClientContext::CreateSSLClientSocket(
     // are bounded and cached certificate bytes always receive fresh validation.
     options.certificate_compression = {1, 2, 3};
     options.delegated_credentials = true;
-    if (const auto* selected = GetHttppsOptions(host_and_port, ssl_config)) {
+    const auto* selected_options = GetHttppsOptions(host_and_port, ssl_config);
+    if (const auto* selected = selected_options) {
       options = *selected;
+    }
+    const auto key = HttppsSessionCache::MakeKey(host_and_port, ssl_config);
+    if (const auto found = httpps_session_cache_->profile_roots.find(key);
+        found != httpps_session_cache_->profile_roots.end())
+      roots.insert(roots.end(), found->second.begin(), found->second.end());
+    if (!profile_valid) options.ordinary_httpps = false;  // Fail before CH.
+    if (options.continuity_pinning) {
+      ticket.reset();
+      auto& pins = httpps_session_cache_->pins[key];
+      if (!pins) pins = std::make_unique<httpps::PinningCache>();
+      options.pinning = pins->Begin(host_and_port.host(), host_and_port.port(), "context");
+      if (!options.pinning) options.ordinary_httpps = false;
     }
     if (ticket && !ticket->certificates.empty()) {
       options.cached_certificates.emplace_back(ticket->server_certificate_type,
@@ -605,11 +718,14 @@ std::unique_ptr<SSLClientSocket> SSLClientContext::CreateSSLClientSocket(
     if (options.alpn_protocols.empty()) {
       options.alpn_protocols = {"http/1.1"};
     }
+    if (options.no_alpn_http11) options.alpn_protocols = {"http/1.1"};
     std::optional<httpps::ClientCredential> credential;
     if (const auto* selected = GetHttppsClientCredential(host_and_port, ssl_config)) {
       credential = *selected;
-      options.post_handshake_auth = true;
+      if (!selected_options) options.post_handshake_auth = true;
     }
+    const bool early_data_enabled = ssl_config.early_data_enabled &&
+        !options.continuity_pinning && ssl_config.session_usage == SessionUsage::kDestination;
     return std::make_unique<HttppsClientSocket>(
         std::move(stream_socket), host_and_port, roots, cert_verifier_.get(),
         std::move(ticket),
@@ -617,8 +733,7 @@ std::unique_ptr<SSLClientSocket> SSLClientContext::CreateSSLClientSocket(
                             weak_factory_.GetWeakPtr(),
                             httpps_session_generation_, host_and_port,
                             ssl_config),
-        ssl_config.early_data_enabled &&
-            ssl_config.session_usage == SessionUsage::kDestination,
+        early_data_enabled,
         std::move(options), std::move(credential));
   }
   return std::make_unique<SSLClientSocketImpl>(this, std::move(stream_socket),

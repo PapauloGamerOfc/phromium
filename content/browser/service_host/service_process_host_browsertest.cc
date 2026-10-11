@@ -32,7 +32,10 @@
 
 #include "base/base_paths.h"
 #include "base/files/file_path.h"
+#include "base/files/file_util.h"
+#include "base/files/scoped_temp_dir.h"
 #include "base/path_service.h"
+#include "base/threading/thread_restrictions.h"
 #include "content/public/browser/service_process_host_passkeys.h"
 #endif
 
@@ -463,7 +466,60 @@ IN_PROC_BROWSER_TEST_F(ServiceProcessHostBrowserTest, PreloadLibraryModName) {
   loop.Run();
 }
 
-// This test causes a CHECK in the child at startup.
+IN_PROC_BROWSER_TEST_F(ServiceProcessHostBrowserTest,
+                       PreloadLibraryOptionalFailures) {
+  base::ScopedAllowBlockingForTesting allow_blocking;
+  base::ScopedTempDir temp_dir;
+  ASSERT_TRUE(temp_dir.CreateUniqueTempDir());
+  const auto invalid_library = temp_dir.GetPath().AppendASCII("invalid.dll");
+  const auto missing_library = temp_dir.GetPath().AppendASCII("missing.dll");
+  ASSERT_TRUE(base::WriteFile(invalid_library, "This is not a native library."));
+  ASSERT_FALSE(base::PathExists(missing_library));
+
+  // Both load failures must be nonfatal, and must not prevent a subsequent
+  // valid preload. All paths still come from this trusted browser-side caller.
+  EchoServiceProcessObserver observer;
+  auto echo_service = ServiceProcessHost::Launch<echo::mojom::EchoService>(
+      ServiceProcessHost::Options()
+          .WithSite(GURL(kTestUrl))
+          .WithPreloadedLibraries(
+              {invalid_library, missing_library,
+               GetDllPath(kEchoPreloadLibrary)},
+              ServiceProcessHostPreloadLibraries::GetPassKey(),
+              /*required=*/false)
+          .Pass());
+  observer.WaitForLaunch();
+
+  for (const auto& unavailable : {invalid_library, missing_library}) {
+    base::RunLoop loop;
+    echo_service->LoadNativeLibrary(
+        unavailable, /*call_winmm_delayload=*/false,
+        base::BindLambdaForTesting([&](LoadStatus status, uint32_t result) {
+          EXPECT_EQ(LoadStatus::kFailedLoadLibrary, status);
+          EXPECT_NE(0u, result);
+          loop.Quit();
+        }));
+    loop.Run();
+  }
+
+  base::RunLoop load_loop;
+  echo_service->LoadNativeLibrary(
+      GetDllPath(kEchoPreloadLibrary), /*call_winmm_delayload=*/true,
+      base::BindLambdaForTesting([&](LoadStatus status, uint32_t result) {
+        EXPECT_EQ(LoadStatus::kSuccess, status);
+        EXPECT_EQ(0u, result);
+        load_loop.Quit();
+      }));
+  load_loop.Run();
+
+  base::test::TestFuture<std::string> echo;
+  echo_service->EchoString("The service remains available.",
+                          echo.GetCallback<const std::string&>());
+  EXPECT_EQ("The service remains available.", echo.Get());
+}
+
+// This test causes a CHECK in the child at startup. Omitting `required` keeps
+// the existing fatal behavior for all callers that do not opt out.
 IN_PROC_BROWSER_TEST_F(ServiceProcessHostBrowserTest, PreloadLibraryBadPath) {
   std::vector<base::FilePath> preloads;
   preloads.push_back(GetDllPath(L"this-is-not-a-library"));

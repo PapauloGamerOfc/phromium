@@ -26,7 +26,7 @@ import tempfile
 from urllib.parse import parse_qs, urlsplit
 
 
-SERVER_REVISION = "18e04497259e21549c996dfb8ad45ea4ce590760"
+SERVER_REVISION = "aa3be3ecc6764e282bf4292f95532a6557a0fdf7"
 HOST = "cookie.test"
 MAX_MESSAGE = 4 * 1024 * 1024
 
@@ -207,8 +207,12 @@ async def debug_targets(port):
 
 
 class Browser:
-    def __init__(self, executable, profile, root=None):
+    def __init__(self, executable, profile, root=None, profile_config=None,
+                 enable_network_sandbox=False, fixture_host=HOST):
         self.executable, self.profile, self.root = executable, profile, root
+        self.profile_config = profile_config
+        self.enable_network_sandbox = enable_network_sandbox
+        self.fixture_host = fixture_host
         self.process = self.cdp = self.log = None
 
     async def __aenter__(self):
@@ -220,9 +224,13 @@ class Browser:
                      "--disable-background-networking", "--disable-component-update", "--disable-sync",
                      "--disable-extensions", "--disable-domain-reliability", "--no-proxy-server",
                      "--disable-features=OptimizationHints,MediaRouter,AutofillServerCommunication,Translate,EnablePortBoundCookies,EnableSchemeBoundCookies",
-                     f"--host-resolver-rules=MAP {HOST} 127.0.0.1, MAP * ~NOTFOUND", "about:blank"]
+                     f"--host-resolver-rules=MAP {self.fixture_host} 127.0.0.1, MAP * ~NOTFOUND", "about:blank"]
         if self.root is not None:
             arguments.append("--httpps-trust-anchor=" + base64.b64encode(self.root).decode())
+        if self.profile_config is not None:
+            arguments.append("--httpps-profile-file=" + str(self.profile_config.resolve()))
+        if self.enable_network_sandbox:
+            arguments.append("--enable-features=NetworkServiceSandbox")
         self.log = (self.profile.parent / (self.profile.name + ".browser.log")).open("ab")
         stage = "spawning owned browser"
         last_probe = "DevToolsActivePort not observed"
@@ -236,9 +244,12 @@ class Browser:
                     if self.process.returncode is not None:
                         raise RuntimeError(f"Browser exited early: {self.process.returncode}")
                     if active_port.exists():
-                        lines = active_port.read_text().splitlines()
-                        if lines:
-                            try:
+                        try:
+                            # Windows can observe the file while Chrome still
+                            # holds its writer handle. Retry within the same
+                            # startup deadline as an incomplete DevTools reply.
+                            lines = active_port.read_text().splitlines()
+                            if lines:
                                 targets = await debug_targets(int(lines[0]))
                                 pages = [target for target in targets if target.get("type") == "page"]
                                 last_probe = f"DevTools responded with {len(targets)} targets, {len(pages)} pages"
@@ -246,9 +257,9 @@ class Browser:
                                     stage = "connecting page debugger WebSocket"
                                     self.cdp = await CDP.connect(pages[0]["webSocketDebuggerUrl"])
                                     break
-                            except (OSError, ValueError, IndexError) as probe_error:
-                                last_probe = repr(probe_error)
-                                stage = "discovering page debugger"
+                        except (OSError, ValueError, IndexError) as probe_error:
+                            last_probe = repr(probe_error)
+                            stage = "discovering page debugger"
                     await asyncio.sleep(0.05)
             stage = "enabling Page domain"
             await self.cdp.command("Page.enable")

@@ -8,9 +8,10 @@ from dataclasses import replace
 import os
 from pathlib import Path
 import sys
+from types import SimpleNamespace
 
 
-async def main(args):
+async def test_profile(args):
     sys.path.insert(0, str(args.server_source.resolve()))
     os.environ["TLS20_TEST_ITS_LIBRARY"] = str(args.provider.resolve())
     os.environ["TLS20_ITS_FIXTURE_DIR"] = str(args.fixtures.resolve())
@@ -102,6 +103,14 @@ async def main(args):
             server.close()
             await server.wait_closed()
     print(f"{count} native ITS connections passed: full/resume/early, both MAC roles/PHA, tamper, revocation, service/role and expiry")
+
+
+async def main(args):
+    for profile in ("", "brainpool256", "brainpool384", "implicit-nist256", "implicit-brainpool256"):
+        print("ITS credential profile:", profile or "nist256", flush=True)
+        options = dict(vars(args))
+        options["fixtures"] = args.fixtures / profile
+        await test_profile(SimpleNamespace(**options))
 
 
 if __name__ == "__main__":

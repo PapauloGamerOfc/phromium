@@ -234,7 +234,8 @@ int Get(const char* host,
           "connect loopback");
   const std::vector<std::string> anchors{ReadFile(root)};
   net::httpps::Client client(
-      host, external_verification ? std::vector<std::string>{} : anchors,
+      host, external_verification || options.allow_unauthenticated
+                ? std::vector<std::string>{} : anchors,
       external_verification, options);
   if (selected_credential)
     Require(client.SetClientCredential(*selected_credential), "explicit prepared credential");
@@ -270,8 +271,13 @@ int Get(const char* host,
   }
   while (!client.established()) {
     Bytes unused;
-    Require(client.Receive(Record(stream), &unused),
-            "authenticated server flight");
+    const bool accepted = client.Receive(Record(stream), &unused);
+    if (!accepted) {
+      auto alert = client.TakeFatalAlert();
+      if (!alert.empty())
+        Send(stream, alert);
+    }
+    Require(accepted, "authenticated server flight");
     if (client.certificate_verification_pending()) {
       Require(external_verification && !client.established() &&
                   client.TakeOutput().empty(),
@@ -293,6 +299,9 @@ int Get(const char* host,
     }
   }
   Bytes output;
+  if (options.allow_unauthenticated)
+    Require(client.authentication() == net::httpps::Authentication::kUnauthenticated,
+            "unauthenticated lineage is preserved, including resumption");
   if (authenticator_test)
     AuthenticatorTest(stream, client, anchors, client_leaf, client_key);
   if (resume_test) {
@@ -435,11 +444,91 @@ int Get(const char* host,
   return 0;
 }
 
+void PskLifecycleTests() {
+  using namespace net::httpps;
+  ClientOptions options;
+  ExternalPSK psk;
+  psk.identity = {1};
+  psk.secret = Bytes(32, 7);
+  psk.hostname = "localhost";
+  options.external_psks = {psk};
+  options.external_psks.push_back(psk);
+  options.external_psks.back().identity = {2};
+  auto server_hello = [](int selected, bool retry) {
+    Bytes body(38);
+    body[0] = body[1] = 3;
+    body[35] = 0x13;
+    body[36] = 1;
+    Bytes extensions{0, 43, 0, 2, 4, 0};
+    if (retry) {
+      const auto random = Unhex("cf21ad74e59a6111be1d8c021e65b891c2a211167abb8c5e079e09e2c8a8339c");
+      std::copy(random.begin(), random.end(), body.begin() + 2);
+      extensions.insert(extensions.end(), {0, 44, 0, 3, 0, 1, 7});
+    } else {
+      Secret public_key{}, private_key{};
+      X25519_keypair(public_key.data(), private_key.data());
+      extensions.insert(extensions.end(), {0, 51, 0, 36, 0, 29, 0, 32});
+      extensions.insert(extensions.end(), public_key.begin(), public_key.end());
+      if (selected >= 0)
+        extensions.insert(extensions.end(), {0, 41, 0, 2, 0, static_cast<uint8_t>(selected)});
+    }
+    body.push_back(static_cast<uint8_t>(extensions.size() >> 8));
+    body.push_back(static_cast<uint8_t>(extensions.size()));
+    body.insert(body.end(), extensions.begin(), extensions.end());
+    Bytes record{22, 3, 3, 0, static_cast<uint8_t>(body.size() + 4),
+                 2, 0, 0, static_cast<uint8_t>(body.size())};
+    record.insert(record.end(), body.begin(), body.end());
+    return record;
+  };
+  for (int selection : {0, 1, -1, -2}) {
+    Client client("localhost", {}, true, options);
+    Bytes exported, application;
+    Require(client.Start() && !client.early_data_available(), "PSK without 0-RTT permission starts");
+    Require(client.ExportEarly("lifecycle", {}, 32, &exported) && exported.size() == 32,
+            "early exporter independent of early_data permission");
+    const auto original = exported;
+    client.TakeOutput();
+    Require(client.OutputFlushed(), "PSK CH flushed");
+    const bool accepted = client.Receive(server_hello(selection, selection == -2), &application);
+    Require(accepted == (selection != -1), "provisioned PSK cannot silently fall back to certificate");
+    Require(client.ExportEarly("lifecycle", {}, 32, &exported) == (selection == 0),
+            "early exporter invalidated by retry, rejected or secondary PSK");
+    if (selection == 0)
+      Require(exported == original, "first selected PSK retains early exporter");
+  }
+  std::cout << "PSK exporter lifecycle and downgrade tests passed\n";
+}
+
 void SelfTest() {
+  PskLifecycleTests();
   TlsFeaturesTests();
   RunPinningTests();
   RunControlProfileTests();
   RunIntegrityOnlyTests();
+  using RequestContext = net::httpps::RequestExtensionContext;
+  for (uint16_t code : {0, 1, 10, 13, 15, 16, 17, 19, 20, 21, 25, 28,
+                        29, 30, 31, 32, 33, 41, 42, 43, 44, 45, 49, 51,
+                        55, 56, 58, 59, 0xff02})
+    Require(!net::httpps::RequestExtensionAllowed(code, RequestContext::kCertificateRequest),
+            "known misplaced CertificateRequest extension rejected");
+  for (auto context : {RequestContext::kCertificateRequest, RequestContext::kServerAuthenticator,
+                       RequestContext::kClientAuthenticator, RequestContext::kNewSessionTicket})
+    Require(net::httpps::RequestExtensionAllowed(0xaaa0, context), "unknown offers stay extensible");
+  Require(net::httpps::RequestExtensionAllowed(42, RequestContext::kNewSessionTicket) &&
+          !net::httpps::RequestExtensionAllowed(43, RequestContext::kNewSessionTicket),
+          "NST extension placements");
+  {
+    net::httpps::ClientOptions options;
+    options.allow_unauthenticated = true;
+    net::httpps::Client browser("localhost", {}, true, options);
+    Require(!browser.Start(), "no unauthenticated browser profile");
+    options.ordinary_httpps = false;
+    net::httpps::Client explicit_library("localhost", {}, false, options);
+    Require(explicit_library.Start(), "explicit generic unauthenticated start");
+    options.bootstrap.emplace();
+    net::httpps::Client mixed("localhost", {}, false, options);
+    Require(!mixed.Start(), "unauthenticated exception never bypasses bootstrap binding");
+  }
   for (uint16_t suite : {0xc0b4, 0xc0b5}) {
     net::httpps::ClientOptions options;
     options.cipher_suites = {suite};
@@ -931,6 +1020,17 @@ int main(int argc, char** argv) {
     return Get(argv[2], argv[3], argv[4], false,
                std::string_view(argv[1]) == "--get-client-auth-resume", true,
                argv[5], argv[6]);
+  }
+  if (argc == 5 && (std::string_view(argv[1]) == "--get-no-alpn" ||
+                   std::string_view(argv[1]) == "--get-unauthenticated" ||
+                   std::string_view(argv[1]) == "--get-unauthenticated-resume")) {
+    net::httpps::ClientOptions options;
+    options.no_alpn_http11 = std::string_view(argv[1]) == "--get-no-alpn";
+    options.allow_unauthenticated = !options.no_alpn_http11;
+    options.ordinary_httpps = !options.allow_unauthenticated;
+    return Get(argv[2], argv[3], argv[4], false,
+               std::string_view(argv[1]) == "--get-unauthenticated-resume", true,
+               nullptr, nullptr, options);
   }
   if (argc == 5 && (std::string_view(argv[1]) == "--get-resume-reject" ||
                     std::string_view(argv[1]) == "--get-resume" ||

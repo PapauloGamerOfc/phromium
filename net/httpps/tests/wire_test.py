@@ -31,16 +31,23 @@ async def main(args):
     response = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nOK"
     positives = {"coalesced", "fragmented", "fragmented-hello", "empty-records",
                  "hrr-p256", "hrr-cookie", "ccs", "padded-record",
-                 "legacy-record-version", "client-auth-decline"}
+                 "legacy-record-version", "client-auth-decline", "client-auth-unknown",
+                 "user-canceled-plain", "user-canceled-handshake", "user-canceled-application",
+                 "groups-hint"}
     after_auth = {"unclean-eof", "tampered-application", "replayed-application"}
     cases = list(sorted(positives | after_auth)) + [
         "hello-residue", "finished-residue", "duplicate-extensions", "bad-proof",
         "bad-finished", "wrong-alpn", "early-application", "zero-share",
-        "echoed-share", "wrong-version", "oversized-record", "replayed-handshake",
-        "hrr-repeated", "hrr-offered-group", "hrr-old-version", "hrr-empty-cookie",
+        "echoed-share", "wrong-version", "wrong-selected-version", "oversized-record", "replayed-handshake",
+        "hrr-repeated", "hrr-offered-group", "hrr-old-version", "hrr-wrong-legacy-version", "hrr-empty-cookie",
         "client-auth-context", "client-auth-missing-share", "client-auth-short-share",
         "client-auth-duplicate-share", "client-auth-signature-algorithms", "client-auth-mac-scheme",
     ]
+    cases += [f"client-auth-misplaced-{code}" for code in
+              (0, 1, 10, 15, 16, 17, 19, 20, 21, 25, 28, 29, 30, 31, 32,
+               33, 41, 42, 43, 44, 45, 49, 51, 55, 56, 58, 59, 0xff02)]
+    expected_alerts = {"wrong-version": 70, "wrong-selected-version": 47,
+                       "hrr-wrong-legacy-version": 70, "hrr-old-version": 47}
     with tempfile.TemporaryDirectory(prefix="httpps-wire-") as temporary:
         root = Path(temporary) / "root.der"
         root.write_bytes(ca.public_bytes(serialization.Encoding.DER))
@@ -56,6 +63,7 @@ async def main(args):
         for mode, kind in itertools.product(modes, cases):
             requests = []
             finished_seen = []
+            observed_alerts = []
             handler_errors = []
             finished_handler = asyncio.Event()
 
@@ -70,6 +78,10 @@ async def main(args):
                         def plain(fragment):
                             version = b"\x00\x00" if kind == "legacy-record-version" else b"\x03\x03"
                             return b"\x16" + version + len(fragment).to_bytes(2, "big") + fragment
+                        async def check_version_alert():
+                            alert = await reader.readexactly(7)
+                            assert alert == bytes([21, 3, 3, 0, 2, 2, expected_alerts[kind]]), alert
+                            observed_alerts.append(alert[-1])
                         if kind.startswith("hrr-"):
                             cookie_only = kind in ("hrr-cookie", "hrr-empty-cookie")
                             retry = m.server_hello(b"", bytes(32),
@@ -83,8 +95,13 @@ async def main(args):
                             if kind == "hrr-old-version":
                                 retry = retry.replace(b"\x00\x2b\x00\x02\x04\x00",
                                                       b"\x00\x2b\x00\x02\x03\x04")
+                            if kind == "hrr-wrong-legacy-version":
+                                retry = retry[:4] + b"\x03\x04" + retry[6:]
                             writer.write(plain(retry))
                             await writer.drain()
+                            if kind in expected_alerts:
+                                await check_version_alert()
+                                return
                             prefix += b"\xfe\x00\x00\x20" + c.digest(ch) + retry
                             ch = await wire.receive_frame(1, boundary=True)
                             second = m.parse_client_hello(ch[4:])
@@ -105,15 +122,24 @@ async def main(args):
                         sh = m.server_hello(public, bytes(range(32)), group=hello.group)
                         if kind == "wrong-version":
                             sh = sh[:5] + b"\x02" + sh[6:]
+                        if kind == "wrong-selected-version":
+                            sh = sh.replace(b"\x00\x2b\x00\x02\x04\x00",
+                                            b"\x00\x2b\x00\x02\x03\x04")
                         if kind == "oversized-record":
                             writer.write(b"\x16\x03\x03\xff\xff")
                             await writer.drain()
                             return
+                        if kind == "user-canceled-plain":
+                            writer.write(b"\x15\x03\x03\x00\x02\x01\x5a")
                         if kind == "fragmented-hello":
                             for byte in sh:
                                 writer.write(plain(bytes([byte])))
                         else:
                             writer.write(plain(sh + (b"\x00" if kind == "hello-residue" else b"")))
+                        if kind in expected_alerts:
+                            await writer.drain()
+                            await check_version_alert()
+                            return
                         if kind == "ccs":
                             writer.write(b"\x14\x03\x03\x00\x01\x01")
                         if kind == "legacy-record-version":
@@ -124,6 +150,9 @@ async def main(args):
                         shs = c.label_expand(root_secret, "s hs traffic", c.digest(transcript), 32)
                         sender, receiver = c.RecordState(shs, "seal"), c.RecordState(chs, "open")
                         ee = m.encrypted_extensions(b"wrong" if kind == "wrong-alpn" else b"http/1.1")
+                        if kind == "groups-hint":
+                            value = ee[6:] + m.extension(10, b"\x00\x04\x00\x1d\x00\x17")
+                            ee = m.frame(8, len(value).to_bytes(2, "big") + value)
                         cr = b""
                         if kind.startswith("client-auth-"):
                             verifier = c.public_bytes(X25519PrivateKey.generate().public_key())
@@ -135,6 +164,10 @@ async def main(args):
                                 ext += m.extension(0xff03, verifier)
                             if kind == "client-auth-signature-algorithms":
                                 ext += m.extension(13, b"\x00\x02\x08\x07")
+                            if kind.startswith("client-auth-misplaced-"):
+                                ext += m.extension(int(kind.rsplit("-", 1)[1]), b"")
+                            if kind == "client-auth-unknown":
+                                ext += m.extension(0xbeef, b"opaque future offer")
                             context = b"\x01x" if kind == "client-auth-context" else b"\x00"
                             cr = m.frame(13, context + len(ext).to_bytes(2, "big") + ext)
                         cert = m.certificate(credentials.chain_der)
@@ -168,9 +201,11 @@ async def main(args):
                             encrypted = sender.seal(ee, 22)
                             writer.write(encrypted + encrypted)
                         else:
+                            if kind == "user-canceled-handshake":
+                                writer.write(sender.seal(b"\x01\x5a", 21))
                             writer.write(sender.seal(flight, 22))
                         await writer.drain()
-                        if kind == "client-auth-decline":
+                        if kind in ("client-auth-decline", "client-auth-unknown"):
                             declined = await wire.receive_frame(11, receiver)
                             assert declined == m.frame(11, bytes(4))
                             transcript += declined
@@ -186,6 +221,8 @@ async def main(args):
                         if kind == "empty-records":
                             for _ in range(64):
                                 writer.write(sender.seal(b"", 23))
+                        if kind == "user-canceled-application":
+                            writer.write(sender.seal(b"\x01\x5a", 21))
                         encrypted = sender.seal(response, 23, padding=150 if kind == "padded-record" else 0)
                         if kind == "tampered-application":
                             encrypted = encrypted[:-1] + bytes([encrypted[-1] ^ 1])
@@ -223,6 +260,8 @@ async def main(args):
                 await asyncio.wait_for(finished_handler.wait(), 6)
                 assert (process.returncode == 0) == (kind in positives), (mode, kind, output, error, handler_errors)
                 assert not handler_errors, (kind, handler_errors)
+                if kind in expected_alerts:
+                    assert observed_alerts == [expected_alerts[kind]], (kind, observed_alerts)
                 if kind in positives:
                     assert output == response, kind
                     assert len(requests) == 1, kind

@@ -9,6 +9,7 @@
 #if defined(PHROMIUM_HTTPPS_STANDALONE)
 #define HTTPPS_FOREIGN_HANDLE
 #else
+#include "base/logging.h"
 #include "base/memory/raw_ptr_exclusion.h"
 #define HTTPPS_FOREIGN_HANDLE RAW_PTR_EXCLUSION
 #endif
@@ -57,6 +58,16 @@ size_t GroupWidth(uint16_t group) {
 }
 using Handle = std::unique_ptr<void, void(*)(void*)>;
 thread_local const NativeProvider* certificate_provider = nullptr;
+void LoadFailure(const char* stage, unsigned long platform_error = 0) {
+#if !defined(PHROMIUM_HTTPPS_STANDALONE)
+  // Never include library paths, credentials or OpenSSL's error queue here.
+  LOG(ERROR) << "HTTPPS native provider unavailable at " << stage
+             << " (platform error " << platform_error << ")";
+#else
+  (void)stage;
+  (void)platform_error;
+#endif
+}
 }  // namespace
 
 struct NativeProvider::Impl {
@@ -65,6 +76,11 @@ struct NativeProvider::Impl {
   HTTPPS_FOREIGN_HANDLE void* context = nullptr;
   HTTPPS_FOREIGN_HANDLE void* provider = nullptr;
   HTTPPS_FOREIGN_HANDLE void* gost_provider = nullptr;
+#if defined(_WIN32)
+  HTTPPS_FOREIGN_HANDLE void* gost_module_handle = nullptr;
+  using ProviderInit = int (*)(const void*, const void*, const void**, void**);
+  int (*OSSL_PROVIDER_add_builtin)(void*, const char*, ProviderInit) = nullptr;
+#endif
   HTTPPS_FOREIGN_HANDLE void* kuznyechik = nullptr;
   HTTPPS_FOREIGN_HANDLE void* magma = nullptr;
   HTTPPS_FOREIGN_HANDLE void* sm4_gcm = nullptr;
@@ -184,6 +200,9 @@ struct NativeProvider::Impl {
     LOAD(OPENSSL_thread_stop_ex); LOAD(OPENSSL_thread_stop);
     LOAD(OpenSSL_version_num); LOAD(OSSL_LIB_CTX_new); LOAD(OSSL_LIB_CTX_free);
     LOAD(OSSL_PROVIDER_load); LOAD(OSSL_PROVIDER_unload); LOAD(ERR_clear_error);
+#if defined(_WIN32)
+    LOAD(OSSL_PROVIDER_add_builtin);
+#endif
     LOAD(EVP_PKEY_CTX_new_from_name); LOAD(EVP_PKEY_CTX_new_from_pkey);
     LOAD(EVP_PKEY_CTX_free); LOAD(EVP_PKEY_free); LOAD(EVP_PKEY_keygen_init);
     LOAD(EVP_PKEY_paramgen_init); LOAD(EVP_PKEY_CTX_set_group_name); LOAD(EVP_PKEY_generate);
@@ -258,6 +277,9 @@ struct NativeProvider::Impl {
     if (provider) OSSL_PROVIDER_unload(provider);
     if (context) OSSL_LIB_CTX_free(std::exchange(context, nullptr));
     }
+#if defined(_WIN32)
+    if (gost_module_handle) FreeLibrary(static_cast<HMODULE>(gost_module_handle));
+#endif
     if (module) {
 #if defined(_WIN32)
       FreeLibrary(static_cast<HMODULE>(module));
@@ -311,6 +333,7 @@ std::shared_ptr<NativeProvider> NativeProvider::Load(std::string_view absolute_p
     return nullptr;
   api.module = LoadLibraryExW(path.c_str(), nullptr,
       LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
+  if (!api.module) LoadFailure("library load", GetLastError());
 #else
   if (absolute_path.front() != '/')
     return nullptr;
@@ -321,16 +344,25 @@ std::shared_ptr<NativeProvider> NativeProvider::Load(std::string_view absolute_p
   flags |= RTLD_DEEPBIND;
 #endif
   api.module = dlopen(path.c_str(), flags);
+  if (!api.module) LoadFailure("library load");
 #endif
-  if (!api.module || !api.BindAll())
+  if (!api.module)
     return nullptr;
+  if (!api.BindAll()) {
+    LoadFailure("required symbols");
+    return nullptr;
+  }
   Impl::ThreadScope cleanup(api);
   const auto version = api.OpenSSL_version_num();
-  if (version < 0x30500000 || version >= 0x40000000)
+  if (version < 0x30500000 || version >= 0x40000000) {
+    LoadFailure("compatible version");
     return nullptr;
+  }
   api.context = api.OSSL_LIB_CTX_new();
-  if (!api.context || !(api.provider = api.OSSL_PROVIDER_load(api.context, "default")))
+  if (!api.context || !(api.provider = api.OSSL_PROVIDER_load(api.context, "default"))) {
+    LoadFailure("private default provider");
     return nullptr;
+  }
   api.sm4_gcm = api.EVP_CIPHER_fetch(api.context, "SM4-GCM", "provider=default");
   api.sm4_ccm = api.EVP_CIPHER_fetch(api.context, "SM4-CCM", "provider=default");
   api.aes256_ccm = api.EVP_CIPHER_fetch(api.context, "AES-256-CCM", "provider=default");
@@ -343,10 +375,27 @@ std::shared_ptr<NativeProvider> NativeProvider::Load(std::string_view absolute_p
 #if defined(_WIN32)
     if (!(gost_module.starts_with("\\\\") || (gost_module.size() > 2 && gost_module[1] == ':' &&
         (gost_module[2] == '/' || gost_module[2] == '\\')))) return {};
+    // OpenSSL's Windows DSO loader uses LoadLibraryA, not UTF-8. Load the
+    // explicitly selected file ourselves and register its initializer only in
+    // this private context. Keep the module alive through provider/context and
+    // per-thread cleanup; never fall back to a search-path provider name.
+    const int wide_length = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS,
+        gost_module.data(), static_cast<int>(gost_module.size()), nullptr, 0);
+    if (wide_length <= 0) return {};
+    std::wstring wide_module(wide_length, L'\0');
+    if (MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, gost_module.data(),
+        static_cast<int>(gost_module.size()), wide_module.data(), wide_length) != wide_length) return {};
+    api.gost_module_handle = LoadLibraryExW(wide_module.c_str(), nullptr,
+        LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
+    if (!api.gost_module_handle) return {};
+    auto initialize = reinterpret_cast<Impl::ProviderInit>(GetProcAddress(
+        static_cast<HMODULE>(api.gost_module_handle), "OSSL_provider_init"));
+    if (!initialize || !api.OSSL_PROVIDER_add_builtin(api.context, "httpps-gost", initialize)) return {};
+    api.gost_provider = api.OSSL_PROVIDER_load(api.context, "httpps-gost");
 #else
     if (gost_module.front() != '/') return {};
-#endif
     api.gost_provider = api.OSSL_PROVIDER_load(api.context, std::string(gost_module).c_str());
+#endif
     if (!api.gost_provider) return {};
     api.kuznyechik = api.EVP_CIPHER_fetch(api.context, "kuznyechik-mgm", nullptr);
     api.magma = api.EVP_CIPHER_fetch(api.context, "magma-mgm", nullptr);
@@ -356,7 +405,11 @@ std::shared_ptr<NativeProvider> NativeProvider::Load(std::string_view absolute_p
       api.groups.insert(group);
     }
   }
-  return api.groups.empty() ? nullptr : result;
+  if (api.groups.empty()) {
+    LoadFailure("key agreement availability");
+    return nullptr;
+  }
+  return result;
 }
 
 bool NativeProvider::SupportsGroup(uint16_t group) const {
