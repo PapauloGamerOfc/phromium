@@ -112,7 +112,7 @@ Bytes Record(SocketHandle socket) {
 
 void AuthenticatorTest(SocketHandle socket, net::httpps::Client& client,
                        const std::vector<std::string>& anchors,
-                       const char* leaf, const char* key) {
+                       const char* leaf, const char* key, const char* grant = nullptr) {
   Bytes buffered;
   auto receive = [&]() {
     while (true) {
@@ -152,8 +152,24 @@ void AuthenticatorTest(SocketHandle socket, net::httpps::Client& client,
     Require(raw.size() == 32, "EA selected key size");
     std::copy(raw.begin(), raw.end(), credential->private_key.begin());
     OPENSSL_cleanse(raw.data(), raw.size());
+    if (grant) {
+      const auto value = ReadFile(grant);
+      credential->delegation.assign(value.begin(), value.end());
+    }
   }
   Bytes request, response;
+  if (grant) {
+    for (bool offered : {true, false}) {
+      request = receive();
+      Require(client.AuthenticateClient(request, &*credential, &response),
+              "EA client delegation uses its own request, not server grant offers");
+      Require(!response.empty() && response[0] == (offered ? 11 : 20),
+              "EA unoffered client grant produces authenticated refusal");
+      send_frame(response);
+    }
+    send_frame(Bytes{'O', 'K'});
+    return;
+  }
   for (size_t i = 0; i < 4; ++i) {
     request = receive();
     Require(client.AuthenticateClient(request, credential ? &*credential : nullptr, &response),
@@ -338,7 +354,7 @@ int Get(const char* host,
     Require(client.authentication() == net::httpps::Authentication::kUnauthenticated,
             "unauthenticated lineage is preserved, including resumption");
   if (authenticator_test)
-    AuthenticatorTest(stream, client, anchors, client_leaf, client_key);
+    AuthenticatorTest(stream, client, anchors, client_leaf, client_key, client_grant);
   if (resume_test) {
     Require(client.resumed() == (round != 0), "expected session resumption");
     Require(client.early_data_accepted() == (early && expect_early_acceptance),
@@ -931,6 +947,30 @@ int main(int argc, char** argv) {
                std::string_view(argv[5]) == "-" ? nullptr : argv[5],
                std::string_view(argv[6]) == "-" ? nullptr : argv[6], options,
                std::string_view(argv[7]) == "-" ? nullptr : argv[7]);
+  }
+  if (argc == 9 && std::string_view(argv[1]) == "--get-delegation-direction") {
+    net::httpps::ClientOptions options;
+    options.delegated_credentials = true;
+    options.grant_signature_algorithms = {0x0403};
+    options.post_handshake_auth = true;
+    const bool authenticator = std::string_view(argv[8]) == "ea";
+    return Get(argv[2], argv[3], argv[4], false, false, true,
+               argv[5], argv[6], options, argv[7], false, authenticator);
+  }
+  if (argc == 5 && std::string_view(argv[1]) == "--check-client-delegation") {
+    net::httpps::ClientCredential credential;
+    credential.certificates = {ReadFile(argv[2])};
+    auto key = ReadFile(argv[3]);
+    Require(key.size() == credential.private_key.size(), "local delegated key length");
+    std::copy(key.begin(), key.end(), credential.private_key.begin());
+    OPENSSL_cleanse(key.data(), key.size());
+    const auto grant = ReadFile(argv[4]);
+    credential.delegation.assign(grant.begin(), grant.end());
+    net::httpps::ClientOptions options;
+    options.delegated_credentials = true;
+    options.grant_signature_algorithms = {0x0403};
+    net::httpps::Client client("example.test", {}, false, options);
+    return client.SetClientCredential(credential) ? 0 : 1;
   }
   if (argc == 8 && std::string_view(argv[1]) == "--get-compression") {
     net::httpps::ClientOptions options;

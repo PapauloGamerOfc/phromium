@@ -1031,8 +1031,8 @@ bool Client::SetClientCredential(const ClientCredential& credential) {
   if (!(credential.certificate_type == 2
             ? ExtractRawPublicKey(Octets(credential.certificates.front()), &expected)
             : !credential.delegation.empty()
-                ? ValidateDelegation(credential.certificates.front(), credential.delegation, false,
-                                     options_.grant_signature_algorithms, &expected, options_.native_provider.get())
+                ? ValidateLocalClientDelegation(credential.certificates.front(), credential.delegation,
+                                               &expected, options_.native_provider.get())
             : ExtractServerPublicKey(credential.certificates.front(), &expected)) ||
       !Equal(actual, expected))
     return false;

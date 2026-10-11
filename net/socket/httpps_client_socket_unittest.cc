@@ -1878,10 +1878,19 @@ TEST_F(HttppsClientSocketTest, EarlyConnectStillHasAbsoluteHandshakeDeadline) {
   TestCompletionCallback connect;
   ASSERT_EQ(OK, connect.GetResult(socket->Connect(connect.callback())));
   EXPECT_EQ(0, peer_.client_finished);
+  SSLInfo before;
+  ASSERT_TRUE(socket->GetSSLInfo(&before));
   tasks_.FastForwardBy(base::Seconds(30));
   EXPECT_FALSE(socket->IsConnected());
   TestCompletionCallback confirm;
   EXPECT_EQ(ERR_TIMED_OUT, socket->ConfirmHandshake(confirm.callback()));
+  SSLInfo after;
+  ASSERT_TRUE(socket->GetSSLInfo(&after));
+  EXPECT_EQ(before.cert, after.cert);
+  EXPECT_EQ(before.connection_status, after.connection_status);
+  EXPECT_EQ(before.client_cert_sent, after.client_cert_sent);
+  socket->Disconnect();
+  EXPECT_FALSE(socket->GetSSLInfo(&after));
 }
 
 TEST_F(HttppsClientSocketTest, BrowserVerifierSyncAndAsyncShareTrustPolicy) {
@@ -2563,6 +2572,79 @@ TEST_F(HttppsClientSocketTest, UnexpectedEofFailsBothConcurrentOperationsOnce) {
   tasks_.RunUntilIdle();
   EXPECT_EQ(1, writes);
   EXPECT_FALSE(socket->IsConnected());
+}
+
+TEST_F(HttppsClientSocketTest, SSLInfoSurvivesFatalWriteUntilDisconnect) {
+  peer_.mode = SYNCHRONOUS;
+  peer_.read_chunk = peer_.write_chunk = 20000;
+  auto socket = Make();
+  SSLInfo before;
+  EXPECT_FALSE(socket->GetSSLInfo(&before));
+  TestCompletionCallback connect;
+  ASSERT_EQ(OK, connect.GetResult(socket->Connect(connect.callback())));
+  ASSERT_TRUE(socket->GetSSLInfo(&before));
+  peer_.fail_writes = true;
+  auto buffer = base::MakeRefCounted<StringIOBuffer>("request");
+  TestCompletionCallback write;
+  EXPECT_EQ(ERR_CONNECTION_RESET, write.GetResult(socket->Write(
+      buffer.get(), buffer->size(), write.callback(), TRAFFIC_ANNOTATION_FOR_TESTS)));
+  EXPECT_FALSE(socket->IsConnected());
+  SSLInfo after;
+  ASSERT_TRUE(socket->GetSSLInfo(&after));
+  EXPECT_EQ(before.connection_status, after.connection_status);
+  EXPECT_EQ(before.cert, after.cert);
+  EXPECT_EQ(before.client_cert_sent, after.client_cert_sent);
+  std::array<uint8_t, 32> exported{};
+  EXPECT_EQ(ERR_SOCKET_NOT_CONNECTED,
+            socket->ExportKeyingMaterial("audit", std::nullopt, exported));
+  tasks_.RunUntilIdle();
+  EXPECT_TRUE(socket->GetSSLInfo(&after));
+  socket->Disconnect();
+  EXPECT_FALSE(socket->GetSSLInfo(&after));
+}
+
+TEST_F(HttppsClientSocketTest, SSLInfoSurvivesFatalReadUntilDisconnect) {
+  for (int failure : {0, 1, 2}) {
+    SCOPED_TRACE(failure);
+    peer_.mode = SYNCHRONOUS;
+    peer_.read_chunk = peer_.write_chunk = 20000;
+    auto socket = Make();
+    TestCompletionCallback connect;
+    ASSERT_EQ(OK, connect.GetResult(socket->Connect(connect.callback())));
+    SSLInfo before;
+    ASSERT_TRUE(socket->GetSSLInfo(&before));
+    if (failure == 0) {
+      peer_.eof = true;
+    } else if (failure == 1) {
+      peer_.Alert(40);
+    } else {
+      // An invalid encrypted record exercises native protocol-failure cleanup.
+      peer_.RawRecord(Bytes{23, 3, 3, 0, 1, 0});
+    }
+    auto buffer = base::MakeRefCounted<IOBufferWithSize>(32);
+    TestCompletionCallback read;
+    EXPECT_LT(read.GetResult(socket->Read(buffer.get(), buffer->size(),
+                                          read.callback())), OK);
+    EXPECT_FALSE(socket->IsConnected());
+    SSLInfo after;
+    ASSERT_TRUE(socket->GetSSLInfo(&after));
+    EXPECT_EQ(before.connection_status, after.connection_status);
+    EXPECT_EQ(before.cert, after.cert);
+    EXPECT_EQ(before.client_cert_sent, after.client_cert_sent);
+    tasks_.RunUntilIdle();
+    socket->Disconnect();
+    EXPECT_FALSE(socket->GetSSLInfo(&after));
+    peer_.eof = false;
+  }
+}
+
+TEST_F(HttppsClientSocketTest, FailedHandshakeDoesNotInventSSLInfo) {
+  peer_.bad_proof = true;
+  auto socket = Make();
+  TestCompletionCallback connect;
+  EXPECT_LT(connect.GetResult(socket->Connect(connect.callback())), OK);
+  SSLInfo info;
+  EXPECT_FALSE(socket->GetSSLInfo(&info));
 }
 
 }  // namespace

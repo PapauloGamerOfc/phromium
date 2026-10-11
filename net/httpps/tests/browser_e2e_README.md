@@ -8,7 +8,7 @@ disables the sandbox, or bypasses a browser certificate error through CDP.
 
 Prerequisites: Python 3.11+, the reference server's `requirements-dev.txt`
 (including the `h2` fixture dependency), and a clean checkout of
-`tls20-server` at `dc3c1d1ace9da7d20929d066cba4fea1553d3b5a`. The revision is
+`tls20-server` at `873c02a6827b424eab358b551b9625964d7e8bca`. The revision is
 checked before importing its protocol implementation. No dependencies are
 downloaded by the script.
 
@@ -21,6 +21,33 @@ provenance check, never certificate validation. Historical clean-revision
 results do not validate a subsequent optional-profile expansion.
 Use the server and browser from the same migration; the old numbered prototype
 is not wire-compatible with the current spec.
+
+## Failure metadata and directional delegation: 2026-10-11
+
+Fatal socket I/O now destroys the protocol object and its secrets while retaining
+only public SSL connection metadata for error reporting. Regression tests cover
+write failure, EOF, authenticated fatal alerts, malformed encrypted records and
+an early-connect timeout; explicit Disconnect invalidates the metadata. The new
+post-failure query test reproduced the null-dereference crash before the fix.
+
+Installing an outgoing client delegated credential no longer applies the
+ClientHello's independent server-grant offer. Local signature, role, lifetime,
+authorization and key-matching checks remain mandatory. Actual initial/PHA and
+application-authenticator requests still enforce their own grant offers.
+Interop tests exercise disjoint ECDSA server/Ed25519 client grants, per-request
+changes, authenticated refusals and nine local valid/invalid credential cases.
+
+Local Windows validation passed six portable CTest targets, 21 interoperability
+invocations, all 18 optional-provider commands, 11,705 selected integrated network
+tests with retries disabled, 30 service tests, eight component tests,
+38 actual-browser assertions, and 34 profile cases
+under each of the default and explicitly enabled network-sandbox policies.
+All executed network tests passed on the first attempt, with no runtime skips;
+six pre-existing disabled tests matching the selection were not enabled.
+The 15 harness self-checks and nine branding checks also passed. Logs/reports are
+under `out/httpps-native/four-fixes-*` and `out/Phromium/four-fixes-*`.
+These are local Windows results, not completed remote Linux/macOS CI or a
+formal security audit.
 
 ## OCSP, authenticator and alert conformance: 2026-10-11
 

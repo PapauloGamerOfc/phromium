@@ -618,6 +618,11 @@ int HttppsClientSocket::Abort(int error) {
     raw_read_.reset();
     raw_write_.reset();
     user_write_buffer_.reset();
+    // Preserve public connection metadata for error reporting without retaining
+    // the protocol object or its secrets. PHA may have changed this flag since
+    // PopulateSSLInfo() ran at the end of the initial handshake.
+    if (client_)
+      ssl_info_.client_cert_sent = client_->client_identity_authenticated();
     client_.reset();
     base::SequencedTaskRunner::GetCurrentDefault()->PostTask(
         FROM_HERE, base::BindOnce(&HttppsClientSocket::DeliverFatalCallbacks,
@@ -972,7 +977,8 @@ bool HttppsClientSocket::GetSSLInfo(SSLInfo* info) {
     return false;
   }
   *info = ssl_info_;
-  info->client_cert_sent = client_->client_identity_authenticated();
+  if (client_)
+    info->client_cert_sent = client_->client_identity_authenticated();
   return true;
 }
 httpps::Authentication HttppsClientSocket::GetHttppsAuthentication() const {

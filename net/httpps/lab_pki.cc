@@ -456,9 +456,11 @@ bool VerifyLabChain(const std::vector<std::string>& chain,
       (signing_parent || ExtractServerPublicKey(chain.front(), server_public_key));
 }
 
-bool ValidateDelegation(std::string_view parent_der, ByteSpan grant, bool server,
-                        const std::vector<uint16_t>& algorithms, Secret* public_key,
-                        const NativeProvider* provider) {
+namespace {
+
+bool ValidateDelegationImpl(std::string_view parent_der, ByteSpan grant, bool server,
+                            const std::vector<uint16_t>* algorithms, Secret* public_key,
+                            const NativeProvider* provider) {
   auto parent = Parse(parent_der);
   if (!parent || grant.size() < 13)
     return false;
@@ -477,7 +479,7 @@ bool ValidateDelegation(std::string_view parent_der, ByteSpan grant, bool server
     return false;
   const size_t cursor = 9 + spki_size;
   const uint16_t scheme = integer(grant.subspan(cursor, 2u));
-  if (std::find(algorithms.begin(), algorithms.end(), scheme) == algorithms.end() ||
+  if ((algorithms && std::find(algorithms->begin(), algorithms->end(), scheme) == algorithms->end()) ||
       integer(grant.subspan(cursor + 2, 2u)) != grant.size() - cursor - 4)
     return false;
   bssl::UniquePtr<ASN1_OBJECT> usage_oid(OBJ_txt2obj("1.3.6.1.4.1.44363.44", 1));
@@ -555,6 +557,19 @@ bool ValidateDelegation(std::string_view parent_der, ByteSpan grant, bool server
     return false;
   auto signature = grant.subspan(cursor + 4);
   return EVP_DigestVerify(verifier.get(), signature.data(), signature.size(), message.data(), message.size()) == 1;
+}
+
+}  // namespace
+
+bool ValidateDelegation(std::string_view parent, ByteSpan grant, bool server,
+                        const std::vector<uint16_t>& algorithms, Secret* public_key,
+                        const NativeProvider* provider) {
+  return ValidateDelegationImpl(parent, grant, server, &algorithms, public_key, provider);
+}
+
+bool ValidateLocalClientDelegation(std::string_view parent, ByteSpan grant,
+                                  Secret* public_key, const NativeProvider* provider) {
+  return ValidateDelegationImpl(parent, grant, false, nullptr, public_key, provider);
 }
 
 }  // namespace net::httpps

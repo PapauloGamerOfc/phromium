@@ -295,6 +295,11 @@ HTTPPS_EXPORT bool ValidateDelegation(std::string_view parent, ByteSpan grant,
                                       bool server, const std::vector<uint16_t>& algorithms,
                                       Secret* public_key, const NativeProvider* provider = nullptr);
 HTTPPS_EXPORT bool ValidServerName(std::string_view name);
+// Check an explicitly configured outgoing client grant before any peer request.
+// Remote credentials must use ValidateDelegation with the applicable offers.
+HTTPPS_EXPORT bool ValidateLocalClientDelegation(std::string_view parent, ByteSpan grant,
+                                                Secret* public_key,
+                                                const NativeProvider* provider = nullptr);
 // Reference identity may be an IP SAN. SNI host_name remains DNS-only.
 HTTPPS_EXPORT bool IsIpIdentity(std::string_view name);
 HTTPPS_EXPORT bool ValidServiceIdentity(std::string_view name);
