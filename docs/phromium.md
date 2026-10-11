@@ -301,6 +301,9 @@ callers. These synchronous operations neither write HTTP bytes nor expose keys
 to JavaScript. Applications must negotiate their own framing and independently
 authorize the returned identity. Requests are scoped to that connection, and
 cancellation, failure and disconnect cannot reopen a consumed context.
+Well-framed unsupported delegation offers leave compatible direct X25519
+authenticators available. They do not authorize an unoffered delegated
+credential; malformed lists and invalid selected grants still fail.
 
 `no_alpn_http11` is an explicit profile for a service that has separately agreed
 to HTTP/1.1 without ALPN. It emits no ALPN extension, rejects unsolicited ALPN

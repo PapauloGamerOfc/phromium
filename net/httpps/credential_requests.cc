@@ -36,8 +36,10 @@ bool ResponderValid(ByteSpan value) {
   return CBS_get_asn1(&input, &content, Explicit(2)) && !CBS_len(&input) &&
       CBS_get_asn1(&content, &key, CBS_ASN1_OCTETSTRING) && !CBS_len(&content) && CBS_len(&key) == 20;
 }
-bool Extensions(ByteSpan value, std::optional<Bytes>* nonce) {
+bool Extensions(ByteSpan value, std::optional<Bytes>* nonce,
+                bool* unsupported_critical = nullptr) {
   nonce->reset();
+  if (unsupported_critical) *unsupported_critical = false;
   if (value.empty()) return true;
   CBS input, sequence;
   CBS_init(&input, value.data(), value.size());
@@ -51,9 +53,11 @@ bool Extensions(ByteSpan value, std::optional<Bytes>* nonce) {
         !CBS_is_valid_asn1_oid(&oid)) return false;
     Bytes identifier(BytesOf(oid).begin(), BytesOf(oid).end());
     if (!seen.insert(identifier).second) return false;
+    bool is_critical = false;
     if (CBS_peek_asn1_tag(&extension, CBS_ASN1_BOOLEAN)) {
       if (!CBS_get_asn1(&extension, &critical, CBS_ASN1_BOOLEAN) ||
           CBS_len(&critical) != 1 || CBS_data(&critical)[0] != 0xff) return false;
+      is_critical = true;
     }
     if (!CBS_get_asn1(&extension, &encoded, CBS_ASN1_OCTETSTRING) || CBS_len(&extension)) return false;
     if (identifier == nonce_oid) {
@@ -61,6 +65,10 @@ bool Extensions(ByteSpan value, std::optional<Bytes>* nonce) {
       if (!CBS_get_asn1(&encoded, &bytes, CBS_ASN1_OCTETSTRING) || CBS_len(&encoded) ||
           !CBS_len(&bytes) || CBS_len(&bytes) > 128) return false;
       *nonce = Bytes(BytesOf(bytes).begin(), BytesOf(bytes).end());
+    } else if (is_critical && unsupported_critical) {
+      // Unknown requirements are well-framed, but this matcher cannot claim
+      // that a generic response fulfilled their processing semantics.
+      *unsupported_critical = true;
     }
   }
   return true;
@@ -85,10 +93,13 @@ bool CredentialRequestOptionsValid(const ClientOptions& options) {
 bool OCSPRequestMatchesResponse(const ClientOptions& options, ByteSpan response) {
   if (options.ocsp_responder_ids.empty() && options.ocsp_request_extensions.empty()) return true;
   std::optional<Bytes> requested_nonce;
-  if (!CredentialRequestOptionsValid(options) || !Extensions(options.ocsp_request_extensions, &requested_nonce)) return false;
+  bool unsupported_critical = false;
+  if (!CredentialRequestOptionsValid(options) ||
+      !Extensions(options.ocsp_request_extensions, &requested_nonce, &unsupported_critical)) return false;
   // A missing optional staple is not evidence. TLSFeature/current verifier
   // independently enforces any requirement that a response actually exist.
   if (response.empty()) return true;
+  if (unsupported_critical) return false;
   CBS input, outer, status, explicit_response, response_bytes, oid, basic_octets;
   CBS_init(&input, response.data(), response.size());
   const Bytes basic_oid{0x2b, 6, 1, 5, 5, 7, 0x30, 1, 1};

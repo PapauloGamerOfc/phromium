@@ -23,7 +23,8 @@ async def main(args):
     from cryptography.x509.oid import NameOID
     from tests.test_pki import der, issue
     from tests.test_signature_profiles import tlv
-    from tls20_server import messages
+    from tls20_server import messages, status_request
+    from tls20_server.credential_profiles import validate_ocsp_response
     from tls20_server.handshake import server_handshake
     from tls20_server.pki import Credentials
     from tls20_server.tickets import TicketStore
@@ -36,6 +37,10 @@ async def main(args):
     nonce_oid = tlv(6, bytes.fromhex("2b0601050507300102"))
     request_extension = tlv(0x30, nonce_oid + tlv(4, tlv(4, nonce)))
     request = tlv(0x30, request_extension)
+    critical_nonce = tlv(0x30, nonce_oid + tlv(1, b"\xff") + tlv(4, tlv(4, nonce)))
+    unknown_oid = tlv(6, bytes.fromhex("2a0304"))
+    unknown_extension = tlv(0x30, unknown_oid + tlv(4, b"\x05\x00"))
+    critical_unknown = tlv(0x30, unknown_oid + tlv(1, b"\xff") + tlv(4, b"\x05\x00"))
     now = datetime.now(timezone.utc)
     def response(selected_nonce=nonce, by_name=False):
         builder = (ocsp.OCSPResponseBuilder().add_response(leaf, root, hashes.SHA1(),
@@ -47,13 +52,15 @@ async def main(args):
         responder = tlv(0xa1, name.public_bytes()) if by_name else tlv(0xa2, tlv(4, result.responder_key_hash))
         return result.public_bytes(serialization.Encoding.DER), responder
     valid, responder = response()
+    validate_ocsp_response(valid, leaf, root)  # Independent signature/status/time control.
     checks = 0
     with tempfile.TemporaryDirectory(prefix="httpps-requests-") as directory:
         directory = Path(directory)
         root_path, name_path, id_path, request_path, response_path = [directory/item for item in (
             "root.der", "name.der", "responder.der", "request.der", "response.der")]
         root_path.write_bytes(der(root))
-        async def check(expected, id_value=responder, request_value=request, response_value=valid, name_value=name.public_bytes()):
+        async def check(expected, id_value=responder, request_value=request, response_value=valid,
+                        name_value=name.public_bytes(), expected_returncode=None):
             nonlocal checks
             for path, data in ((name_path, name_value), (id_path, id_value), (request_path, request_value), (response_path, response_value)):
                 path.write_bytes(data)
@@ -69,6 +76,8 @@ async def main(args):
                 raise
             assert (process.returncode == 0) == expected, (checks, process.returncode, output, error,
                 id_value.hex(), request_value.hex(), name_value.hex(), response_value.hex())
+            if expected_returncode is not None:
+                assert process.returncode == expected_returncode, (checks, process.returncode, expected_returncode, output, error)
             checks += 1
         await check(True)
         await check(False, response_value=response(b"different nonce")[0])
@@ -83,6 +92,20 @@ async def main(args):
         await check(False, name_value=name.public_bytes()+b"\0")
         await check(False, id_value=b"\xa2\x02\x04\x00")
         await check(True, response_value=b"")  # Optional absence isn't evidence.
+        await check(True, request_value=tlv(0x30, critical_nonce))
+        await check(False, request_value=tlv(0x30, critical_nonce),
+                    response_value=response(b"different nonce")[0], expected_returncode=1)
+        await check(True, request_value=tlv(0x30, unknown_extension))
+        await check(True, request_value=tlv(0x30, request_extension + unknown_extension))
+        # Unsupported requirements are valid syntax (not rc2), but a generic
+        # staple cannot satisfy them, even with a matching supported nonce.
+        await check(False, request_value=tlv(0x30, critical_unknown), expected_returncode=1)
+        await check(False, request_value=tlv(0x30, request_extension + critical_unknown), expected_returncode=1)
+        await check(True, request_value=tlv(0x30, critical_unknown), response_value=b"")
+        await check(False, request_value=tlv(0x30, critical_unknown * 2), expected_returncode=2)
+        await check(False, request_value=tlv(0x30, critical_unknown + b"\x30\x00"), expected_returncode=2)
+        await check(False, request_value=tlv(0x30, tlv(0x30, unknown_oid + tlv(1, b"\x00") + tlv(4, b""))),
+                    expected_returncode=2)
         for size in range(len(valid)):
             if size:
                 await check(False, response_value=valid[:size])
@@ -91,11 +114,13 @@ async def main(args):
         metadata = b"\x01" + len(valid).to_bytes(3, "big") + valid
         credentials = Credentials([der(leaf)], key, entry_extensions=(((5, metadata),),))
         store, tasks, seen, errors, offers = TicketStore(), set(), [], [], []
+        network_request, failure_expected = request, False
+        rejected_errors = []
         original = messages.parse_client_hello
         def inspect(data, **options):
             hello = original(data, **options)
             extensions = dict(hello.extension_values)
-            expected = b"\x01" + (len(responder)+2).to_bytes(2, "big") + len(responder).to_bytes(2, "big") + responder + len(request).to_bytes(2, "big") + request
+            expected = b"\x01" + (len(responder)+2).to_bytes(2, "big") + len(responder).to_bytes(2, "big") + responder + len(network_request).to_bytes(2, "big") + network_request
             assert extensions[5] == expected, ("status_request", extensions[5], expected)
             names = len(name.public_bytes()).to_bytes(2, "big") + name.public_bytes()
             assert extensions[47] == len(names).to_bytes(2, "big") + names, ("authorities", extensions[47], names)
@@ -116,7 +141,7 @@ async def main(args):
                     await channel.send(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nOK")
                     await channel.close()
             except BaseException as error:
-                errors.append(repr(error))
+                (rejected_errors if failure_expected else errors).append(repr(error))
             finally:
                 writer.close()
                 try: await writer.wait_closed()
@@ -124,7 +149,8 @@ async def main(args):
                 tasks.discard(task)
         listener = await asyncio.start_server(peer, "127.0.0.1", 0)
         try:
-            with patch.object(messages, "parse_client_hello", inspect):
+            async def get():
+                request_path.write_bytes(network_request)
                 process = await asyncio.create_subprocess_exec(str(args.native.resolve()), "--get-credential-request",
                     "example.test", str(listener.sockets[0].getsockname()[1]), str(root_path),
                     str(name_path), str(id_path), str(request_path),
@@ -135,14 +161,32 @@ async def main(args):
                     await process.wait()
                     raise
                 if tasks: await asyncio.gather(*tasks)
-                assert process.returncode == 0 and not errors, (output, error, errors)
-                assert len(offers) == 3 and seen == [(False, False), (True, False), (True, True)], seen
+                return process.returncode, output, error
+
+            with patch.object(messages, "parse_client_hello", inspect):
+                # Each positive run also checks real received tickets against
+                # changed critical/noncritical requirements before CH/0-RTT.
+                for network_request in (request, tlv(0x30, critical_nonce),
+                                        tlv(0x30, request_extension + unknown_extension)):
+                    code, output, error = await get()
+                    assert code == 0 and not errors, (output, error, errors)
+                assert len(offers) == 9 and seen == [(False, False), (True, False), (True, True)] * 3, seen
+
+                network_request = tlv(0x30, request_extension + critical_unknown)
+                failure_expected = True
+                # Deliberately make this synthetic peer send a valid generic
+                # response instead of correctly omitting an unsupported staple.
+                with patch.object(status_request, "response_matches_request", return_value=True):
+                    code, output, error = await get()
+                assert code != 0 and b"FAIL: authenticated server flight" in error, (code, output, error)
+                assert len(offers) == 10 and len(seen) == 9 and len(rejected_errors) == 1, (offers, seen, rejected_errors)
         finally:
             listener.close()
             await listener.wait_closed()
             for task in tuple(tasks): task.cancel()
             await asyncio.gather(*tasks, return_exceptions=True)
-    print(f"{checks} OCSP request/nonce/responder/DER checks and 3 full/resumed/early CA-preference connections passed")
+    print(f"{checks} OCSP request/nonce/responder/DER checks, 9 full/resumed/early CA-preference connections, "
+          "cached critical/noncritical policy rechecks, and 1 rejected unsupported-critical staple passed")
 
 
 if __name__ == "__main__":

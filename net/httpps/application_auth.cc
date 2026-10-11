@@ -95,7 +95,7 @@ bool Algorithms(ByteSpan encoded, std::vector<uint16_t>* out) {
     out->push_back((uint16_t{list[i]} << 8) | list[i + 1]);
   return true;
 }
-bool Offers(const Extensions& extensions, bool server) {
+bool Offers(const Extensions& extensions) {
   auto path = extensions.find(50);
   if (path == extensions.end() || extensions.count(13))
     return false;
@@ -111,9 +111,10 @@ bool Offers(const Extensions& extensions, bool server) {
     return false;
   if (extensions.count(34)) {
     std::vector<uint16_t> macs, grants;
+    // Unsupported delegated schemes are valid offers. They prevent selecting
+    // that delegated credential, but do not prevent a direct X25519 identity.
     if (!Algorithms(extensions.at(34), &macs) ||
-        !Algorithms(extensions.at(0xff04), &grants) || !signatures(grants) ||
-        std::find(macs.begin(), macs.end(), server ? 0xfe00 : 0xfe01) == macs.end())
+        !Algorithms(extensions.at(0xff04), &grants) || !signatures(grants))
       return false;
   }
   return true;
@@ -151,7 +152,7 @@ bool ParseRequest(ByteSpan wire, Request* request) {
   if (!request->server && request->extensions.count(0))
     return false;
   std::copy(share->second.begin(), share->second.end(), request->share.begin());
-  return Offers(request->extensions, request->server);
+  return Offers(request->extensions);
 }
 bool Certificate(const AuthenticatorIdentity& identity, Bytes* frame) {
   if (identity.context.size() > 255 || identity.extensions.size() != identity.certificates.size())
@@ -394,7 +395,7 @@ bool Client::ValidateServerAuthenticator(ByteSpan authenticator,
       return false;
     pending.private_key = authenticator_a_;
     offers = authenticator_capabilities_;
-    if (!Offers(offers, true))
+    if (!Offers(offers))
       return false;
   }
   Bytes empty_certificate, transcript;

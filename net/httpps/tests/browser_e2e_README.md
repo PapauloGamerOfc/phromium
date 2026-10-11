@@ -8,7 +8,7 @@ disables the sandbox, or bypasses a browser certificate error through CDP.
 
 Prerequisites: Python 3.11+, the reference server's `requirements-dev.txt`
 (including the `h2` fixture dependency), and a clean checkout of
-`tls20-server` at `491856945f91124ff5daaea9069effb2433c51fd`. The revision is
+`tls20-server` at `dc3c1d1ace9da7d20929d066cba4fea1553d3b5a`. The revision is
 checked before importing its protocol implementation. No dependencies are
 downloaded by the script.
 
@@ -21,6 +21,27 @@ provenance check, never certificate validation. Historical clean-revision
 results do not validate a subsequent optional-profile expansion.
 Use the server and browser from the same migration; the old numbered prototype
 is not wire-compatible with the current spec.
+
+## OCSP, authenticator and alert conformance: 2026-10-11
+
+The portable engine and complete Windows browser were rebuilt after fixing
+unsupported critical OCSP request requirements, unsupported delegation offers
+in application authenticators, and fatal-alert classification. Regressions cover
+fresh and cached OCSP evidence before resumption/0-RTT, direct identities and
+authenticated refusals in both authenticator directions, selected-grant policy,
+and exact authenticated alert codes with valid-message controls.
+
+Local validation passed all six portable CTest targets, 20 interoperability
+invocations, all 18 optional-provider commands, 11,702 selected integrated network
+tests with retries disabled, 30 service tests, eight component tests, 38 actual
+browser assertions and 34 provisioned-profile cases under each of the default
+and explicitly enabled network-sandbox policies. Harness self-checks (15) and
+branding checks (nine) also passed. The matching reference-server suite ran
+637 tests with only two Windows-specific skips when all native providers were
+enabled; its package and isolated-installation checks passed. Logs are under
+`out/httpps-native/three-fixes-*` and `out/Phromium/three-fixes-*`.
+These are local Windows results, not completed remote Linux/macOS CI or a
+formal security audit.
 
 ## Retry-conformance validation: 2026-10-11
 

@@ -67,17 +67,26 @@ async def main(args):
                             async def send(value):
                                 await channel.send(len(value).to_bytes(4, "big") + value)
 
-                            request = manager.request(context=b"client-first")
-                            await send(request)
                             def validate(identity, request):
                                 assert identity.chain == tuple(credential.chain_der)
                                 assert request.role == "client"
                                 return AuthorizedIdentity(credential.private_key.public_key(), "authorized-loopback-client")
-                            result = await manager.validate(await receive(), validate, request=request)
-                            assert result.authenticated == selected
+                            from tls20_server import messages as m
+                            for index, schemes in enumerate(((0x0a0a,), (0xaaaa,), (0xfe00,), (0x0a0a, 0xfe01))):
+                                request = manager.request(context=b"client-first" + bytes((index,)), extra_extensions=(
+                                    (34, m._vec(b"".join(value.to_bytes(2, "big") for value in schemes), 2)),
+                                    (0xff04, m._vec(b"\x08\x07", 2))))
+                                await send(request)
+                                response = await receive()
+                                assert response[0] == (11 if selected else 20)
+                                result = await manager.validate(response, validate, request=request)
+                                assert result.authenticated == selected
                             assert await receive() == channel.channel_binding()
-                            request = await receive()
-                            await send(manager.authenticate(credentials, request=request))
+                            for schemes in ((0x0a0a,), (0xaaaa,), (0xfe01,), (0x0a0a, 0xfe00)):
+                                request = await receive()
+                                from tls20_server.application_auth import parse_request
+                                assert m._u16_list(dict(parse_request(request).extensions)[34]) == schemes
+                                await send(manager.authenticate(credentials, request=request))
                             request = await receive()
                             await send(manager.authenticate(request=request))
                             await send(manager.authenticate(credentials, context=b"spontaneous-loopback"))
@@ -118,7 +127,7 @@ async def main(args):
                 finally:
                     server.close()
                     await server.wait_closed()
-    print(f"{2 if password_policy else 6} native application-authenticator cases: client/server MAC, spontaneous identity, refusals, consumed contexts, tampered Finished and channel binding passed; PAKE={password_policy is not None}")
+    print(f"{2 if password_policy else 6} native application-authenticator cases: client/server MAC, GREASE/unknown delegation direct fallback and refusals, spontaneous identity, consumed contexts, tampered Finished and channel binding passed; PAKE={password_policy is not None}")
 
 
 if __name__ == "__main__":

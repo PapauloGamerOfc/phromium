@@ -186,6 +186,14 @@ native engine. Incompatible combinations fail before a ClientHello is sent:
 - `signaling`: independently authenticated `local_hash`, `peer_hash`,
   `local_session_id`, `peer_session_id` and optional `required`.
 
+OCSP request extensions distinguish malformed syntax from unsupported critical
+requirements. A nonempty staple cannot satisfy a critical requirement the
+implementation does not understand, including when revalidating a saved ticket
+before resumption or 0-RTT. Unknown noncritical extensions remain ignorable;
+supported nonce requirements still require a matching response. Optional
+absence is not evidence of fulfillment; configured evidence/TLSFeature policy
+independently determines whether a missing staple is acceptable.
+
 ALPN otherwise comes from the browser HTTP stack. `no_alpn_http11` explicitly
 agrees on HTTP/1.1 without ALPN, never HTTP/2. PHA remains forbidden on HTTP/2.
 Pinning uses a fresh attempt per connection and disables resumption/0-RTT for

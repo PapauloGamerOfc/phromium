@@ -153,11 +153,17 @@ void AuthenticatorTest(SocketHandle socket, net::httpps::Client& client,
     std::copy(raw.begin(), raw.end(), credential->private_key.begin());
     OPENSSL_cleanse(raw.data(), raw.size());
   }
-  auto request = receive();
-  Bytes response;
-  Require(client.AuthenticateClient(request, credential ? &*credential : nullptr, &response), "EA client identity/refusal");
-  send_frame(response);
-  Require(!client.AuthenticateClient(request, credential ? &*credential : nullptr, &response), "EA client request replay rejected");
+  Bytes request, response;
+  for (size_t i = 0; i < 4; ++i) {
+    request = receive();
+    Require(client.AuthenticateClient(request, credential ? &*credential : nullptr, &response),
+            "EA direct client identity/refusal accepts unsupported delegation offers");
+    Require(!response.empty() && response[0] == (credential ? 11 : 20),
+            "EA direct identity or authenticated refusal selected");
+    send_frame(response);
+    Require(!client.AuthenticateClient(request, credential ? &*credential : nullptr, &response),
+            "EA client request replay rejected");
+  }
   Bytes binding;
   Require(client.ChannelBinding(&binding) && binding.size() == 32, "named channel binding");
   send_frame(binding);
@@ -169,12 +175,29 @@ void AuthenticatorTest(SocketHandle socket, net::httpps::Client& client,
         net::httpps::VerifyLabChain(identity.certificates, anchors, "localhost", public_key);
   };
   bool authenticated = false;
-  Require(client.RequestServerAuthenticator(Bytes{1}, {}, &request), "EA server request");
-  send_frame(request);
-  response = receive();
-  Require(client.ValidateServerAuthenticator(response, validate, &authenticated, request) && authenticated, "EA server MAC and Finished");
-  Require(!client.ValidateServerAuthenticator(response, validate, &authenticated, request), "EA server replay rejected");
-  Require(client.RequestServerAuthenticator(Bytes{2}, {}, &request), "EA refusal request");
+  const std::map<uint16_t, Bytes> unknown_delegation{
+      {34, Bytes{0, 2, 0x0a, 0x0a}}, {0xff04, Bytes{0, 2, 8, 7}}};
+  for (const Bytes& invalid : {Bytes{0, 0}, Bytes{0, 1, 0x0a}, Bytes{0, 2, 0x0a}}) {
+    auto malformed = unknown_delegation;
+    malformed[34] = invalid;
+    Require(!client.RequestServerAuthenticator(Bytes{6}, malformed, &request),
+            "EA malformed delegation vector still rejected");
+  }
+  uint8_t context = 10;
+  for (const Bytes& schemes : {Bytes{0, 2, 0x0a, 0x0a}, Bytes{0, 2, 0xaa, 0xaa},
+                              Bytes{0, 2, 0xfe, 1}, Bytes{0, 4, 0x0a, 0x0a, 0xfe, 0}}) {
+    auto offers = unknown_delegation;
+    offers[34] = schemes;
+    Require(client.RequestServerAuthenticator(Bytes{context++}, offers, &request),
+            "EA server request accepts unsupported delegation offers");
+    send_frame(request);
+    response = receive();
+    Require(client.ValidateServerAuthenticator(response, validate, &authenticated, request) && authenticated,
+            "EA direct server MAC and Finished with unsupported delegation offers");
+    Require(!client.ValidateServerAuthenticator(response, validate, &authenticated, request),
+            "EA server replay rejected");
+  }
+  Require(client.RequestServerAuthenticator(Bytes{2}, unknown_delegation, &request), "EA refusal request");
   send_frame(request);
   response = receive();
   Require(client.ValidateServerAuthenticator(response, validate, &authenticated, request) && !authenticated, "EA authenticated refusal is not identity");
@@ -211,7 +234,8 @@ int Get(const char* host,
         bool authenticator_test = false,
         bool pinning_test = false,
         const net::httpps::ClientCredential* selected_credential = nullptr,
-        bool bootstrap_inventory_test = false) {
+        bool bootstrap_inventory_test = false,
+        bool ocsp_request_recheck_test = false) {
 #if defined(_WIN32)
   WSADATA data;
   Require(WSAStartup(MAKEWORD(2, 2), &data) == 0, "winsock init");
@@ -351,6 +375,31 @@ int Get(const char* host,
     auto tickets = client.TakeTickets();
     if (!tickets.empty() && !cache_test && !pinning_test) {
       session = std::move(tickets.back());
+      if (ocsp_request_recheck_test) {
+        Require(!session->certificate_extensions.empty() &&
+                    session->certificate_extensions.front().count(5),
+                "OCSP ticket contains the actual received staple");
+        for (bool offer_early : {false, true}) {
+          auto changed = options;
+          // DER Extensions containing unknown OID1.2.3.4, critical TRUE.
+          changed.ocsp_request_extensions = {0x30, 0x0e, 0x30, 0x0c, 6, 3,
+              0x2a, 3, 4, 1, 1, 0xff, 4, 2, 5, 0};
+          Require(net::httpps::CredentialRequestOptionsValid(changed),
+                  "unsupported critical OCSP request is well-framed, not malformed");
+          net::httpps::Client rejected(host, anchors, false, changed);
+          Require(!rejected.Start(&*session, {}, offer_early) &&
+                      rejected.TakeOutput().empty() && !rejected.early_data_available(),
+                  "cached generic OCSP cannot fulfill new critical requirements or emit CH/early data");
+          // The same extension without criticality is ignorable, not a policy
+          // mismatch that should suppress an otherwise usable saved ticket.
+          changed.ocsp_request_extensions = {0x30, 0x0b, 0x30, 9, 6, 3,
+              0x2a, 3, 4, 4, 2, 5, 0};
+          net::httpps::Client allowed(host, anchors, false, changed);
+          Require(allowed.Start(&*session, {}, offer_early) && !allowed.TakeOutput().empty() &&
+                      allowed.early_data_available() == offer_early,
+                  "cached OCSP tolerates unknown noncritical request extensions");
+        }
+      }
       if (bootstrap_inventory_test) {
         Require(client.bootstrap_authenticated() && client.client_identity_authenticated(),
                 "selected bootstrap possession retained by tickets");
@@ -1028,7 +1077,8 @@ int main(int argc, char** argv) {
     options.certificate_authorities.emplace_back(name.begin(), name.end());
     options.ocsp_responder_ids.emplace_back(id.begin(), id.end());
     options.ocsp_request_extensions.assign(extensions.begin(), extensions.end());
-    return Get(argv[2], argv[3], argv[4], false, true, true, nullptr, nullptr, options);
+    return Get(argv[2], argv[3], argv[4], false, true, true, nullptr, nullptr,
+               options, nullptr, false, false, false, nullptr, false, true);
   }
   if (argc == 6 && std::string_view(argv[1]) == "--check-delegated-credential") {
     auto provider = net::httpps::NativeProvider::Load(argv[5]);

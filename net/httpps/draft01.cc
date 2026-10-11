@@ -2745,7 +2745,7 @@ bool Client::AcceptFrame(ByteSpan frame) {
     case State::kCertificate: {
       if (frame[0] == 13 || frame[0] == 252) {
         if (client_auth_requested_)
-          return Fail();
+          return Fail(Error::kProtocol, 10);
         return AcceptCertificateRequest(frame, false);
       }
       Bytes decompressed;
@@ -3027,7 +3027,7 @@ bool Client::Receive(ByteSpan record, Bytes* application_data) {
   if (!handshake) {
     if (type == 24) {
       if (!peer_heartbeat_mode_ || !options_.heartbeat_mode || !reassembly_.empty())
-        return Fail();
+        return Fail(Error::kProtocol, 10);
       if (content.size() < 19)
         return true;
       const size_t length = Read16(ByteSpan(content).subspan(1u, 2u));
@@ -3065,7 +3065,7 @@ bool Client::Receive(ByteSpan record, Bytes* application_data) {
           break;
         // A KeyUpdate terminates the old record epoch, never a mixed record.
         if (reassembly_[0] == 24 && reassembly_.size() != length + 4)
-          return Fail();
+          return Fail(Error::kProtocol, 10);
         if (!AcceptPostHandshake(ByteSpan(reassembly_).first(length + 4)))
           return false;
         reassembly_.erase(reassembly_.begin(), reassembly_.begin() + length + 4);
@@ -3073,12 +3073,14 @@ bool Client::Receive(ByteSpan record, Bytes* application_data) {
       return true;
     }
     if (type != 23 || !reassembly_.empty()) {
-      return Fail();
+      return Fail(Error::kProtocol, 10);
     }
     *application_data = std::move(content);
     return true;
   }
-  if (type != 22 || reassembly_.size() + content.size() > 262148 + 16384) {
+  if (type != 22)
+    return Fail(Error::kProtocol, 10);
+  if (reassembly_.size() + content.size() > 262148 + 16384) {
     return Fail();
   }
   Append(&reassembly_, content);
@@ -3112,8 +3114,10 @@ bool Client::AcceptPostHandshake(ByteSpan frame) {
     return true;
   }
   if (frame[0] == 24) {
-    if (body.size() != 1 || body[0] > 1)
-      return Fail();
+    if (body.size() != 1)
+      return Fail(Error::kProtocol, 50);
+    if (body[0] > 1)
+      return Fail(Error::kProtocol, 47);
     if (!DeriveSecret(s_app_, "traffic upd", {}, &s_app_))
       return Fail();
     receiver_ = std::make_unique<RecordCipher>(s_app_, suite_, options_.native_provider);
@@ -3257,7 +3261,7 @@ bool Client::DrainHandshakeFrames() {
     }
     bool boundary = state_ == State::kHello || state_ == State::kFinished;
     if (boundary && reassembly_.size() != length + 4) {
-      return Fail();
+      return Fail(Error::kProtocol, 10);
     }
     if (!AcceptFrame(ByteSpan(reassembly_).first(length + 4))) {
       return false;

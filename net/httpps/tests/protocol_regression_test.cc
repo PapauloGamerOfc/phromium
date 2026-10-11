@@ -89,6 +89,13 @@ class ProtocolRegressionPeer {
   static void AwaitVerification(Client& client) {
     client.state_ = Client::State::kVerifyingCertificate;
   }
+  static void AwaitServerFinished(Client& client) {
+    client.state_ = Client::State::kFinished;
+  }
+  static void InitialCertificateRequested(Client& client) {
+    client.state_ = Client::State::kCertificate;
+    client.client_auth_requested_ = true;
+  }
   static void PopulateSecrets(Client& client) {
     for (auto* secret : {&client.a_, &client.b_, &client.authenticator_a_,
                          &client.client_verifier_share_, &client.password_context_,
@@ -303,6 +310,88 @@ Bytes Plaintext(ByteSpan frame, uint8_t major = 3, uint8_t minor = 3) {
   U16(&result, frame.size());
   Append(&result, frame);
   return result;
+}
+
+void UnexpectedMessageAlerts() {
+  // Authenticated records with valid framing can still be illegal in the
+  // current protocol state. Keep these distinct from malformed encodings.
+  const Bytes heartbeat{1, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                        0, 0, 0, 0, 0, 0, 0, 0, 0, 24};
+  for (bool initial : {false, true}) {
+    for (const auto& plaintext : {Bytes{'O', 'K', 23}, heartbeat}) {
+      Client client("example.test", {}, true);
+      ProtocolRegressionPeer::Prepare(client, initial);
+      Bytes application;
+      const bool allowed = !initial && plaintext.back() == 23;
+      Check(client.Receive(Protect(plaintext), &application) == allowed,
+            "application records require completed handshake; heartbeat requires negotiation");
+      if (allowed) {
+        Check(application == Bytes({'O', 'K'}) && client.TakeFatalAlert().empty(),
+              "established application record remains accepted without alert");
+      } else {
+        Check(application.empty(), "unexpected record releases no application data");
+        CheckAlert(client, 10);
+      }
+    }
+  }
+  for (uint8_t following_type : {uint8_t{4}, uint8_t{24}}) {
+    Client client("example.test", {}, true);
+    ProtocolRegressionPeer::Prepare(client);
+    auto plaintext = Frame(24, Bytes{0});
+    Append(&plaintext, Frame(following_type, Bytes{0}));
+    plaintext.push_back(22);
+    Bytes application;
+    Check(!client.Receive(Protect(plaintext), &application) && application.empty(),
+          "KeyUpdate must end the old record epoch before any following message");
+    CheckAlert(client, 10);
+  }
+  for (bool initial_hello : {false, true}) {
+    Client client("example.test", {}, true);
+    if (initial_hello) {
+      Check(client.Start(), "boundary-test ClientHello");
+      client.TakeOutput();
+    } else {
+      ProtocolRegressionPeer::Prepare(client);
+      ProtocolRegressionPeer::AwaitServerFinished(client);
+    }
+    auto frames = Frame(initial_hello ? 2 : 20, Bytes(40));
+    Append(&frames, Frame(4, Bytes{0}));
+    Bytes record = initial_hello ? Plaintext(frames) : Bytes{};
+    if (!initial_hello) {
+      frames.push_back(22);
+      record = Protect(frames);
+    }
+    Bytes application;
+    Check(!client.Receive(record, &application) && application.empty(),
+          "ServerHello and Finished must align with the record boundary");
+    CheckAlert(client, 10, !initial_hello);
+  }
+  for (uint8_t request_type : {uint8_t{13}, uint8_t{252}}) {
+    Client client("example.test", {}, true);
+    ProtocolRegressionPeer::Prepare(client);
+    ProtocolRegressionPeer::InitialCertificateRequested(client);
+    auto plaintext = Frame(request_type, Bytes{0});
+    plaintext.push_back(22);
+    Bytes application;
+    Check(!client.Receive(Protect(plaintext), &application) && application.empty(),
+          "second initial CertificateRequest is an unexpected message");
+    CheckAlert(client, 10);
+  }
+  const std::pair<Bytes, uint8_t> key_updates[] = {
+      {{0}, 0}, {{1}, 0}, {{2}, 47}, {{}, 50}, {{0, 0}, 50}};
+  for (const auto& [body, alert] : key_updates) {
+    Client client("example.test", {}, true);
+    ProtocolRegressionPeer::Prepare(client);
+    auto plaintext = Frame(24, body);
+    plaintext.push_back(22);
+    Bytes application;
+    Check(client.Receive(Protect(plaintext), &application) == (alert == 0) &&
+              application.empty(), "KeyUpdate value and framing have distinct alerts");
+    if (alert)
+      CheckAlert(client, alert);
+    else
+      Check(client.TakeFatalAlert().empty(), "valid aligned KeyUpdate emits no alert");
+  }
 }
 
 Bytes CookieRetry(size_t cookie_size = 1,
@@ -998,6 +1087,7 @@ void HeartbeatLimits() {
 void RunProtocolRegressionTests() {
   RecordAlerts();
   RecordFramingAlerts();
+  UnexpectedMessageAlerts();
   VersionAlerts();
   RetryGroups();
   RetryCookieBounds();
