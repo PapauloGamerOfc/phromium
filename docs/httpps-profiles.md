@@ -193,6 +193,16 @@ that profile; state is partitioned and in-memory, not durable pin storage.
 Application authenticators/exporters are trusted internal socket APIs, not
 JavaScript APIs or invented HTTP authentication exchanges.
 
+At the native engine boundary, a local `close_notify` ends all output, including
+automatic heartbeat and post-handshake authentication replies. In-flight input
+is still checked, and application data and receive-key updates remain readable
+until the peer also closes. Temporary sending secrets are cleared at local
+closure; after both directions close, receive, exporter and resumption roots are
+cleared and exporter calls fail. Already received session tickets remain available
+for the socket's explicit cache handoff. Fatal failure instead discards those
+unconsumed tickets as well. These are connection-lifecycle guarantees, not claims
+that all copies in the process, debugger, swap or crash dumps are erased.
+
 ## Tests
 
 `HttppsProfileConfigTest.*` checks strict decoding and partition isolation.

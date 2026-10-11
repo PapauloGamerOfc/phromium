@@ -941,7 +941,10 @@ void Client::EraseConnectionSecrets() {
   // These are connection-owned copies. Their destructors erase secret bytes;
   // releasing a shared provisioned credential never mutates its other owners.
   offered_ticket_.reset();
-  tickets_.clear();
+  // A fully orderly close may precede the caller's handoff to its ticket cache.
+  // Fatal failure still invalidates every unconsumed connection-owned ticket.
+  if (state_ != State::kClosed || !close_sent_)
+    tickets_.clear();
   offered_psks_.clear();
   options_.external_psks.clear();
   options_.password.reset();
@@ -954,7 +957,8 @@ bool Client::Fail(Error error, uint8_t alert) {
   }
   // Do not create an alert that skips already-encrypted unflushed records.
   // The transport may also suppress it if an application write is in flight.
-  if (state_ != State::kNew && output_.empty() && alert && error != Error::kTimeout) {
+  if (state_ != State::kNew && !close_sent_ && output_.empty() && alert &&
+      error != Error::kTimeout) {
     Bytes value{2, error == Error::kCertificate && alert == 47 ? uint8_t{42} : alert};
     if (sender_)
       sender_->Seal(value, 21, &fatal_alert_);
@@ -1347,6 +1351,8 @@ bool Client::AppendClientAuthentication() {
 }
 
 bool Client::SealHandshake(ByteSpan frame) {
+  if (close_sent_ || !sender_)
+    return Fail();
   while (!frame.empty()) {
     Bytes record;
     const size_t count = std::min(max_send_content(), frame.size());
@@ -3012,6 +3018,8 @@ bool Client::Receive(ByteSpan record, Bytes* application_data) {
     if (!handshake && content.size() == 2 && content[1] == 0) {
       state_ = State::kClosed;
       DisableAuthenticators();
+      if (close_sent_)
+        EraseConnectionSecrets();  // Both directions ended; exporters end too.
       return true;
     }
     return Fail(Error::kProtocol, 0);  // Never answer a peer fatal alert.
@@ -3026,7 +3034,7 @@ bool Client::Receive(ByteSpan record, Bytes* application_data) {
       if (length > content.size() - 19)
         return true;  // Never echo absent data (RFC 6520).
       ByteSpan payload = ByteSpan(content).subspan(3u, length);
-      if (content[0] == 1 && *options_.heartbeat_mode == 1) {
+      if (content[0] == 1 && *options_.heartbeat_mode == 1 && !close_sent_) {
         Bytes response{2};
         U16(&response, length);
         Append(&response, payload);
@@ -3083,6 +3091,13 @@ bool Client::AcceptPostHandshake(ByteSpan frame) {
     transcript_ = initial_transcript_;
     if (initial_transcript_.empty()) return Fail(Error::kProtocol, 10);
     if (!AcceptCertificateRequest(frame, true)) return false;
+    if (close_sent_) {
+      // A request already in flight may arrive after our write-side close.
+      // Validate it, but never reopen that direction or abandon peer reads.
+      transcript_.clear();
+      OPENSSL_cleanse(client_verifier_share_.data(), client_verifier_share_.size());
+      return true;
+    }
     if (update_response_pending_) {
       Bytes update;
       if (!RequestKeyUpdate(false, &update))
@@ -3106,7 +3121,8 @@ bool Client::AcceptPostHandshake(ByteSpan frame) {
     receiver_->SetContentLimit(fragment_limit_);
     // At the last permitted sending epoch, keep receiving peer updates but
     // ignore requests for an impossible sending update (RFC 9846 4.7.3).
-    update_response_pending_ |= body[0] == 1 && sending_epoch_ < (uint64_t{1} << 48) - 1;
+    update_response_pending_ |= !close_sent_ && body[0] == 1 &&
+        sending_epoch_ < (uint64_t{1} << 48) - 1;
     update_requested_pending_ = false;
     return true;
   }
@@ -3316,13 +3332,24 @@ bool Client::Close(Bytes* record) {
       close_sent_) {
     return false;
   }
-  close_sent_ = true;
-  DisableAuthenticators();
   Bytes close;
   if (!sender_->Seal(std::array<uint8_t, 2>{1, 0}, 21, &close))
     return Fail();
   *record = TakeOutput();
   Append(record, close);
+  close_sent_ = true;
+  DisableAuthenticators();
+  // Ciphertext already queued above precedes close_notify. No later response,
+  // including a fatal alert, may use this direction again. Keep receiving keys
+  // and exporter/resumption state for the still-open peer direction.
+  sender_.reset();
+  OPENSSL_cleanse(c_app_.data(), c_app_.size());
+  c_app_.clear();
+  client_credential_.reset();
+  OPENSSL_cleanse(client_verifier_share_.data(), client_verifier_share_.size());
+  update_response_pending_ = update_requested_pending_ = false;
+  if (closed())
+    EraseConnectionSecrets();  // Preserve keys only while the peer can send.
   return true;
 }
 

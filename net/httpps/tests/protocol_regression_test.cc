@@ -44,6 +44,19 @@ class ProtocolRegressionPeer {
   static bool OfferedPha(const Client& client) {
     return client.post_handshake_auth_offered_;
   }
+  static bool WritingSecretsErased(const Client& client) {
+    return !client.sender_ && client.c_app_.empty() && !client.client_credential_ &&
+        !client.update_response_pending_ && !client.update_requested_pending_;
+  }
+  static bool UpdateResponsePending(const Client& client) {
+    return client.update_response_pending_;
+  }
+  static void RetainTicket(Client& client) {
+    SessionTicket ticket;
+    ticket.identity = Bytes{0x54};
+    ticket.psk = Bytes(32, 0x70);
+    client.tickets_.push_back(std::move(ticket));
+  }
   static void HeartbeatLimits(Client& client, uint16_t local, uint16_t peer,
                               uint16_t fragment = 16384) {
     client.local_record_limit_ = local;
@@ -660,6 +673,7 @@ void HandshakeFailureLifecycle() {
 void HalfCloseKeepsOppositeDirection() {
   Client incoming_close("example.test", {}, true);
   ProtocolRegressionPeer::Prepare(incoming_close);
+  ProtocolRegressionPeer::RetainTicket(incoming_close);
   Bytes application, record;
   Check(incoming_close.Receive(Protect(Bytes{1, 0, 21}), &application) &&
             incoming_close.closed(), "authenticated peer closure closes the read direction");
@@ -672,9 +686,15 @@ void HalfCloseKeepsOppositeDirection() {
         "application bytes remain authenticated after peer half-close");
   Check(incoming_close.Close(&record) && peer.Open(record, &type, &application) &&
             type == 21 && application == Bytes({1, 0}), "local close follows the final application record");
+  auto tickets = incoming_close.TakeTickets();
+  Check(tickets.size() == 1 && tickets.front().psk == Bytes(32, 0x70) &&
+            ProtocolRegressionPeer::SecretsErased(incoming_close) &&
+            !incoming_close.Export("half-close", {}, 32, &application),
+        "peer-first full close erases connection secrets but permits ticket cache handoff");
 
   Client outgoing_close("example.test", {}, true);
   ProtocolRegressionPeer::Prepare(outgoing_close);
+  ProtocolRegressionPeer::RetainTicket(outgoing_close);
   Check(outgoing_close.Close(&record) && !outgoing_close.closed(),
         "local close leaves the peer read direction open");
   Check(outgoing_close.Receive(Protect(Bytes{9, 23}), &application) && application == Bytes{9},
@@ -682,6 +702,11 @@ void HalfCloseKeepsOppositeDirection() {
   Check(outgoing_close.Receive(Protect(Bytes{1, 0, 21}, 1), &application) &&
             outgoing_close.closed() && outgoing_close.TakeFatalAlert().empty(),
         "orderly bidirectional close does not become a failure");
+  tickets = outgoing_close.TakeTickets();
+  Check(tickets.size() == 1 && tickets.front().psk == Bytes(32, 0x70) &&
+            ProtocolRegressionPeer::SecretsErased(outgoing_close) &&
+            !outgoing_close.Export("half-close", {}, 32, &application),
+        "local-first full close erases connection secrets but permits ticket cache handoff");
 }
 
 void VersionAlerts() {
@@ -752,6 +777,130 @@ Bytes CertificateRequest() {
   Bytes body{1, 7};
   Append(&body, Vector16(extensions));
   return Frame(13, body);
+}
+
+void ClosedWriterControlMessages() {
+  ClientCredential credential;
+  credential.certificate_type = 2;
+  credential.private_key.fill(0x43);
+  Secret public_key;
+  X25519_public_from_private(public_key.data(), credential.private_key.data());
+  Bytes spki{0x30, 0x2a, 0x30, 5, 6, 3, 0x2b, 0x65, 0x6e, 3, 0x21, 0};
+  Append(&spki, public_key);
+  credential.certificates.emplace_back(reinterpret_cast<const char*>(spki.data()), spki.size());
+  for (bool pha : {false, true}) {
+    for (bool close_first : {false, true}) {
+      for (bool pending_update : {false, true}) {
+        ClientOptions options;
+        options.heartbeat_mode = 1;
+        options.post_handshake_auth = true;
+        Client client("example.test", {}, true, options);
+        Check(client.SetClientCredential(credential) && client.Start(),
+              "half-close control fixture offers a real RPK client credential");
+        ProtocolRegressionPeer::Prepare(client);
+        ProtocolRegressionPeer::AuthenticationMode(client, Authentication::kCertificate);
+        ProtocolRegressionPeer::HeartbeatLimits(client, 16385, 16385);
+        Bytes incoming_secret = ProtocolRegressionPeer::ReceivingSecret();
+        auto sender = std::make_unique<RecordCipher>(incoming_secret);
+        Bytes record, application;
+        auto peer_update = [&] {
+          Check(sender->Seal(Frame(24, Bytes{1}), 22, &record) &&
+                    client.Receive(record, &application), "peer key update opens during half-close");
+          incoming_secret = SuiteLabel(0x1301, incoming_secret, "traffic upd", {}, 32);
+          sender = std::make_unique<RecordCipher>(incoming_secret);
+        };
+        if (pending_update) {
+          peer_update();
+          Check(ProtocolRegressionPeer::UpdateResponsePending(client),
+                "peer requested update is pending before local close");
+        }
+        if (close_first) {
+          Check(client.Close(&record) && ProtocolRegressionPeer::WritingSecretsErased(client),
+                "local close erases only writing keys, credentials and update latches");
+          RecordCipher receiver(ProtocolRegressionPeer::SendingSecret());
+          uint8_t type = 0;
+          Check(receiver.Open(record, &type, &application) && type == 21 &&
+                    application == Bytes({1, 0}), "close_notify is the final local record");
+        }
+        Bytes content{1, 0, 1, 0x42};
+        content.resize(20, 0x99);
+        if (pha) content = CertificateRequest();
+        Check(sender->Seal(content, pha ? 22 : 24, &record) && client.Receive(record, &application),
+              "valid control request still opens after local write close");
+        Check(client.TakeOutput().empty() == close_first,
+              "heartbeat and authenticated PHA responses occur only before local close");
+        if (!close_first) continue;
+        Check(!client.RequestKeyUpdate(false, &record) && !client.RequestHeartbeat({}, &record) &&
+                  !client.Close(&record) && client.TakeOutput().empty(),
+              "explicit control writes cannot reopen the closed direction");
+        peer_update();
+        Check(ProtocolRegressionPeer::WritingSecretsErased(client),
+              "incoming key update cannot recreate sending state or response obligation");
+        Check(sender->Seal(Bytes{7, 8}, 23, &record) && client.Receive(record, &application) &&
+                  application == Bytes({7, 8}), "new-epoch application data remains readable after local close");
+        Check(client.Export("half-close", {}, 32, &application) &&
+                  client.TakeOutput().empty() && client.TakeFatalAlert().empty(),
+              "half-close keeps exporter without producing post-close records");
+      }
+    }
+  }
+  Check(std::all_of(credential.private_key.begin(), credential.private_key.end(),
+                   [](uint8_t value) { return value == 0x43; }),
+        "closing connection-owned credential copies preserves caller provisioning");
+
+  ClientOptions options;
+  options.post_handshake_auth = true;
+  Client queued("example.test", {}, true, options);
+  Check(queued.Start(), "queued PHA control fixture");
+  ProtocolRegressionPeer::Prepare(queued);
+  ProtocolRegressionPeer::AuthenticationMode(queued, Authentication::kCertificate);
+  auto request = CertificateRequest(); request.push_back(22);
+  Bytes application, record;
+  Check(queued.Receive(Protect(request), &application) && queued.Close(&record),
+        "close flushes an already-encrypted control response before its alert");
+  RecordCipher receiver(ProtocolRegressionPeer::SendingSecret());
+  ByteSpan remaining(record);
+  const uint8_t expected_types[] = {22, 22, 21};
+  const uint8_t expected_messages[] = {11, 20, 1};
+  for (size_t i = 0; i < 3; ++i) {
+    Check(remaining.size() >= 5, "queued control record framing");
+    const size_t length = 5 + (size_t{remaining[3]} << 8) + remaining[4];
+    uint8_t type = 0;
+    Check(length <= remaining.size() && receiver.Open(remaining.first(length), &type, &application) &&
+              type == expected_types[i] && !application.empty() && application[0] == expected_messages[i],
+          "queued Certificate and Finished precede final close_notify in the correct sequence");
+    remaining = remaining.subspan(length);
+  }
+  Check(remaining.empty() && application == Bytes({1, 0}) && queued.TakeOutput().empty(),
+        "no queued ciphertext follows close_notify");
+}
+
+void ClosedWriterFailures() {
+  for (int fault = 0; fault < 6; ++fault) {
+    ClientOptions options;
+    options.post_handshake_auth = true;
+    Client client("example.test", {}, true, options);
+    Check(client.Start(), "closed-writer error fixture");
+    ProtocolRegressionPeer::Prepare(client);
+    ProtocolRegressionPeer::AuthenticationMode(client, Authentication::kCertificate);
+    Bytes record, application;
+    Check(client.RequestKeyUpdate(true, &record) && client.Close(&record) &&
+              ProtocolRegressionPeer::WritingSecretsErased(client),
+          "write close clears an outstanding local key-update request");
+    Bytes invalid = fault == 0 ? Bytes{2, 40, 21} : fault == 1 ? Bytes{22} :
+        fault == 2 ? Frame(13, {}) : Frame(24, Bytes{2});
+    if (fault >= 2) invalid.push_back(22);
+    auto protected_record = Protect(invalid);
+    if (fault == 4) protected_record.back() ^= 1;
+    const bool accepted = fault == 5 ? client.Send(Bytes{1}, &record)
+                                     : client.Receive(protected_record, &application);
+    Check(!accepted && application.empty() &&
+              client.TakeOutput().empty() && client.TakeFatalAlert().empty() &&
+              ProtocolRegressionPeer::SecretsErased(client),
+          "peer fatal, malformed PHA/KU, record errors and late writes fail without post-close alerts");
+    Check(!client.Receive(protected_record, &application) && client.TakeFatalAlert().empty(),
+          "repeated post-close errors cannot emit an alert");
+  }
 }
 
 void PostHandshakeAuthentication() {
@@ -857,6 +1006,8 @@ void RunProtocolRegressionTests() {
   FailedSecretErasure();
   HandshakeFailureLifecycle();
   HalfCloseKeepsOppositeDirection();
+  ClosedWriterControlMessages();
+  ClosedWriterFailures();
   KeyUpdates();
   PostHandshakeAuthentication();
   RetrospectiveLimits();
