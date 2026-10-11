@@ -216,6 +216,10 @@ class Peer : public SocketDataProvider {
     server_bytes_.append(encrypted.begin(), encrypted.end());
   }
 
+  void RawRecord(ByteSpan record) {
+    server_bytes_.append(record.begin(), record.end());
+  }
+
   void NewTicket() {
     // lifetime=3600, age_add=0, one-byte nonce/ticket, no extensions.
     const Bytes body{0, 0, 14, 16, 0, 0, 0, 0, 1, 7, 0, 1, 9, 0, 0};
@@ -2177,6 +2181,30 @@ TEST_F(HttppsClientSocketTest, TamperedServerFlightIsFatal) {
   EXPECT_EQ(ERR_SSL_PROTOCOL_ERROR,
             callback.GetResult(socket->Connect(callback.callback())));
   EXPECT_FALSE(socket->IsConnected());
+}
+
+TEST_F(HttppsClientSocketTest, RecordHeaderFailuresReachProtocolAlerts) {
+  const std::pair<Bytes, uint8_t> cases[] = {
+      {Bytes{23, 3, 3, 0, 0}, 20},
+      {Bytes{21, 3, 3, 0, 0}, 10},
+      {Bytes{23, 3, 2, 0, 0}, 47},
+      {Bytes{23, 3, 2, 0, 16}, 47},
+      // Only the header is supplied: never wait for or allocate this body.
+      {Bytes{23, 3, 3, 0x41, 1}, 22}};
+  for (const auto& [record, expected] : cases) {
+    SCOPED_TRACE(expected);
+    peer_.mode = SYNCHRONOUS;
+    peer_.read_chunk = peer_.write_chunk = 20000;
+    auto socket = Make();
+    TestCompletionCallback done;
+    ASSERT_EQ(OK, done.GetResult(socket->Connect(done.callback())));
+    peer_.RawRecord(record);
+    auto buffer = base::MakeRefCounted<IOBufferWithSize>(32);
+    EXPECT_EQ(ERR_SSL_PROTOCOL_ERROR,
+              done.GetResult(socket->Read(buffer.get(), buffer->size(), done.callback())));
+    EXPECT_EQ(peer_.last_client_alert, expected);
+    EXPECT_FALSE(socket->IsConnected());
+  }
 }
 
 TEST_F(HttppsClientSocketTest, AbsoluteHandshakeDeadline) {

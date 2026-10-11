@@ -89,7 +89,9 @@ size_t Read24(ByteSpan bytes) {
          (static_cast<size_t>(bytes[1]) << 8) | bytes[2];
 }
 
-bool Extensions(ByteSpan data, std::map<uint16_t, Bytes>* out) {
+bool Extensions(ByteSpan data, std::map<uint16_t, Bytes>* out,
+                uint8_t* alert = nullptr) {
+  if (alert) *alert = 50;
   if (data.size() < 2 || Read16(data.first(2u)) != data.size() - 2)
     return false;
   data = data.subspan(2u);
@@ -98,8 +100,12 @@ bool Extensions(ByteSpan data, std::map<uint16_t, Bytes>* out) {
       return false;
     uint16_t type = static_cast<uint16_t>(Read16(data.first(2u)));
     size_t length = Read16(data.subspan(2u, 2u));
-    if (length > data.size() - 4 || out->count(type))
+    if (length > data.size() - 4)
       return false;
+    if (out->count(type)) {
+      if (alert && type == 43) *alert = 47;
+      return false;
+    }
     auto value = data.subspan(4u, length);
     out->emplace(type, Bytes(value.begin(), value.end()));
     data = data.subspan(4 + length);
@@ -239,7 +245,9 @@ uint16_t PasswordSuccessor(uint16_t suite) {
 }
 
 bool ParseCertificates(ByteSpan body, std::vector<std::string>* certificates,
-                        std::vector<std::map<uint16_t, Bytes>>* entry_extensions) {
+                        std::vector<std::map<uint16_t, Bytes>>* entry_extensions,
+                        uint8_t* alert) {
+  *alert = 50;
   if (body.size() < 4 || body[0] != 0 ||
       Read24(body.subspan(1u, 3u)) != body.size() - 4) {
     return false;
@@ -257,7 +265,7 @@ bool ParseCertificates(ByteSpan body, std::vector<std::string>* certificates,
     if (extensions_length > body.size() - 5 - length)
       return false;
     std::map<uint16_t, Bytes> extensions;
-    if (!Extensions(body.subspan(3 + length, 2 + extensions_length), &extensions))
+    if (!Extensions(body.subspan(3 + length, 2 + extensions_length), &extensions, alert))
       return false;
     const auto certificate = body.subspan(3u, length);
     certificates->emplace_back(
@@ -796,17 +804,27 @@ bool RecordCipher::Seal(ByteSpan content, uint8_t type, Bytes* record,
 bool RecordCipher::Open(ByteSpan record, uint8_t* type, Bytes* content) {
   const size_t integrity_size = IntegrityTagLength(suite_);
   const size_t tag = integrity_size ? integrity_size : GostTagLength(suite_) ? GostTagLength(suite_) : suite_ == 0x1305 ? 8 : 16;
-  if (failed_ || record.size() < 6 + tag || record.size() > kMaxRecord ||
-      record[0] != 23 || record[1] != 3 || record[2] != 3 ||
-      Read16(record.subspan(3u, 2u)) != record.size() - 5) {
+  const auto reject = [&](uint8_t alert) {
+    alert_ = alert;
     failed_ = true;
     return false;
-  }
+  };
+  if (failed_) return false;
+  if (record.size() < 5) return reject(50);
+  if (record[0] != 23) return reject(10);
+  if (record[1] != 3 || record[2] != 3) return reject(47);
+  const size_t length = Read16(record.subspan(3u, 2u));
+  // The transport may hand off only an oversized header, avoiding allocation
+  // or reads of an invalid fragment. Preserve its record_overflow diagnosis.
+  if (length > kMaxRecord - 5) return reject(22);
+  if (length != record.size() - 5) return reject(50);
+  if (length < tag) return reject(20);
   auto nonce = iv_;
   for (size_t i = 0; i < 8; ++i) {
     nonce[nonce.size() - 1 - i] ^= static_cast<uint8_t>(sequence_ >> (8 * i));
   }
-  if (!Account(record.size() - 6 - tag, false)) {
+  const size_t protected_plaintext = record.size() - 5 - tag;
+  if (!Account(protected_plaintext ? protected_plaintext - 1 : 0, false)) {
     return false;
   }
   bssl::ScopedEVP_AEAD_CTX context;
@@ -826,13 +844,17 @@ bool RecordCipher::Open(ByteSpan record, uint8_t* type, Bytes* content) {
   if (integrity_size || SuiteHashId(suite_) == 3 || suite_ == 0xc0b3 || gost_record_)
     written = plaintext.size();
   if (!ok || written != plaintext.size() || written > inner_limit_) {
+    if (ok && written == plaintext.size() && written > inner_limit_)
+      alert_ = 22;
     OPENSSL_cleanse(plaintext.data(), plaintext.size());
     failed_ = true;
     return false;
   }
+  max_opened_inner_ = std::max(max_opened_inner_, written);
   while (!plaintext.empty() && plaintext.back() == 0)
     plaintext.pop_back();
   if (plaintext.empty()) {
+    alert_ = 10;
     failed_ = true;
     return false;
   }
@@ -842,10 +864,14 @@ bool RecordCipher::Open(ByteSpan record, uint8_t* type, Bytes* content) {
       (*type != 21 && *type != 22 && *type != 23 && *type != 24) ||
       (*type == 21 && plaintext.size() != 2) ||
       (*type == 22 && plaintext.empty())) {
+    alert_ = plaintext.size() > content_limit_ ? 22 :
+        (*type != 21 && *type != 22 && *type != 23 && *type != 24) ||
+        ((*type == 21 || *type == 22) && plaintext.empty()) ? 10 : 50;
     OPENSSL_cleanse(plaintext.data(), plaintext.size());
     failed_ = true;
     return false;
   }
+  max_opened_content_ = std::max(max_opened_content_, plaintext.size());
   *content = std::move(plaintext);
   return true;
 }
@@ -896,6 +922,8 @@ void Client::EraseHandshakeSecrets() {
   }
   if (!options_.post_handshake_auth || state_ == State::kFailed)
     client_credential_.reset();
+  for (auto& binding : options_.bootstraps) binding.credential.reset();
+  if (options_.bootstrap) options_.bootstrap->credential.reset();
   OPENSSL_cleanse(client_verifier_share_.data(), client_verifier_share_.size());
 }
 
@@ -1042,13 +1070,20 @@ bool Client::AcceptCertificateRequest(ByteSpan frame, bool post_handshake) {
   if (post_handshake ? body[0] == 0 : body[0] != 0)
     return Fail(Error::kProtocol, 47);
   Bytes context(body.begin() + 1, body.begin() + 1 + body[0]);
-  if (post_handshake && (!options_.post_handshake_auth || alpn_ == "h2" ||
-      (authentication_ == Authentication::kPassword && !resumed_) ||
-      client_auth_contexts_.size() >= 256 || !client_auth_contexts_.insert(context).second))
-    return Fail();
+  if (post_handshake && (!post_handshake_auth_offered_ || alpn_ == "h2" ||
+      (!resumed_ && (authentication_ == Authentication::kPassword ||
+                    authentication_ == Authentication::kExternalPsk))))
+    return Fail(Error::kProtocol, 10);
+  if (options_.bootstrap && options_.bootstrap->expires_unix_seconds &&
+      WallMilliseconds() / 1000 >= options_.bootstrap->expires_unix_seconds)
+    return Fail(Error::kCertificate);
+  if (post_handshake && (client_auth_contexts_.size() >= 256 ||
+      !client_auth_contexts_.insert(context).second))
+    return Fail(Error::kProtocol, 47);
   std::map<uint16_t, Bytes> extensions;
-  if (!Extensions(body.subspan(size_t{1} + body[0]), &extensions))
-    return Fail(Error::kProtocol, 50);
+  uint8_t extension_alert;
+  if (!Extensions(body.subspan(size_t{1} + body[0]), &extensions, &extension_alert))
+    return Fail(Error::kProtocol, extension_alert);
   // Unknown request offers remain extensible. Known extensions must obey their
   // message placement, including reconstructed cached requests and PHA.
   for (const auto& [type, value] : extensions) {
@@ -1306,10 +1341,48 @@ bool Client::SealHandshake(ByteSpan frame) {
   return true;
 }
 
+void Client::SelectBootstrap(size_t index) {
+  options_.bootstrap = options_.bootstraps[index];
+  const auto& binding = *options_.bootstrap;
+  client_credential_ = binding.credential;
+  Bytes policy;
+  Append(&policy, Octets("TLS20-POK local provisioning policy"));
+  Vector16(&policy, binding.spki);
+  Vector16(&policy, Octets(binding.service));
+  Vector16(&policy, Octets(binding.scope));
+  policy.push_back(binding.provisioning_trust);
+  U32(&policy, static_cast<uint64_t>(binding.expires_unix_seconds) >> 32);
+  U32(&policy, static_cast<uint64_t>(binding.expires_unix_seconds));
+  bootstrap_policy_ = net::httpps::Hash(policy);
+  Bytes selection;
+  Append(&selection, CredentialIdentity(client_credential_->certificates));
+  selection.push_back(client_credential_->certificate_type);
+  Append(&selection, client_credential_->delegation);
+  Secret public_key;
+  X25519_public_from_private(public_key.data(), client_credential_->private_key.data());
+  Append(&selection, public_key);
+  selected_client_identity_ = net::httpps::Hash(selection);
+}
+
 bool Client::Start(const SessionTicket* ticket, ByteSpan early_data,
                    bool enable_early_data) {
+  if (state_ != State::kNew) return Fail();
+  if (options_.bootstrap) {
+    options_.bootstraps.insert(options_.bootstraps.begin(), *options_.bootstrap);
+    options_.bootstrap.reset();
+  }
+  const bool has_bootstrap = !options_.bootstraps.empty();
+  std::erase_if(options_.bootstraps, [](const BootstrapBinding& binding) {
+    return binding.expires_unix_seconds &&
+           WallMilliseconds() / 1000 >= binding.expires_unix_seconds;
+  });
+  if (has_bootstrap && options_.bootstraps.empty())
+    return Fail(Error::kCertificate);
+  const bool provisioning_trust = std::any_of(
+      options_.bootstraps.begin(), options_.bootstraps.end(),
+      [](const BootstrapBinding& binding) { return binding.provisioning_trust; });
   if (options_.allow_unauthenticated &&
-      (options_.ordinary_httpps || options_.bootstrap || options_.password ||
+      (options_.ordinary_httpps || has_bootstrap || options_.password ||
        options_.pinning || options_.continuity_pinning || options_.dane_policy ||
        options_.its_policy || options_.ct_v2_policy || !options_.external_psks.empty()))
     return Fail(Error::kCertificate);
@@ -1375,7 +1448,7 @@ bool Client::Start(const SessionTicket* ticket, ByteSpan early_data,
         credential.username.size() > 255 ||
         credential.password.size() > 65535 || credential.helper_path.empty() ||
         !options_.native_provider || !options_.native_provider->SupportsPasswordAead() ||
-        (password_only_ && !options_.external_psks.empty()) || options_.bootstrap || options_.pinning ||
+        (password_only_ && !options_.external_psks.empty()) || has_bootstrap || options_.pinning ||
         options_.ct_v2_policy || options_.dane_policy || options_.its_policy ||
         std::none_of(options_.cipher_suites.begin(), options_.cipher_suites.end(), PasswordSuite) ||
         std::none_of(options_.groups.begin(), options_.groups.end(), [](uint16_t group) {
@@ -1407,11 +1480,11 @@ bool Client::Start(const SessionTicket* ticket, ByteSpan early_data,
   if (options_.dane_policy && (!options_.dane_policy->IsValid() || !ValidServerName(hostname_) ||
       std::any_of(options_.external_psks.begin(), options_.external_psks.end(),
                   [](const ExternalPSK& value) { return !value.combined; }) ||
-      (options_.bootstrap && options_.bootstrap->provisioning_trust)))
+      provisioning_trust))
     return Fail(Error::kCertificate);
   if (options_.its_policy && (!options_.its_policy->IsValid() ||
       options_.its_policy->identity != hostname_ || options_.its_policy->role != 0 ||
-      options_.dane_policy || options_.ct_v2_policy || options_.pinning || options_.bootstrap))
+      options_.dane_policy || options_.ct_v2_policy || options_.pinning || has_bootstrap))
     return Fail(Error::kCertificate);
   if (options_.ct_v2_policy) {
     if (!options_.ct_v2_policy->IsValid() ||
@@ -1419,7 +1492,7 @@ bool Client::Start(const SessionTicket* ticket, ByteSpan early_data,
                     [](uint8_t value) { return value != 0; }) ||
         std::any_of(options_.external_psks.begin(), options_.external_psks.end(),
                     [](const ExternalPSK& value) { return !value.combined; }) ||
-        (options_.bootstrap && options_.bootstrap->provisioning_trust))
+        provisioning_trust)
       return Fail(Error::kCertificate);
     options_.request_ocsp = true;
   }
@@ -1428,7 +1501,8 @@ bool Client::Start(const SessionTicket* ticket, ByteSpan early_data,
     return Fail();
   if (state_ != State::kNew || !ValidServiceIdentity(hostname_) ||
       (!options_.allow_unauthenticated && !use_external_verifier_ && anchors_.empty() && options_.external_psks.empty() &&
-       options_.server_raw_public_keys.empty() && !options_.dane_policy && !options_.password && !options_.its_policy) || anchors_.size() > 32) {
+       options_.server_raw_public_keys.empty() && !options_.dane_policy && !options_.password && !options_.its_policy &&
+       !provisioning_trust) || anchors_.size() > 32) {
     return Fail(Error::kCertificate);
   }
   if (options_.cipher_suites.empty() || options_.cipher_suites.size() > 32767 ||
@@ -1508,34 +1582,47 @@ bool Client::Start(const SessionTicket* ticket, ByteSpan early_data,
   traffic_group_ = options_.password && !ticket ? 0 : options_.groups.front();
   if (options_.signaling && !options_.signaling->IsValid())
     return Fail();
-  if (options_.bootstrap) {
-    const auto& binding = *options_.bootstrap;
-    if (binding.service != hostname_ || !options_.external_psks.empty() || options_.pinning ||
-        !client_credential_ || client_credential_->certificate_type != 2 ||
-        client_credential_->certificates.size() != 1 ||
-        !Equal(Octets(client_credential_->certificates.front()), binding.spki) ||
-        !client_credential_->delegation.empty() ||
-        (binding.provisioning_trust && (options_.ordinary_httpps || options_.delegated_credentials ||
-                                      options_.request_ocsp || options_.request_scts)))
+  if (has_bootstrap) {
+    if (!options_.external_psks.empty() || options_.pinning)
       return Fail(Error::kCertificate);
-    std::set<size_t> hashes;
-    for (uint16_t suite : options_.cipher_suites) {
-      if (!hashes.insert(SuiteHashId(suite)).second)
-        continue;
-      auto psk = BootstrapPSK(binding, suite, options_.alpn_protocols.front());
-      if (!psk)
+    // The application authorizes the offered ALPN list. Fresh bootstrap binds
+    // the selected identity to the protocol authenticated by EE; descendants
+    // retain their selected protocol and must still be locally authorized.
+    const std::string bootstrap_alpn = ticket ? ticket->alpn : options_.alpn_protocols.front();
+    if (std::find(options_.alpn_protocols.begin(), options_.alpn_protocols.end(), bootstrap_alpn) ==
+        options_.alpn_protocols.end())
+      return Fail(Error::kCertificate);
+    const auto legacy_credential = client_credential_;
+    bool ticket_binding_found = false;
+    size_t ticket_binding = 0;
+    for (size_t index = 0; index < options_.bootstraps.size(); ++index) {
+      auto& binding = options_.bootstraps[index];
+      if (!binding.credential) binding.credential = legacy_credential;
+      if (binding.service != hostname_ || !binding.credential ||
+          binding.credential->certificate_type != 2 ||
+          binding.credential->certificates.size() != 1 ||
+          !Equal(Octets(binding.credential->certificates.front()), binding.spki) ||
+          !binding.credential->delegation.empty() ||
+          !SetClientCredential(*binding.credential) ||
+          (binding.provisioning_trust && (options_.ordinary_httpps || options_.delegated_credentials ||
+                                        options_.request_ocsp || options_.request_scts)))
         return Fail(Error::kCertificate);
-      options_.external_psks.push_back(std::move(*psk));
+      std::set<size_t> hashes;
+      for (uint16_t suite : options_.cipher_suites) {
+        if (!hashes.insert(SuiteHashId(suite)).second) continue;
+        auto psk = BootstrapPSK(binding, suite, bootstrap_alpn);
+        if (!psk || !bootstrap_offers_.emplace(psk->identity, index).second)
+          return Fail(Error::kCertificate);
+        options_.external_psks.push_back(std::move(*psk));
+      }
+      SelectBootstrap(index);
+      if (ticket && Equal(ticket->bootstrap_policy, bootstrap_policy_)) {
+        ticket_binding_found = true;
+        ticket_binding = index;
+      }
     }
-    Bytes policy;
-    Append(&policy, Octets("TLS20-POK local provisioning policy"));
-    Vector16(&policy, binding.spki);
-    Vector16(&policy, Octets(binding.service));
-    Vector16(&policy, Octets(binding.scope));
-    policy.push_back(binding.provisioning_trust);
-    U32(&policy, static_cast<uint64_t>(binding.expires_unix_seconds) >> 32);
-    U32(&policy, static_cast<uint64_t>(binding.expires_unix_seconds));
-    bootstrap_policy_ = net::httpps::Hash(policy);
+    if (ticket && !ticket_binding_found) return Fail(Error::kCertificate);
+    SelectBootstrap(ticket ? ticket_binding : 0);
   }
   for (const auto& anchor : anchors_) {
     if (anchor.empty() || anchor.size() > 65536) {
@@ -1885,9 +1972,10 @@ bool Client::Start(const SessionTicket* ticket, ByteSpan early_data,
   Extension(&extensions, 45, modes);
   if (combined_psk_)
     Extension(&extensions, 33, {});
-  if (options_.post_handshake_auth &&
+  post_handshake_auth_offered_ = options_.post_handshake_auth &&
       std::find(options_.alpn_protocols.begin(), options_.alpn_protocols.end(), "h2") ==
-          options_.alpn_protocols.end())
+          options_.alpn_protocols.end();
+  if (post_handshake_auth_offered_)
     Extension(&extensions, 49, {});
   if (options_.client_hello_padding) {
     if (options_.client_hello_padding > 65535)
@@ -1955,6 +2043,8 @@ bool Client::SendEarlyData(ByteSpan data, Bytes* record) {
   if (!early_data_available() || !early_sender_ || offered_psks_.empty() ||
       (offered_ticket_ && offered_ticket_->server_certificate_type == 3 &&
        its_expires_unix_milliseconds_ <= WallMilliseconds()) ||
+      (options_.bootstrap && options_.bootstrap->expires_unix_seconds &&
+       WallMilliseconds() / 1000 >= options_.bootstrap->expires_unix_seconds) ||
       data.size() > offered_psks_.front().max_early_data - early_bytes_ ||
       !Deadline())
     return Fail();
@@ -2278,7 +2368,7 @@ bool Client::OutputFlushed() {
   offered_ticket_.reset();
   EraseHandshakeSecrets();
   OPENSSL_cleanse(master_.data(), master_.size());
-  if (options_.post_handshake_auth && alpn_ != "h2")
+  if (post_handshake_auth_offered_ && alpn_ != "h2")
     initial_transcript_ = transcript_;
   transcript_.clear();
   state_ = State::kEstablished;
@@ -2296,20 +2386,21 @@ bool Client::AcceptFrame(ByteSpan frame) {
       if (body[34] != 0 || body[37] != 0) {
         return Fail();
       }
-      const auto selected_suite = static_cast<uint16_t>(Read16(body.subspan(35u, 2u)));
-      if (std::find(options_.cipher_suites.begin(), options_.cipher_suites.end(), selected_suite) ==
-              options_.cipher_suites.end() || (retried_ && selected_suite != suite_))
-        return Fail();
-      suite_ = selected_suite;
       std::map<uint16_t, Bytes> extensions;
-      if (!Extensions(body.subspan(38u), &extensions))
-        return Fail(Error::kProtocol, 50);
+      uint8_t extension_alert;
+      if (!Extensions(body.subspan(38u), &extensions, &extension_alert))
+        return Fail(Error::kProtocol, extension_alert);
       if (!extensions.count(43))
         return Fail(Error::kProtocol, 109);
       if (extensions.at(43).size() != 2)
         return Fail(Error::kProtocol, 50);
       if (extensions.at(43) != Bytes({4, 0}))
         return Fail(Error::kProtocol, 47);
+      const auto selected_suite = static_cast<uint16_t>(Read16(body.subspan(35u, 2u)));
+      if (std::find(options_.cipher_suites.begin(), options_.cipher_suites.end(), selected_suite) ==
+              options_.cipher_suites.end() || (retried_ && selected_suite != suite_))
+        return Fail();
+      suite_ = selected_suite;
       constexpr std::array<uint8_t, 32> kRetryRandom = {
           0xcf,0x21,0xad,0x74,0xe5,0x9a,0x61,0x11,
           0xbe,0x1d,0x8c,0x02,0x1e,0x65,0xb8,0x91,
@@ -2352,6 +2443,12 @@ bool Client::AcceptFrame(ByteSpan frame) {
           return Fail();
       }
       resumed_ = psk_selected_ && selected_psk_ == 0 && offered_ticket_;
+      if (!resumed_ && !options_.bootstraps.empty()) {
+        if (!psk_selected_) return Fail(Error::kCertificate);
+        const auto selected = bootstrap_offers_.find(offered_psks_[selected_psk_].identity);
+        if (selected == bootstrap_offers_.end()) return Fail(Error::kCertificate);
+        SelectBootstrap(selected->second);
+      }
       if (!psk_selected_ || selected_psk_ != 0) {
         OPENSSL_cleanse(early_exporter_.data(), early_exporter_.size());
         early_exporter_.clear();
@@ -2428,10 +2525,11 @@ bool Client::AcceptFrame(ByteSpan frame) {
     case State::kExtensions: {
       std::map<uint16_t, Bytes> extensions;
       if (frame[0] != 8) return Fail(Error::kProtocol, 10);
-      if (!Extensions(body, &extensions) ||
-          !AppendTranscript(frame)) {
-        return Fail(Error::kProtocol, 50);
-      }
+      uint8_t extension_alert;
+      if (!Extensions(body, &extensions, &extension_alert))
+        return Fail(Error::kProtocol, extension_alert);
+      if (extensions.count(43)) return Fail(Error::kProtocol, 47);
+      if (!AppendTranscript(frame)) return Fail(Error::kProtocol, 50);
       if (options_.signaling && !options_.signaling->Validate(extensions))
         return Fail();
       if (options_.no_alpn_http11) {
@@ -2469,6 +2567,8 @@ bool Client::AcceptFrame(ByteSpan frame) {
       receiver_->SetLimit(local_record_limit_);
       sender_->SetContentLimit(fragment_limit_);
       receiver_->SetContentLimit(fragment_limit_);
+      if (!receiver_->OpenedRecordsWithinLimits())
+        return Fail(Error::kProtocol, 22);
       for (const auto& [type, data] : extensions) {
         if (type == 0 && data.empty() && !IsIpIdentity(hostname_))
           continue;
@@ -2534,6 +2634,10 @@ bool Client::AcceptFrame(ByteSpan frame) {
           std::find(options_.server_certificate_types.begin(), options_.server_certificate_types.end(),
                     server_certificate_type_) == options_.server_certificate_types.end())
         return Fail();
+      if (options_.bootstrap && psk_selected_ && !resumed_) {
+        offered_psks_[selected_psk_].alpn = alpn_;
+        external_psk_binding_ = PskBinding(offered_psks_[selected_psk_]);
+      }
       if (psk_selected_ && offered_psks_[selected_psk_].alpn != alpn_)
         return Fail();
       if (authentication_ == Authentication::kPassword || (psk_selected_ && !resumed_ && !combined_psk_)) {
@@ -2619,8 +2723,9 @@ bool Client::AcceptFrame(ByteSpan frame) {
           return Fail();
         body = expanded;
       }
-      if (!ParseCertificates(body, &certificates_, &certificate_extensions_)) {
-        return Fail(Error::kProtocol, 50);
+      uint8_t certificate_alert;
+      if (!ParseCertificates(body, &certificates_, &certificate_extensions_, &certificate_alert)) {
+        return Fail(Error::kProtocol, certificate_alert);
       }
       for (size_t i = 0; i < certificate_extensions_.size(); ++i) {
         for (const auto& [code, value] : certificate_extensions_[i]) {
@@ -2770,6 +2875,9 @@ bool Client::AcceptFrame(ByteSpan frame) {
       if (body.size() != SuiteHashLength(suite_)) return Fail(Error::kProtocol, 50);
       if (server_certificate_type_ == 3 && its_expires_unix_milliseconds_ <= WallMilliseconds())
         return Fail(Error::kCertificate);
+      if (options_.bootstrap && options_.bootstrap->expires_unix_seconds &&
+          WallMilliseconds() / 1000 >= options_.bootstrap->expires_unix_seconds)
+        return Fail(Error::kCertificate);
       auto expected = Finished(s_hs_, transcript_);
       bool ok = Equal(body, expected);
       OPENSSL_cleanse(expected.data(), expected.size());
@@ -2847,20 +2955,22 @@ bool Client::Receive(ByteSpan record, Bytes* application_data) {
   Bytes content;
   uint8_t type = 0;
   if (state_ == State::kHello) {
-    if (record.size() == 7 && record[0] == 21 && record[1] == 3 && record[2] == 3 &&
-        record[3] == 0 && record[4] == 2) {
+    if (record.size() < 5) return Fail(Error::kProtocol, 50);
+    if (record[0] != 21 && record[0] != 22) return Fail(Error::kProtocol, 10);
+    const size_t length = Read16(record.subspan(3u, 2u));
+    if (length > kMaxRecordContent) return Fail(Error::kProtocol, 22);
+    if (length != record.size() - 5) return Fail(Error::kProtocol, 50);
+    if (!length) return Fail(Error::kProtocol, 10);
+    if (record[0] == 21) {
+      if (length != 2) return Fail(Error::kProtocol, 50);
       if (record[6] == 90)
         return true;  // user_canceled is followed by close_notify or fatal alert.
       return Fail(Error::kProtocol, 0);
     }
-    if (record.size() < 6 || record.size() > 16389 || record[0] != 22 ||
-        Read16(record.subspan(3u, 2u)) != record.size() - 5) {
-      return Fail();
-    }
     type = 22;
     content.assign(record.begin() + 5, record.end());
   } else if (!receiver_ || !receiver_->Open(record, &type, &content)) {
-    return Fail(Error::kProtocol, 20);
+    return Fail(Error::kProtocol, receiver_ ? receiver_->alert() : 20);
   }
   if (type == 21) {
     if (content.size() == 2 && content[1] == 90)
@@ -2937,8 +3047,8 @@ bool Client::AcceptPostHandshake(ByteSpan frame) {
   auto body = frame.subspan(4u);
   if (frame[0] == 13 || frame[0] == 252) {
     transcript_ = initial_transcript_;
-    if (initial_transcript_.empty() || !AcceptCertificateRequest(frame, true))
-      return Fail();
+    if (initial_transcript_.empty()) return Fail(Error::kProtocol, 10);
+    if (!AcceptCertificateRequest(frame, true)) return false;
     if (update_response_pending_) {
       Bytes update;
       if (!RequestKeyUpdate(false, &update))
@@ -2960,7 +3070,10 @@ bool Client::AcceptPostHandshake(ByteSpan frame) {
     receiver_ = std::make_unique<RecordCipher>(s_app_, suite_, options_.native_provider);
     receiver_->SetLimit(local_record_limit_);
     receiver_->SetContentLimit(fragment_limit_);
-    update_response_pending_ |= body[0] == 1;
+    // At the last permitted sending epoch, keep receiving peer updates but
+    // ignore requests for an impossible sending update (RFC 9846 4.7.3).
+    update_response_pending_ |= body[0] == 1 && sending_epoch_ < (uint64_t{1} << 48) - 1;
+    update_requested_pending_ = false;
     return true;
   }
   if (frame[0] != 4) return Fail(Error::kProtocol, 10);
@@ -2978,8 +3091,9 @@ bool Client::AcceptPostHandshake(ByteSpan frame) {
   auto identity = body.subspan(11 + nonce_length, ticket_length);
   ticket.identity.assign(identity.begin(), identity.end());
   std::map<uint16_t, Bytes> extensions;
-  if (!Extensions(body.subspan(11 + nonce_length + ticket_length), &extensions))
-    return Fail();
+  uint8_t extension_alert;
+  if (!Extensions(body.subspan(11 + nonce_length + ticket_length), &extensions, &extension_alert))
+    return Fail(Error::kProtocol, extension_alert);
   for (const auto& [type, data] : extensions) {
     if (!RequestExtensionAllowed(type, RequestExtensionContext::kNewSessionTicket))
       return Fail(Error::kProtocol, 47);
@@ -3060,6 +3174,12 @@ bool Client::ExportEarly(std::string_view label, ByteSpan context, size_t length
 bool Client::RequestKeyUpdate(bool request_peer, Bytes* record) {
   if ((!established() && !closed()) || close_sent_)
     return false;
+  if (request_peer && update_requested_pending_)
+    return false;
+  // RFC 9846 bounds only locally initiated sending epochs. Receiving a peer
+  // update has no corresponding generation limit.
+  if (sending_epoch_ == (uint64_t{1} << 48) - 1)
+    return Fail();
   Bytes update;
   if (!sender_->Seal(Frame(24, Bytes{static_cast<uint8_t>(request_peer)}), 22,
                      &update) ||
@@ -3069,6 +3189,8 @@ bool Client::RequestKeyUpdate(bool request_peer, Bytes* record) {
   sender_->SetLimit(peer_record_limit_);
   sender_->SetContentLimit(fragment_limit_);
   update_response_pending_ = false;
+  update_requested_pending_ |= request_peer;
+  ++sending_epoch_;
   *record = TakeOutput();
   Append(record, update);
   return true;
@@ -3125,7 +3247,10 @@ bool Client::Send(ByteSpan data, Bytes* record) {
 
 bool Client::RequestHeartbeat(ByteSpan payload, Bytes* record) {
   if (!established() || closed() || close_sent_ || !peer_heartbeat_mode_ ||
-      *peer_heartbeat_mode_ != 1 || heartbeat_request_ || payload.size() + 19 > max_send_content())
+      *peer_heartbeat_mode_ != 1 || heartbeat_request_ ||
+      payload.size() > max_send_content() - 19 ||
+      payload.size() > std::min<size_t>(fragment_limit_,
+          local_record_limit_ ? local_record_limit_ - 1 : 16384) - 19)
     return false;
   Bytes message{1};
   U16(&message, payload.size());

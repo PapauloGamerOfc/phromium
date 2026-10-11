@@ -7253,6 +7253,37 @@ TEST_F(SSLClientSocketTest, HttppsUnauthenticatedProfilesAndTicketsAreRejected) 
   EXPECT_FALSE(Peer::Take(*context_, server, config));
 }
 
+TEST_F(SSLClientSocketTest, HttppsBootstrapInventoriesRespectPrivacyAndWebTrust) {
+  using Peer = SSLClientContextHttppsTestPeer;
+  const HostPortPair server("cache.test", 343);
+  SSLConfig config;
+  config.is_httpps = true;
+  httpps::ClientOptions options;
+  // Public placeholders exercise profile storage, not credential validation.
+  httpps::BootstrapBinding first;
+  first.service = server.host();
+  first.scope = "first";
+  first.spki = {1};
+  auto second = first;
+  second.scope = "second";
+  second.spki = {2};
+  options.bootstraps = {first, second};
+  ASSERT_TRUE(context_->SetHttppsOptions(server, config, options));
+  const auto* stored = Peer::Options(*context_, server, config);
+  ASSERT_NE(stored, nullptr);
+  ASSERT_EQ(stored->bootstraps.size(), 2u);
+  options.bootstraps.front().scope = "changed";
+  EXPECT_EQ(stored->bootstraps.front().scope, "first");
+  auto private_config = config;
+  private_config.privacy_mode = PRIVACY_MODE_ENABLED_WITHOUT_CLIENT_CERTS;
+  EXPECT_FALSE(context_->SetHttppsOptions(server, private_config, options));
+  options.bootstraps.back().provisioning_trust = true;
+  EXPECT_FALSE(context_->SetHttppsOptions(server, config, options));
+  options.bootstraps.back().provisioning_trust = false;
+  options.continuity_pinning = true;
+  EXPECT_FALSE(context_->SetHttppsOptions(server, config, options));
+}
+
 TEST_F(SSLClientSocketTest, HttppsTrustPoliciesAreSnapshots) {
   using Peer = SSLClientContextHttppsTestPeer;
   const HostPortPair server("cache.test", 343);

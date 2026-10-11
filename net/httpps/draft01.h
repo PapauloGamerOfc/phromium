@@ -158,6 +158,9 @@ struct HTTPPS_EXPORT BootstrapBinding {
   std::string scope;
   bool provisioning_trust = false;
   int64_t expires_unix_seconds = 0;
+  // Each offered BSK may have its own explicitly selected possession key.
+  // The legacy singular binding can use Client::SetClientCredential instead.
+  std::optional<ClientCredential> credential;
 };
 HTTPPS_EXPORT std::optional<ExternalPSK> BootstrapPSK(
     const BootstrapBinding& binding, uint16_t suite, std::string alpn);
@@ -170,6 +173,7 @@ struct HTTPPS_EXPORT ClientOptions {
   std::shared_ptr<const ITSPolicy> its_policy;
   std::shared_ptr<PinAttempt> pinning;
   std::optional<BootstrapBinding> bootstrap;
+  std::vector<BootstrapBinding> bootstraps;
   // Generic provisioning applications must opt out explicitly. Browser HTTPPS
   // must never change this to turn a failed website certificate into success.
   bool ordinary_httpps = true;
@@ -331,6 +335,12 @@ class HTTPPS_EXPORT RecordCipher {
   RecordCipher& operator=(const RecordCipher&) = delete;
   bool Seal(ByteSpan content, uint8_t type, Bytes* record, size_t padding = 0);
   bool Open(ByteSpan record, uint8_t* type, Bytes* content);
+  uint8_t alert() const { return alert_; }
+  // EE can negotiate a limit after its first protected record was opened.
+  bool OpenedRecordsWithinLimits() const {
+    return max_opened_inner_ <= inner_limit_ &&
+           max_opened_content_ <= content_limit_;
+  }
   bool needs_update() const;
   void SetLimit(uint16_t limit) {
     inner_limit_ = limit ? limit : 16385;
@@ -338,6 +348,7 @@ class HTTPPS_EXPORT RecordCipher {
   void SetContentLimit(uint16_t limit) { content_limit_ = limit; }
 
  private:
+  friend class ProtocolRegressionPeer;
   bool Account(size_t content_length, bool sending);
   Bytes key_;
   std::shared_ptr<NativeProvider> native_provider_;
@@ -347,6 +358,9 @@ class HTTPPS_EXPORT RecordCipher {
   uint64_t sequence_ = 0;
   uint64_t content_bytes_ = 0;
   bool failed_ = false;
+  uint8_t alert_ = 20;
+  size_t max_opened_inner_ = 0;
+  size_t max_opened_content_ = 0;
   uint16_t inner_limit_ = 16385;
   uint16_t content_limit_ = 16384;
 };
@@ -445,6 +459,7 @@ class HTTPPS_EXPORT Client {
   }
 
  private:
+  friend class ProtocolRegressionPeer;
   enum class State {
     kNew,
     kHello,
@@ -465,6 +480,7 @@ class HTTPPS_EXPORT Client {
   bool AppendClientAuthentication();
   bool AcceptCertificateRequest(ByteSpan frame, bool post_handshake);
   bool ClientCredentialMatchesRequest() const;
+  void SelectBootstrap(size_t index);
   bool AddPskExtension(Bytes* extensions) const;
   bool BindClientHello(Bytes* hello, ByteSpan prefix) const;
   bool SealHandshake(ByteSpan frame);
@@ -539,6 +555,7 @@ class HTTPPS_EXPORT Client {
   Secret external_psk_binding_{};
   Secret selected_client_identity_{};
   Secret bootstrap_policy_{};
+  std::map<Bytes, size_t> bootstrap_offers_;
   uint16_t early_suite_ = 0x1301;
   std::optional<ClientCredential> client_credential_;
   Secret client_verifier_share_{};
@@ -563,6 +580,9 @@ class HTTPPS_EXPORT Client {
   bool early_accepted_ = false;
   bool resume_verification_ = false;
   bool update_response_pending_ = false;
+  bool update_requested_pending_ = false;
+  uint64_t sending_epoch_ = 0;
+  bool post_handshake_auth_offered_ = false;
   uint32_t early_bytes_ = 0;
   std::unique_ptr<RecordCipher> early_sender_;
   std::unique_ptr<RecordCipher> sender_, receiver_;

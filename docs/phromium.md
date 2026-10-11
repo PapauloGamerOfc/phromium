@@ -467,7 +467,49 @@ the distinction between engine, async-adapter and real-browser coverage.
 
 ### Local validation status
 
-#### Conformance and local-profile completion: 2026-10-11
+#### Bootstrap inventories and state-boundary corrections: 2026-10-11
+
+The complete Windows x64 browser and `net_unittests` were rebuilt after the
+bootstrap, record-alert, KeyUpdate, PHA and negotiated-record-limit changes.
+All **1,502 focused** and **10,071 broader** network tests passed with two jobs
+and no automatic retries. These selections overlap; do not add their totals.
+The socket regressions include empty records and oversized or invalid-version
+headers whose bodies never arrive: the protocol emits its specific fatal alert
+without allocating or waiting for an invalid fragment.
+
+All **32 production-profile browser cases** passed with upstream sandbox
+defaults and again with `NetworkServiceSandbox` explicitly enabled. New cases
+select the second of two bootstrap keys with SHA-384, repeat through HRR, resume
+the selected identity, and reject unknown keys or mismatched private keys.
+Ordinary website certificate validation and client-identity privacy controls
+remain mandatory. Public provider DLLs inherit browser-output sandbox access;
+temporary private keys remain separate, with no OS trust or ACL modifications.
+
+The general browser suite passed **38 assertions** for HTTP/2, actual 0-RTT
+before client Finished, HTTP 425 retry, resumption, persistent cookie isolation
+and credential rejection. Fifteen harness self-tests and nine branding checks
+also passed. Portable verification passed six CTest tests, all 19 CI
+interoperability invocations and all 18 optional-provider commands without
+skips. Bootstrap alone covers 24 successful connections and ten rejection
+gates, including ALPN fallback, inventory changes and ticket authorization.
+
+The matching reference-server revision is
+`3ef271f4bcb1b6ca43dc0816bd0c37d09ff9ad04`, pinned by CI and the integration
+harness. Its 562-test native suite passed with two POSIX-only tests skipped on
+Windows; documentation, wheel/sdist build and isolated wheel installation also
+passed. The specification oracle remains pinned to
+`dee31da9826e10bd590f58acc0f9f46143505fd1`.
+Local results are `out/Phromium/bootstrap-conformance-focused.log`,
+`out/Phromium/bootstrap-conformance-broad.log`,
+`out/Phromium/bootstrap-profiles-default.log`,
+`out/Phromium/bootstrap-profiles-sandbox.log` and
+`out/Phromium/bootstrap-browser-pinned.json`. The final 38-assertion browser run
+uses the clean pinned server without `--allow-server-worktree`; its source
+fingerprint matches the preceding `bootstrap-browser-worktree.json` run.
+These results are not a formal security proof, full-browser Linux/macOS
+validation, or installer validation. Earlier results below are historical.
+
+#### Historical baseline — conformance and local profiles: 2026-10-11
 
 The Windows x64 browser and `net_unittests` were rebuilt. All **1,074 focused**
 and **9,806 broader** network, certificate, proxy, cookie, HTTP and SSL tests
@@ -504,10 +546,10 @@ component and earlier-browser results below remain historical.
 
 The matching reference-server revision is
 `aa3be3ecc6764e282bf4292f95532a6557a0fdf7`; its final native suite ran 534
-tests with two Windows-specific skips. The browser CI and clean-checkout
-integration harness pin that revision. The independent specification oracle
+tests with two Windows-specific skips. At that baseline the browser CI and
+clean-checkout integration harness pinned that revision. The independent specification oracle
 pins `dee31da9826e10bd590f58acc0f9f46143505fd1`.
-Current local logs are `out/Phromium/spec-completion-focused-after-alert.log`,
+Historical local logs are `out/Phromium/spec-completion-focused-after-alert.log`,
 `out/Phromium/spec-completion-broad-after-alert.log`,
 `out/Phromium/profile-final-default.log`,
 `out/Phromium/profile-final-sandbox.log`,

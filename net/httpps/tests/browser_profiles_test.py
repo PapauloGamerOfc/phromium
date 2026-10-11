@@ -160,6 +160,8 @@ async def run(args):
     from tls20_server.pki import Credentials
     from tls20_server.psk import ExternalPSK, import_psk
     from tls20_server.retry_cookie import RetryCookiePolicy
+    from tls20_server.bootstrap_credentials import BootstrapBinding, bootstrap_server_handshake
+    from tls20_server.tickets import TicketStore
 
     native_provider = gost_provider = password_policy = None
     environment = {}
@@ -198,7 +200,8 @@ async def run(args):
         try:
             cases = ["private-ca", "no-alpn", "client-mac", "raw-key", "external-psk", "imported-psk",
                      "combined-psk", "retry-cookie", "hybrid", "wrong-psk", "wrong-raw-key", "wrong-scope", "malformed",
-                     "missing-native-library", "invalid-native-library", "ct-v2", "ct-v2-tampered"]
+                     "missing-native-library", "invalid-native-library", "ct-v2", "ct-v2-tampered",
+                     "bootstrap-multiple", "bootstrap-multiple-retry", "bootstrap-unknown", "bootstrap-wrong-key"]
             if args.manifest:
                 cases += ["native-x448", "native-sm", "native-gost", "password", "mixed-password",
                           "mixed-ordinary", "wrong-password", "dane", "dane-wrong-association", "its", "its-revoked"]
@@ -211,7 +214,8 @@ async def run(args):
                 credentials = fixtures.credentials["valid"]
                 options = {"trust_anchors": [b64(fixtures.root)]}
                 server_options = {}
-                completed, rejected = [], []
+                server_bootstrap = None
+                completed, rejected, bootstrap_sessions = [], [], []
                 client_key = x25519.X25519PrivateKey.generate()
                 client_spki = client_key.public_key().public_bytes(serialization.Encoding.DER,
                                                                  serialization.PublicFormat.SubjectPublicKeyInfo)
@@ -225,6 +229,28 @@ async def run(args):
                         RawPublicKeyBinding("client", "fixture client", client_spki),))
                     server_options.update(client_credential_policy=policy, require_client_auth=True,
                                           client_certificate_types=(2,))
+                elif kind.startswith("bootstrap-"):
+                    first_key = x25519.X25519PrivateKey.generate()
+                    first_spki = first_key.public_key().public_bytes(serialization.Encoding.DER,
+                                                                   serialization.PublicFormat.SubjectPublicKeyInfo)
+                    def binding(spki, key):
+                        return {"spki": b64(spki), "service": HOST, "scope": "browser-provisioning",
+                                "private_key": b64(key.private_bytes_raw())}
+                    options["bootstraps"] = [binding(first_spki, first_key), binding(client_spki, client_key)]
+                    options["cipher_suites"] = [0x1301, 0x1302]
+                    # Only the second provisioned BSK and SHA-384 are accepted.
+                    selected_spki = client_spki
+                    if kind == "bootstrap-unknown":
+                        selected_spki = x25519.X25519PrivateKey.generate().public_key().public_bytes(
+                            serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)
+                    elif kind == "bootstrap-wrong-key":
+                        options["bootstraps"][1]["private_key"] = b64(first_key.private_bytes_raw())
+                    server_bootstrap = BootstrapBinding(selected_spki, HOST, "browser-provisioning")
+                    server_options["cipher_suites"] = (0x1302,)
+                    server_options["ticket_store"] = TicketStore()
+                    if kind == "bootstrap-multiple-retry":
+                        options["groups"] = [29, 23]
+                        server_options["supported_groups"] = (23,)
                 elif kind in ("raw-key", "wrong-raw-key"):
                     spki = credentials.private_key.public_key().public_bytes(serialization.Encoding.DER,
                                                                             serialization.PublicFormat.SubjectPublicKeyInfo)
@@ -281,14 +307,21 @@ async def run(args):
                 async def peer(reader, writer, *, kind=kind, selected_credentials=selected_credentials,
                                case_host=case_host,
                                server_options=server_options, completed=completed,
-                               rejected=rejected, client_spki=client_spki):
+                               rejected=rejected, client_spki=client_spki, server_bootstrap=server_bootstrap,
+                               bootstrap_sessions=bootstrap_sessions):
                     try:
                         async with asyncio.timeout(15):
                             if kind in ("password", "mixed-password", "wrong-password"):
                                 from tls20_server import pake_handshake
                                 channel = await pake_handshake.server(reader, writer, password_policy, **server_options)
+                            elif server_bootstrap is not None:
+                                channel = await bootstrap_server_handshake(reader, writer, selected_credentials[0],
+                                    server_bootstrap, **server_options)
                             else:
                                 channel = await server_handshake(reader, writer, selected_credentials[0], case_host, **server_options)
+                            if server_bootstrap is not None:
+                                assert channel.authenticated_client == (client_spki,)
+                                bootstrap_sessions.append(channel.resumed)
                             request = b""
                             while b"\r\n\r\n" not in request:
                                 part = await channel.recv()
@@ -297,7 +330,7 @@ async def run(args):
                                 request += part
                                 assert len(request) < 16384
                             completed.append(channel.authenticated_client)
-                            if kind == "client-mac":
+                            if kind == "client-mac" or kind.startswith("bootstrap-"):
                                 assert channel.authenticated_client == (client_spki,)
                             if kind in ("password", "mixed-password"):
                                 assert channel.pake_identity == b"alice"
@@ -324,7 +357,8 @@ async def run(args):
                 file.write_text(json.dumps(config), encoding="utf-8")
                 success = kind not in ("wrong-psk", "wrong-raw-key", "wrong-scope", "malformed",
                                        "wrong-password", "missing-native-library", "invalid-native-library",
-                                       "ct-v2-tampered", "dane-wrong-association", "its-revoked")
+                                       "ct-v2-tampered", "dane-wrong-association", "its-revoked",
+                                       "bootstrap-unknown", "bootstrap-wrong-key")
                 health_port = None
                 if kind in ("missing-native-library", "invalid-native-library"):
                     # The bad profile must fail closed without turning a local
@@ -343,6 +377,13 @@ async def run(args):
                         if success:
                             assert await cdp.evaluate("document.body.innerText") == "profile:" + kind
                             assert completed, kind
+                            if server_bootstrap is not None:
+                                # Connection: close requires a new transport, while
+                                # the same partition may reuse the selected BSK's ticket.
+                                await cdp.navigate(origin + "/resumed")
+                                assert await cdp.evaluate("document.body.innerText") == "profile:" + kind
+                                assert bootstrap_sessions[0] is False
+                                assert any(bootstrap_sessions[1:]), bootstrap_sessions
                         else:
                             assert not completed, (kind, completed)
                         if health_port:

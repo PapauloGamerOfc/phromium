@@ -45,6 +45,7 @@ set(ZSTD_MULTITHREAD_SUPPORT OFF CACHE BOOL "" FORCE)
 add_subdirectory("${CHROMIUM_ROOT}/third_party/zstd/src/build/cmake" zstd EXCLUDE_FROM_ALL)
 add_executable(httpps_native_test
     tls_features_test.cc
+    protocol_regression_test.cc
     native_test.cc pinning_test.cc control_profiles_test.cc integrity_only_test.cc native_provider_test.cc ../draft01.cc ../lab_pki.cc ../application_auth.cc ../pinning.cc ../bootstrap.cc ../control_profiles.cc ../ffdhe.cc ../certificate_algorithms.cc ../credential_requests.cc ../integrity_only.cc ../native_provider.cc ../transparency.cc ../dnssec.cc ../its_credentials.cc)
 target_compile_definitions(httpps_native_test PRIVATE PHROMIUM_HTTPPS_STANDALONE PHROMIUM_HTTPPS_TEST_DIAGNOSTICS)
 target_include_directories(httpps_native_test PRIVATE "${CHROMIUM_ROOT}")

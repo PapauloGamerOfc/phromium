@@ -11,6 +11,7 @@
 #include "net/base/proxy_server.h"
 #include "net/httpps/transparency.h"
 #include "testing/gtest/include/gtest/gtest.h"
+#include "third_party/boringssl/src/include/openssl/curve25519.h"
 #include "url/gurl.h"
 
 namespace net::httpps {
@@ -103,6 +104,70 @@ TEST(HttppsProfileConfigTest, NeverHttpsOrProxyRole) {
   config = Context();
   config.session_usage = SessionUsage::kProxy;
   EXPECT_EQ(Apply(provider, config, &options, &credential), std::nullopt);
+  EXPECT_EQ(Apply(provider, Context(), &options, &credential), false);
+}
+
+TEST(HttppsProfileConfigTest, MultipleBootstrapCredentialsAndLegacyOption) {
+  auto make_binding = [](uint8_t scalar, const char* scope) {
+    Secret key{}, public_key{};
+    key.fill(scalar);
+    X25519_public_from_private(public_key.data(), key.data());
+    Bytes spki{0x30, 0x2a, 0x30, 5, 6, 3, 0x2b, 0x65, 0x6e, 3, 0x21, 0};
+    spki.insert(spki.end(), public_key.begin(), public_key.end());
+    return base::DictValue()
+        .Set("spki", base::Base64Encode(spki))
+        .Set("private_key", base::Base64Encode(key))
+        .Set("service", "example.test")
+        .Set("scope", scope)
+        .Set("expires_unix_seconds", "4102444800");
+  };
+  const auto a = make_binding(4, "device-a");
+  auto b = make_binding(7, "device-b");
+  b.Remove("expires_unix_seconds");
+  auto provider = CreateProfileProvider(Config(base::DictValue().Set(
+      "bootstraps", base::ListValue().Append(a.Clone()).Append(b.Clone()))));
+  ClientOptions options;
+  std::optional<ClientCredential> credential;
+  ASSERT_EQ(Apply(provider, Context(), &options, &credential), true);
+  ASSERT_EQ(options.bootstraps.size(), 2u);
+  EXPECT_FALSE(options.bootstrap);
+  EXPECT_FALSE(credential);
+  EXPECT_EQ(options.bootstraps[1].scope, "device-b");
+  EXPECT_EQ(options.bootstraps[1].expires_unix_seconds, 0);
+  ASSERT_TRUE(options.bootstraps[1].credential);
+  EXPECT_EQ(options.bootstraps[1].credential->certificate_type, 2);
+  EXPECT_EQ(options.bootstraps[1].credential->private_key.front(), 7);
+  Client client("example.test", {}, true, options);
+  EXPECT_TRUE(client.Start());
+  provider = CreateProfileProvider(Config(base::DictValue().Set("bootstrap", a.Clone())));
+  options = {};
+  ASSERT_EQ(Apply(provider, Context(), &options, &credential), true);
+  ASSERT_TRUE(options.bootstrap);
+  EXPECT_TRUE(options.bootstraps.empty());
+  Client legacy("example.test", {}, true, options);
+  EXPECT_TRUE(legacy.Start());
+
+  auto private_config = Context();
+  private_config.privacy_mode = PRIVACY_MODE_ENABLED_WITHOUT_CLIENT_CERTS;
+  provider = CreateProfileProvider(Config(base::DictValue().Set(
+      "bootstraps", base::ListValue().Append(a.Clone()).Append(b.Clone())),
+      PRIVACY_MODE_ENABLED_WITHOUT_CLIENT_CERTS));
+  options = {};
+  EXPECT_EQ(Apply(provider, private_config, &options, &credential), false);
+  std::vector<base::ListValue> malformed;
+  malformed.emplace_back();
+  malformed.push_back(base::ListValue().Append("invalid"));
+  malformed.push_back(base::ListValue().Append(base::DictValue().Set("spki", "AA==")));
+  for (auto& invalid : malformed) {
+    options = {};
+    provider = CreateProfileProvider(Config(base::DictValue().Set("bootstraps", std::move(invalid))));
+    EXPECT_EQ(Apply(provider, Context(), &options, &credential), false);
+  }
+  auto forbidden = a.Clone();
+  forbidden.Set("provisioning_trust", true);
+  provider = CreateProfileProvider(Config(base::DictValue().Set(
+      "bootstraps", base::ListValue().Append(std::move(forbidden)))));
+  options = {};
   EXPECT_EQ(Apply(provider, Context(), &options, &credential), false);
 }
 

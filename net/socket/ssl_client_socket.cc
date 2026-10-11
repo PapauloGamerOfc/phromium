@@ -440,10 +440,12 @@ bool SSLClientContext::PrepareHttppsOptions(
       !options.ordinary_httpps || options.allow_unauthenticated ||
       options.allow_integrity_only || options.pinning ||
       (config.privacy_mode == PRIVACY_MODE_ENABLED_WITHOUT_CLIENT_CERTS &&
-       (options.password || !options.external_psks.empty() || options.bootstrap)) ||
+       (options.password || !options.external_psks.empty() || options.bootstrap || !options.bootstraps.empty())) ||
       (options.continuity_pinning && (!options.external_psks.empty() ||
-          options.password || options.its_policy || options.bootstrap)) ||
+          options.password || options.its_policy || options.bootstrap || !options.bootstraps.empty())) ||
       (options.bootstrap && options.bootstrap->provisioning_trust) ||
+      std::any_of(options.bootstraps.begin(), options.bootstraps.end(),
+                  [](const auto& binding) { return binding.provisioning_trust; }) ||
       (options.dane_policy && options.dane_policy->port != server.port())) {
     return false;
   }
@@ -452,6 +454,13 @@ bool SSLClientContext::PrepareHttppsOptions(
   // our interface receives shared_ptr<const>. Updates must go through this
   // setter to invalidate old tickets and pooled connections. Providers remain
   // shared; external state captured by DANE callbacks obeys the same contract.
+  const auto snapshot_bootstrap = [](httpps::BootstrapBinding& binding) {
+    if (binding.credential && binding.credential->its_policy)
+      binding.credential->its_policy =
+          std::make_shared<httpps::ITSPolicy>(*binding.credential->its_policy);
+  };
+  if (prepared.bootstrap) snapshot_bootstrap(*prepared.bootstrap);
+  for (auto& binding : prepared.bootstraps) snapshot_bootstrap(binding);
   if (options.ct_v2_policy) {
     prepared.ct_v2_policy =
         std::make_shared<httpps::CTv2Policy>(*options.ct_v2_policy);

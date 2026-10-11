@@ -8,7 +8,7 @@ disables the sandbox, or bypasses a browser certificate error through CDP.
 
 Prerequisites: Python 3.11+, the reference server's `requirements-dev.txt`
 (including the `h2` fixture dependency), and a clean checkout of
-`tls20-server` at `aa3be3ecc6764e282bf4292f95532a6557a0fdf7`. The revision is
+`tls20-server` at `3ef271f4bcb1b6ca43dc0816bd0c37d09ff9ad04`. The revision is
 checked before importing its protocol implementation. No dependencies are
 downloaded by the script.
 
@@ -176,7 +176,11 @@ option when comparing results. Use `--case native-x448` for a focused load check
 The base cases cover private roots, explicit no-ALPN HTTP/1.1, client MAC
 credentials, raw keys, direct/imported/combined PSKs, HRR cookies, hybrid key
 exchange, signed/tampered CT v2 evidence, and invalid
-credentials/configuration/partition scope. Missing or invalid DLL profiles must
+credentials/configuration/partition scope. Bootstrap cases offer two BSKs and
+two KDFs, require selection of the second BSK with SHA-384, repeat the test with
+HRR, and verify selected-identity resumption on a new browser connection.
+Unknown BSKs and mismatched possession keys must fail before application data.
+Missing or invalid DLL profiles must
 reject HTTPPS without crashing the network service; normal HTTP navigation is
 checked before and after each rejection. The provider
 manifest additionally exercises actual network-service DLL loading for X448,

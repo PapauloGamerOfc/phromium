@@ -119,9 +119,19 @@ profile without taking down normal HTTP/HTTPS networking.
   its separately installed GOST provider. Ownership/provenance/updates remain
   the administrator's responsibility. These never replace HTTPS BoringSSL.
 - `bootstrap`: authenticated bootstrap metadata with `spki`, `service`,
-  `scope`, `expires_unix_seconds`. Unauthenticated provisioning is deliberately
-  unavailable to normal browser HTTPPS; use the separate library API where the
-  application explicitly accepts an unauthenticated transport.
+  `scope`, and optional `expires_unix_seconds`, paired with the separately
+  selected `client_credential` for compatibility with singular profiles.
+- `bootstraps`: an array of those records, each with its own base64 raw X25519
+  `private_key`. The browser offers each provisioned BSK for the compatible
+  hashes in `cipher_suites`; the authenticated server selection determines the
+  exact client RPK and possession key. Unknown identities, duplicate BSK offers
+  and mismatched private keys are rejected. Resumption remains bound to the
+  selected current BSK, scope, trust policy and lifetime, not inventory order.
+  Both forms are identifying credentials: they are unavailable when client
+  credentials are omitted by privacy policy or for proxy authentication.
+  Provisioning-trust bootstrap is deliberately unavailable to normal browser
+  HTTPPS. The separate library API can explicitly select that trust model; it
+  still verifies the PSK-bound server MAC and Finished, but is not Web PKI trust.
 
 ## Certificate evidence policies
 

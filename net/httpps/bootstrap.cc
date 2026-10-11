@@ -3,6 +3,7 @@
 // found in the LICENSE file.
 
 #include "net/httpps/draft01.h"
+#include "net/httpps/integrity_only.h"
 #include <ctime>
 #include "third_party/boringssl/src/include/openssl/digest.h"
 #include "third_party/boringssl/src/include/openssl/hkdf.h"
@@ -15,7 +16,7 @@ std::optional<ExternalPSK> BootstrapPSK(const BootstrapBinding& binding,
   if (!ExtractRawPublicKey(binding.spki, &key) || !ValidServiceIdentity(binding.service) ||
       binding.scope.empty() || (binding.expires_unix_seconds &&
                                std::time(nullptr) >= binding.expires_unix_seconds) ||
-      !SuiteHashLength(suite))
+      !SuiteHashLength(suite) || IntegrityTagLength(suite))
     return std::nullopt;
   auto root = Mac(Secret{}, binding.spki);
   Secret identity;

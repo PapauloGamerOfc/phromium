@@ -38,6 +38,7 @@ using SocketHandle = int;
 void RunPinningTests();
 void TlsFeaturesTests();
 void RunControlProfileTests();
+void RunProtocolRegressionTests();
 void RunIntegrityOnlyTests();
 void RunNativeProviderTests(std::string_view library, std::string_view helper);
 void RunGostProviderTests(std::string_view library, std::string_view module);
@@ -209,14 +210,19 @@ int Get(const char* host,
         bool cache_test = false,
         bool authenticator_test = false,
         bool pinning_test = false,
-        const net::httpps::ClientCredential* selected_credential = nullptr) {
+        const net::httpps::ClientCredential* selected_credential = nullptr,
+        bool bootstrap_inventory_test = false) {
 #if defined(_WIN32)
   WSADATA data;
   Require(WSAStartup(MAKEWORD(2, 2), &data) == 0, "winsock init");
 #endif
   std::optional<net::httpps::SessionTicket> session;
+  const Bytes expected_bootstrap = bootstrap_inventory_test
+      ? options.bootstraps.back().spki : Bytes{};
   net::httpps::PinningCache pins;
   for (int round = 0; round < (resume_test || cache_test || pinning_test ? 3 : 1); ++round) {
+  if (bootstrap_inventory_test && round)
+    std::reverse(options.bootstraps.begin(), options.bootstraps.end());
   if (pinning_test) {
     options.pinning = pins.Begin(host, static_cast<uint16_t>(ParseUnsigned(port)), "loopback-fixture");
     Require(options.pinning != nullptr, "pinning scope accepted");
@@ -299,6 +305,11 @@ int Get(const char* host,
     }
   }
   Bytes output;
+  if (bootstrap_inventory_test) {
+    const auto group = std::find(options.groups.begin(), options.groups.end(), client.traffic_group());
+    Require(group != options.groups.end(), "bootstrap negotiated an offered traffic group");
+    std::rotate(options.groups.begin(), group, options.groups.end());
+  }
   if (options.allow_unauthenticated)
     Require(client.authentication() == net::httpps::Authentication::kUnauthenticated,
             "unauthenticated lineage is preserved, including resumption");
@@ -340,6 +351,33 @@ int Get(const char* host,
     auto tickets = client.TakeTickets();
     if (!tickets.empty() && !cache_test && !pinning_test) {
       session = std::move(tickets.back());
+      if (bootstrap_inventory_test) {
+        Require(client.bootstrap_authenticated() && client.client_identity_authenticated(),
+                "selected bootstrap possession retained by tickets");
+        const auto selected = std::find_if(options.bootstraps.begin(), options.bootstraps.end(),
+            [&](const auto& binding) { return binding.spki == expected_bootstrap; });
+        Require(selected != options.bootstraps.end(), "selected binding remains locally authorized");
+        const size_t index = selected - options.bootstraps.begin();
+        for (int fault = 0; fault < 5; ++fault) {
+          auto changed = options;
+          if (fault == 0) changed.bootstraps.erase(changed.bootstraps.begin() + index);
+          if (fault == 1) changed.bootstraps[index].scope += "-revoked";
+          if (fault == 2) changed.bootstraps[index].expires_unix_seconds = 1;
+          if (fault == 3) changed.bootstraps[index].provisioning_trust =
+              !changed.bootstraps[index].provisioning_trust;
+          if (fault == 4) changed.bootstraps[index].credential =
+              changed.bootstraps[1 - index].credential;
+          net::httpps::Client rejected(host, anchors, false, changed);
+          Require(!rejected.Start(&*session, {}, true) && rejected.TakeOutput().empty(),
+                  "bootstrap ticket cannot survive selected authority retirement or substitution");
+        }
+        for (auto& binding : options.bootstraps) {
+          if (binding.spki != expected_bootstrap) {
+            binding.scope += "-unrelated-policy-change";
+            if (round == 1) binding.expires_unix_seconds = 1;
+          }
+        }
+      }
       if (options.its_policy) {
         auto reject_cached = [&](net::httpps::SessionTicket changed) {
           net::httpps::Client rejected(host, anchors, false, options);
@@ -504,6 +542,7 @@ void SelfTest() {
   TlsFeaturesTests();
   RunPinningTests();
   RunControlProfileTests();
+  RunProtocolRegressionTests();
   RunIntegrityOnlyTests();
   using RequestContext = net::httpps::RequestExtensionContext;
   for (uint16_t code : {0, 1, 10, 13, 15, 16, 17, 19, 20, 21, 25, 28,
@@ -738,8 +777,13 @@ int main(int argc, char** argv) {
       return mode != "failure";
     };
     int result = Get(argv[2], argv[3], argv[4], false, true, true, nullptr, nullptr, options);
-    Require(labels.size() == (mode == "off" ? 0u : mode == "failure" ? 3u : mode == "exporters" ? 17u : 13u),
+    Require(labels.size() == (mode == "off" ? 0u : mode == "failure" ? 3u : mode == "exporters" ? 18u : 13u),
             "diagnostic gates, derivation events and sink failure");
+    if (mode == "exporters") {
+      Require(std::count(labels.begin(), labels.end(), "TLS20_EXPORTER_SECRET") == 3 &&
+                  std::count(labels.begin(), labels.end(), "TLS20_EARLY_EXPORTER_SECRET") == 2,
+              "early exporters exist for both resumed ClientHellos, including zero early payload");
+    }
     for (const auto& label : labels)
       Require(label.starts_with("TLS20_") && label.find("SECRET_1") == std::string::npos &&
               (mode == "exporters" || label.find("EXPORTER") == std::string::npos), "diagnostic protocol and category separation");
@@ -782,6 +826,32 @@ int main(int argc, char** argv) {
     options.bootstrap = binding;
     options.ordinary_httpps = !binding.provisioning_trust;
     return Get(argv[2], argv[3], argv[4], false, true, true, argv[6], argv[7], options);
+  }
+  if (argc == 10 && std::string_view(argv[1]) == "--get-bootstrap-multi") {
+    net::httpps::ClientOptions options;
+    options.cipher_suites = {0x1301, 0x1302};
+    options.groups = {29, 23};
+    options.alpn_protocols = {"h2", "http/1.1"};
+    const bool provisioning = std::string_view(argv[9]) == "provisioning";
+    options.ordinary_httpps = !provisioning;
+    for (size_t offset : {size_t{5}, size_t{7}}) {
+      net::httpps::BootstrapBinding binding;
+      auto spki = ReadFile(argv[offset]);
+      auto key = ReadFile(argv[offset + 1]);
+      Require(key.size() == 32, "explicit bootstrap inventory private key");
+      binding.spki.assign(spki.begin(), spki.end());
+      binding.service = argv[2];
+      binding.scope = offset == 5 ? "unselected-bootstrap" : "loopback-provisioning";
+      binding.provisioning_trust = provisioning;
+      binding.credential.emplace();
+      binding.credential->certificates = {spki};
+      binding.credential->certificate_type = 2;
+      std::copy(key.begin(), key.end(), binding.credential->private_key.begin());
+      OPENSSL_cleanse(key.data(), key.size());
+      options.bootstraps.push_back(std::move(binding));
+    }
+    return Get(argv[2], argv[3], argv[4], false, true, true, nullptr, nullptr,
+               options, nullptr, false, false, false, nullptr, true);
   }
   if (argc == 5 && std::string_view(argv[1]) == "--get-pinning") {
     return Get(argv[2], argv[3], argv[4], false, false, true, nullptr, nullptr,

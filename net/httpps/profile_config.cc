@@ -18,6 +18,7 @@
 #include "net/httpps/its_credentials.h"
 #include "net/httpps/native_provider.h"
 #include "net/httpps/transparency.h"
+#include "third_party/boringssl/src/include/openssl/mem.h"
 #include "url/gurl.h"
 #include "url/origin.h"
 
@@ -507,23 +508,46 @@ bool Configure(const base::DictValue& dict,
     }
     o.dane_policy = policy;
   }
-  if (auto value = f.Take("bootstrap")) {
-    if (!value->is_dict()) {
+  const auto bootstrap_binding = [&](const base::Value& value,
+                                     BootstrapBinding* binding,
+                                     bool require_key) {
+    if (!value.is_dict()) {
       return false;
     }
-    Fields p(value->GetDict());
-    BootstrapBinding binding;
-    if (!p.Binary("spki", &binding.spki, true) ||
-        !p.String("service", &binding.service, true) ||
-        binding.service != server.host() ||
-        !p.String("scope", &binding.scope, true) ||
-        !p.Number("expires_unix_seconds", &binding.expires_unix_seconds,
-                  true) ||
-        !p.Done()) {
+    Fields p(value.GetDict());
+    if (!p.Binary("spki", &binding->spki, true) ||
+        !p.String("service", &binding->service, true) ||
+        binding->service != server.host() ||
+        !p.String("scope", &binding->scope, true) ||
+        !p.Number("expires_unix_seconds", &binding->expires_unix_seconds)) {
       return false;
+    }
+    if (require_key || p.Has("private_key")) {
+      Bytes scalar;
+      if (!p.Binary("private_key", &scalar, true) || scalar.size() != 32)
+        return false;
+      ClientCredential selected;
+      selected.certificate_type = 2;
+      selected.certificates.emplace_back(binding->spki.begin(), binding->spki.end());
+      std::copy(scalar.begin(), scalar.end(), selected.private_key.begin());
+      OPENSSL_cleanse(scalar.data(), scalar.size());
+      binding->credential = std::move(selected);
     }
     // Bootstrap metadata never grants unauthenticated website trust.
+    return p.Done();
+  };
+  if (auto value = f.Take("bootstrap")) {
+    BootstrapBinding binding;
+    if (!bootstrap_binding(*value, &binding, false)) return false;
     o.bootstrap = std::move(binding);
+  }
+  if (auto values = f.Take("bootstraps")) {
+    if (!values->is_list() || values->GetList().empty()) return false;
+    for (const auto& value : values->GetList()) {
+      BootstrapBinding binding;
+      if (!bootstrap_binding(value, &binding, true)) return false;
+      o.bootstraps.push_back(std::move(binding));
+    }
   }
   if (auto value = f.Take("ticket_request")) {
     if (!value->is_dict()) {
@@ -732,7 +756,8 @@ class Registry {
       // even when an administrator supplied a matching local profile.
       return config.privacy_mode != PRIVACY_MODE_ENABLED_WITHOUT_CLIENT_CERTS ||
              (!*credential && !options->password &&
-              options->external_psks.empty() && !options->bootstrap);
+              options->external_psks.empty() && !options->bootstrap &&
+              options->bootstraps.empty());
     }
     // A scoped identity must not silently fall back to a different auth mode.
     return known_origin ? std::optional<bool>(false) : std::nullopt;

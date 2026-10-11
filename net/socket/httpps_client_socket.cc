@@ -161,7 +161,9 @@ int HttppsClientSocket::Connect(CompletionOnceCallback callback) {
 int HttppsClientSocket::BeginHandshake() {
   if (!options_.ordinary_httpps || options_.allow_unauthenticated || options_.allow_integrity_only ||
       (options_.dane_policy && options_.dane_policy->port != destination_.port()) ||
-      (options_.bootstrap && options_.bootstrap->provisioning_trust))
+      (options_.bootstrap && options_.bootstrap->provisioning_trust) ||
+      std::any_of(options_.bootstraps.begin(), options_.bootstraps.end(),
+                  [](const auto& binding) { return binding.provisioning_trust; }))
     return Abort(ERR_SSL_PROTOCOL_ERROR);
   client_ = std::make_unique<httpps::Client>(
       destination_.host(), trust_anchors_, cert_verifier_ != nullptr, options_);
@@ -368,9 +370,14 @@ int HttppsClientSocket::ReadOneRecord(int result) {
         return OK;
       }
       size_t length = (static_cast<size_t>(record_[3]) << 8) | record_[4];
-      if ((record_[0] == 23 && (record_[1] != 3 || record_[2] != 3)) || length == 0 ||
-          length > httpps::kMaxRecord - 5) {
-        return ERR_SSL_PROTOCOL_ERROR;
+      if (length == 0 || length > httpps::kMaxRecord - 5 ||
+          (record_[0] == 23 && (record_[1] != 3 || record_[2] != 3))) {
+        // Let the protocol engine choose the correct fatal alert. An empty
+        // record is complete; an oversized advertised record is rejected from
+        // its header alone without allocating or waiting for its body. The
+        // same applies to an invalid ciphertext legacy version.
+        raw_read_.reset();
+        return OK;
       }
       reading_header_ = false;
       raw_read_ = ReadBuffer(length);
