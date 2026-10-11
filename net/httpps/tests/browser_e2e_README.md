@@ -8,7 +8,7 @@ disables the sandbox, or bypasses a browser certificate error through CDP.
 
 Prerequisites: Python 3.11+, the reference server's `requirements-dev.txt`
 (including the `h2` fixture dependency), and a clean checkout of
-`tls20-server` at `a321375dd7e95a569ca07282c0aa15c8775388c2`. The revision is
+`tls20-server` at `f0ef6b02828f8e3edf9ea1a2063f809ba2340cf9`. The revision is
 checked before importing its protocol implementation. No dependencies are
 downloaded by the script.
 
@@ -21,6 +21,29 @@ provenance check, never certificate validation. Historical clean-revision
 results do not validate a subsequent optional-profile expansion.
 Use the server and browser from the same migration; the old numbered prototype
 is not wire-compatible with the current spec.
+
+## Retry-conformance validation: 2026-10-11
+
+The rebuilt Windows browser and portable engine reject an explicit HRR group
+zero and unencodable retry extension vectors. Regressions retain valid
+cookie-only/group retries and the 65,535-byte extension-vector boundary, with
+and without PSKs, including an independently recomputed retry binder.
+
+Local validation passed: six portable CTest targets, all 19 interoperability
+invocations and all 18 optional-provider commands; 11,552 selected integrated
+network tests, 30 service tests and eight component tests; 38 actual-browser
+end-to-end assertions; and 34 browser-profile cases under each of the default
+and explicitly enabled network-sandbox policies. The harness self-checks (15)
+and branding checks (nine) also passed. Certificate checks and browser
+mitigations were not disabled. Logs/reports are under
+`out/httpps-native/retry-conformance-*` and `out/Phromium/retry-conformance-*`.
+
+The broader PAC tests exposed Windows checkout newline conversion, not a
+protocol failure. `.gitattributes` now preserves LF for the byte-compared PAC
+payloads and UTF-8 BOM fixture. Their bytes match the existing repository blobs;
+the test expectations were not relaxed. The entire selected network suite was
+rerun successfully with retries disabled. These results cover local Windows,
+not an already completed remote Linux/macOS CI run or a formal security audit.
 
 ## Running on Windows
 

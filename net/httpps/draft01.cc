@@ -2280,6 +2280,10 @@ bool Client::RetryHello(ByteSpan frame, ByteSpan cookie, uint16_t group) {
   }
   if (offered_psks_.empty() && !cookie.empty())
     Extension(&extensions, 44, cookie);
+  // A valid HRR cookie can still make CH2's extension vector unencodable.
+  // Do not truncate its uint16 length or emit a malformed ClientHello.
+  if (extensions.size() > 65535)
+    return Fail(Error::kProtocol, 80);
   Bytes body = hello_prefix_;
   Vector16(&body, extensions);
   auto hello = Frame(1, body);
@@ -2440,6 +2444,10 @@ bool Client::AcceptFrame(ByteSpan frame) {
             continue;
           if (type == 51 && data.size() == 2) {
             group = static_cast<uint16_t>(Read16(data));
+            // Zero denotes an omitted key_share only in RetryHello's API;
+            // an explicit reserved group is not a cookie-only retry.
+            if (group == 0)
+              return Fail(Error::kProtocol, 47);
             continue;
           }
           if (type == 44 && data.size() >= 3 &&

@@ -10,7 +10,9 @@
 /net/data/cert_net_fetcher_impl_unittest/cert.crt text eol=lf
 /net/data/cert_net_fetcher_impl_unittest/certs.p7c text eol=lf
 /net/data/cert_net_fetcher_impl_unittest/root.crl text eol=lf
+/net/data/pac_file_fetcher_unittest/*.pac text eol=lf
 /net/data/pac_file_fetcher_unittest/pac.nsproxy text eol=lf
+/net/data/pac_file_fetcher_unittest/utf8_bom text eol=lf
 
 # Force LF checkout for all source files
 *.bin binary

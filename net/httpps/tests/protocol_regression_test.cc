@@ -292,7 +292,8 @@ Bytes Plaintext(ByteSpan frame, uint8_t major = 3, uint8_t minor = 3) {
   return result;
 }
 
-Bytes CookieRetry() {
+Bytes CookieRetry(size_t cookie_size = 1,
+                  std::optional<uint16_t> group = std::nullopt) {
   Bytes body{3, 3};
   Append(&body, Bytes{0xcf,0x21,0xad,0x74,0xe5,0x9a,0x61,0x11,
       0xbe,0x1d,0x8c,0x02,0x1e,0x65,0xb8,0x91,
@@ -301,12 +302,49 @@ Bytes CookieRetry() {
   Append(&body, Bytes{0, 0x13, 1, 0});
   Bytes extensions;
   Extension(&extensions, 43, Bytes{4, 0});
-  Extension(&extensions, 44, Bytes{0, 1, 7});
+  if (cookie_size)
+    Extension(&extensions, 44, Vector16(Bytes(cookie_size, 7)));
+  if (group) {
+    Bytes selected;
+    U16(&selected, *group);
+    Extension(&extensions, 51, selected);
+  }
+  Check(extensions.size() <= 65535, "test HRR extensions fit their uint16 vector");
   Append(&body, Vector16(extensions));
   return Frame(2, body);
 }
 
-Bytes HelloPsk(ByteSpan hello) {
+Bytes JoinPlaintextRecords(ByteSpan records) {
+  Bytes frame;
+  while (!records.empty()) {
+    Check(records.size() >= 5 && records[0] == 22 && records[1] == 3 &&
+              records[2] == 3, "serialized plaintext handshake record header");
+    const size_t length = (size_t{records[3]} << 8) | records[4];
+    Check(length && length <= 16384 && length <= records.size() - 5,
+          "serialized plaintext handshake record length");
+    Append(&frame, records.subspan(5u, length));
+    records = records.subspan(5 + length);
+  }
+  return frame;
+}
+
+bool ReceivePlaintextHandshake(Client& client, ByteSpan frame) {
+  while (!frame.empty()) {
+    const size_t length = std::min<size_t>(frame.size(), 16384);
+    Bytes application;
+    const bool accepted = client.Receive(Plaintext(frame.first(length)), &application);
+    Check(application.empty(), "HRR never releases application data");
+    if (!accepted)
+      return false;
+    frame = frame.subspan(length);
+  }
+  return true;
+}
+
+std::map<uint16_t, Bytes> HelloExtensions(ByteSpan hello) {
+  Check(hello.size() >= 4 && hello[0] == 1 &&
+            ((size_t{hello[1]} << 16) | (size_t{hello[2]} << 8) | hello[3]) ==
+                hello.size() - 4, "serialized ClientHello handshake length");
   const auto read16 = [&](size_t offset) {
     Check(offset + 2 <= hello.size(), "ClientHello uint16 framing");
     return (size_t{hello[offset]} << 8) | hello[offset + 1];
@@ -319,18 +357,116 @@ Bytes HelloPsk(ByteSpan hello) {
   cursor += 1 + hello[cursor];
   Check(cursor + 2 + read16(cursor) == hello.size(), "ClientHello extension vector");
   cursor += 2;
+  std::map<uint16_t, Bytes> extensions;
   while (cursor + 4 <= hello.size()) {
     const auto type = read16(cursor), length = read16(cursor + 2);
     cursor += 4;
     Check(cursor + length <= hello.size(), "ClientHello extension length");
     if (type == 41) {
       Check(cursor + length == hello.size(), "PSK is last after retry cookie");
-      return Bytes(hello.begin() + cursor, hello.begin() + cursor + length);
     }
+    Check(extensions.emplace(static_cast<uint16_t>(type),
+              Bytes(hello.begin() + cursor, hello.begin() + cursor + length)).second,
+          "ClientHello has no duplicate extensions");
     cursor += length;
   }
-  Check(false, "ClientHello offers PSK");
-  return {};
+  Check(cursor == hello.size(), "ClientHello has no trailing extension bytes");
+  return extensions;
+}
+
+Bytes HelloPsk(ByteSpan hello) {
+  const auto extensions = HelloExtensions(hello);
+  Check(extensions.count(41), "ClientHello offers PSK");
+  return extensions.at(41);
+}
+
+void RetryGroups() {
+  const std::optional<uint16_t> groups[] = {
+      std::nullopt, uint16_t{0}, uint16_t{23}, uint16_t{29}, uint16_t{0xffff}};
+  for (const auto group : groups) {
+    Client client("example.test", {}, true);
+    Check(client.Start(), "HRR selected-group ClientHello");
+    const auto initial_records = client.TakeOutput();
+    const auto initial = HelloExtensions(
+        JoinPlaintextRecords(ByteSpan(initial_records).subspan(kPreface.size())));
+    const bool allowed = !group || *group == 23;
+    Check(ReceivePlaintextHandshake(client, CookieRetry(1, group)) == allowed,
+          "HRR accepts omitted or offered-new groups, not zero/reused/unknown selections");
+    const auto output = client.TakeOutput();
+    if (!allowed) {
+      Check(output.empty(), "invalid HRR group cannot emit CH2");
+      CheckAlert(client, 47, false);
+      continue;
+    }
+    const auto second = HelloExtensions(JoinPlaintextRecords(output));
+    Check(second.at(44) == Bytes({0, 1, 7}), "valid HRR cookie is echoed exactly");
+    if (!group) {
+      Check(second.at(51) == initial.at(51),
+            "cookie-only HRR preserves the original key_share");
+    } else {
+      const auto& share = second.at(51);
+      Check(share.size() >= 6 && share[2] == 0 && share[3] == *group &&
+                share != initial.at(51), "valid group HRR replaces the traffic share");
+    }
+  }
+}
+
+void RetryCookieBounds() {
+  for (bool with_psk : {false, true}) {
+    for (int difference : {-1, 0, 1}) {
+      ClientOptions options;
+      ExternalPSK psk;
+      if (with_psk) {
+        psk.identity = Bytes{0x45};
+        psk.secret = Bytes(32, 0x65);
+        psk.hostname = "example.test";
+        options.external_psks.push_back(psk);
+      }
+      Client client("example.test", {}, true, options);
+      Check(client.Start(), "large-cookie initial ClientHello");
+      const auto initial_records = client.TakeOutput();
+      const auto first = JoinPlaintextRecords(
+          ByteSpan(initial_records).subspan(kPreface.size()));
+      const auto first_extensions = HelloExtensions(first);
+      size_t first_size = 0;
+      for (const auto& [type, value] : first_extensions)
+        first_size += 4 + value.size();
+      // The cookie adds its extension header, uint16 length and cookie bytes.
+      const size_t cookie_size = 65535 - first_size - 6 + difference;
+      const auto retry = CookieRetry(cookie_size);
+      Check(ReceivePlaintextHandshake(client, retry) == (difference <= 0),
+            "CH2 obeys the uint16 extension bound after a valid fragmented HRR");
+      const auto output = client.TakeOutput();
+      if (difference > 0) {
+        Check(output.empty(), "unencodable CH2 does not emit truncated output");
+        // AddPskExtension already rejects an overflowing PSK offer.
+        CheckAlert(client, with_psk ? 47 : 80, false);
+        continue;
+      }
+      const auto second = JoinPlaintextRecords(output);
+      const auto second_extensions = HelloExtensions(second);
+      size_t second_size = 0;
+      for (const auto& [type, value] : second_extensions)
+        second_size += 4 + value.size();
+      Check(second_size == 65535 + difference &&
+                second_extensions.at(44) == Vector16(Bytes(cookie_size, 7)),
+            "boundary-size CH2 preserves the complete cookie and extension lengths");
+      if (!with_psk)
+        continue;
+      const auto second_psk = HelloPsk(second);
+      Bytes transcript(StringBytes(kPreface).begin(), StringBytes(kPreface).end());
+      Append(&transcript, Frame(254, SuiteHash(0x1301, first)));
+      Append(&transcript, retry);
+      Append(&transcript, ByteSpan(second).first(second.size() - 35));
+      const auto early = SuiteMac(0x1301, Bytes(32), psk.secret);
+      const auto binder = SuiteLabel(0x1301, early, "ext binder", SuiteHash(0x1301, {}), 32);
+      const auto finished = SuiteLabel(0x1301, binder, "finished", {}, 32);
+      const auto expected = SuiteMac(0x1301, finished, SuiteHash(0x1301, transcript));
+      Check(second_psk.size() >= expected.size() &&
+                std::equal(expected.begin(), expected.end(), second_psk.end() - expected.size()),
+            "boundary-size CH2 keeps PSK last with an independently verified binder");
+    }
+  }
 }
 
 uint32_t PskAge(ByteSpan psk) {
@@ -714,6 +850,8 @@ void RunProtocolRegressionTests() {
   RecordAlerts();
   RecordFramingAlerts();
   VersionAlerts();
+  RetryGroups();
+  RetryCookieBounds();
   RetryTicketAges();
   FragmentInterleaving();
   FailedSecretErasure();
