@@ -8,7 +8,7 @@ disables the sandbox, or bypasses a browser certificate error through CDP.
 
 Prerequisites: Python 3.11+, the reference server's `requirements-dev.txt`
 (including the `h2` fixture dependency), and a clean checkout of
-`tls20-server` at `ac1889ea7f77cbf8b9ffcf11ce11f93dd4a50dcc`. The revision is
+`tls20-server` at `ed529547887c28e5965624021aa5e849b4dea848`. The revision is
 checked before importing its protocol implementation. No dependencies are
 downloaded by the script.
 
@@ -24,12 +24,22 @@ is not wire-compatible with the current spec.
 
 ## Ticket and delegated-credential alert regressions
 
-Secret-lifecycle regressions cover both KeyUpdate directions and rejected
-hybrid key agreements. They check that replacing an application traffic secret
-or abandoning a decapsulated ML-KEM secret clears the old allocation before it
-is released, while valid traffic derivation and hybrid handshakes still work.
+Secret-lifecycle regressions cover both KeyUpdate directions, rejected hybrid
+key agreements and HelloRetryRequest changes of key-share size or family.
+They check that replaced traffic keys and abandoned shared secrets are cleared
+before their allocations are released, including the tail of a shortened
+scalar. Pinning-proof transcripts and GOST HKDF expansion reserve their final
+capacity before inserting derived secrets, so vector growth cannot release an
+uncleansed copy. The GOST checks require an explicitly configured provider.
+Positive controls retain valid traffic, retry and pinning-proof behavior.
 These checks concern native buffers owned by the engine, not erasure of copies
 retained by applications, diagnostic logs or external providers.
+
+Cached credential-reference regressions check encrypted `decode_error` (50)
+for truncated fields and trailing bytes, while well-framed unknown hashes,
+wrong contexts and metadata-count mismatches retain `illegal_parameter` (47).
+They cover plain/compressed CachedCertificate messages and initial/PHA
+CachedCertificateRequest messages without weakening trust or local budgets.
 
 The portable protocol regressions verify that malformed NewSessionTicket
 vectors and early-data limits produce `decode_error` (50), never enter the

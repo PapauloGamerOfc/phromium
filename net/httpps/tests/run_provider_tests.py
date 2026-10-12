@@ -53,6 +53,7 @@ def main():
 
     run(native, '--native-provider-test', provider, helper)
     run(native, '--gost-provider-test', provider, gost)
+    run(directory/f'httpps_secret_erasure_test{suffix}', '--gost', provider, gost)
     run(directory/f'httpps_its_test{suffix}', its, fixtures)
     run(directory/f'httpps_its_test{suffix}', its, Path(fixtures)/'geometry-static')
     interop('its_interop_test.py', '--provider', its, '--fixtures', fixtures)

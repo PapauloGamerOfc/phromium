@@ -6,6 +6,8 @@
 // It does not read freed memory, require an allocator-specific usable-size API,
 // replace BoringSSL's allocator, or instrument the browser/interoperability binary.
 #include "net/httpps/draft01.h"
+#include "net/httpps/native_provider.h"
+#include "net/httpps/pinning.h"
 
 #include <algorithm>
 #include <array>
@@ -139,6 +141,112 @@ void ObserverSelfTest() {
           "observer detects a live secret and accepts its wiped buffer");
   }
 }
+
+Bytes RetryRecord(uint16_t group) {
+  Bytes body{3, 3,
+      0xcf,0x21,0xad,0x74,0xe5,0x9a,0x61,0x11,
+      0xbe,0x1d,0x8c,0x02,0x1e,0x65,0xb8,0x91,
+      0xc2,0xa2,0x11,0x16,0x7a,0xbb,0x8c,0x5e,
+      0x07,0x9e,0x09,0xe2,0xc8,0xa8,0x33,0x9c,
+      0, 0x13, 1, 0};
+  Bytes extensions{0,43,0,2,4,0};
+  if (group)
+    extensions.insert(extensions.end(), {0,51,0,2,
+        static_cast<uint8_t>(group >> 8), static_cast<uint8_t>(group)});
+  else
+    extensions.insert(extensions.end(), {0,44,0,3,0,1,7});
+  body.push_back(0);
+  body.push_back(static_cast<uint8_t>(extensions.size()));
+  body.insert(body.end(), extensions.begin(), extensions.end());
+  Bytes record{22,3,3,0,static_cast<uint8_t>(body.size()+4),
+               2,0,0,static_cast<uint8_t>(body.size())};
+  record.insert(record.end(), body.begin(), body.end());
+  return record;
+}
+
+void PinningErasure(uint16_t suite, bool valid) {
+  const size_t length = SuiteHashLength(suite);
+  PinningCache cache(4, [] { return int64_t{1000}; });
+  Bytes root(length, 0x73), transcript{1, 2, 3, 4};
+  Secret private_key{}, public_key{};
+  private_key.fill(0x41);
+  X25519_public_from_private(public_key.data(), private_key.data());
+  OPENSSL_cleanse(private_key.data(), private_key.size());
+  Bytes spki{0x30,0x2a,0x30,5,6,3,0x2b,0x65,0x6e,3,0x21,0};
+  spki.insert(spki.end(), public_key.begin(), public_key.end());
+  auto first = cache.Begin("example.test", 343, "isolation");
+  const Bytes enrollment{0, 0,1,7, 0,0,2,88};
+  Check(first->Verify(enrollment, suite, root, transcript, spki) && first->Commit(),
+        "pinning enrollment fixture");
+  auto next = cache.Begin("example.test", 343, "isolation");
+  auto previous = SuiteLabel(suite, root, "pinning secret", SuiteHash(suite, transcript), length);
+  root.assign(length, 0x72);
+  auto derived = SuiteLabel(suite, root, "pinning proof 1", SuiteHash(suite, transcript), length);
+  auto label = StringBytes("pinning proof 2");
+  auto digest = SuiteHash(suite, spki);
+  Bytes proof_input;
+  proof_input.reserve(label.size() + derived.size() + digest.size());
+  proof_input.insert(proof_input.end(), label.begin(), label.end());
+  proof_input.insert(proof_input.end(), derived.begin(), derived.end());
+  proof_input.insert(proof_input.end(), digest.begin(), digest.end());
+  auto proof = SuiteMac(suite, previous, proof_input);
+  if (!valid) proof[0] ^= 1;
+  Bytes response{static_cast<uint8_t>(length)};
+  response.insert(response.end(), proof.begin(), proof.end());
+  response.insert(response.end(), enrollment.begin() + 1, enrollment.end());
+  Begin();
+  WatchPattern(derived);
+  const bool accepted = next->Verify(response, suite, root, transcript, spki);
+  const auto counts = End();
+  Check(accepted == valid && counts.frees && !counts.uncleansed,
+        "pinning accepts only valid proofs and releases no copy of their derived secret");
+  for (auto* value : {&root, &previous, &derived, &proof_input, &proof})
+    OPENSSL_cleanse(value->data(), value->size());
+}
+
+void GostExpansionErasure(std::string_view library, std::string_view module) {
+  const auto provider = NativeProvider::Load(library, module);
+  Check(provider && provider->SupportsGost(), "explicit GOST provider fixture");
+  const Bytes secret(32, 0x35);
+  for (size_t info_length : {0u, 4u, 64u, 1024u}) {
+    const Bytes info(info_length, 0x12);
+    for (size_t length : {0u, 1u, 31u, 32u, 33u, 63u, 64u, 65u, 96u, 8160u}) {
+      // Independent HKDF expansion recurrence; no call to GostExpand for the
+      // oracle. Include a full first block even for a short requested output.
+      Bytes expected, previous;
+      expected.reserve(std::max<size_t>(length, 32));
+      for (size_t counter = 1; expected.size() < std::max<size_t>(length, 32); ++counter) {
+        Bytes input;
+        input.reserve(previous.size() + info.size() + 1);
+        input.insert(input.end(), previous.begin(), previous.end());
+        input.insert(input.end(), info.begin(), info.end());
+        input.push_back(static_cast<uint8_t>(counter));
+        auto block = provider->GostMac(secret, input);
+        Check(block.size() == 32, "GOST oracle HMAC");
+        OPENSSL_cleanse(previous.data(), previous.size());
+        previous = std::move(block);
+        const size_t count = std::min(previous.size(), std::max<size_t>(length, 32) - expected.size());
+        expected.insert(expected.end(), previous.begin(), previous.begin() + count);
+        OPENSSL_cleanse(input.data(), input.size());
+      }
+      Begin();
+      WatchPattern(ByteSpan(expected).first(32));
+      auto actual = provider->GostExpand(secret, info, length);
+      const auto counts = End();
+      Check(actual.size() == length &&
+                std::equal(actual.begin(), actual.end(), expected.begin()) &&
+                (!length || counts.frees) && !counts.uncleansed,
+            "GOST expansion matches the recurrence and wipes all temporary block copies");
+      for (auto* value : {&actual, &expected, &previous})
+        OPENSSL_cleanse(value->data(), value->size());
+    }
+  }
+  Check(provider->GostExpand(secret, {}, 8161).empty(), "GOST HKDF length bound");
+  const auto no_gost = NativeProvider::Load(library);
+  Check(no_gost && !no_gost->SupportsGost() && no_gost->GostExpand(secret, {}, 64).empty(),
+        "absent optional GOST provider cannot produce a derived secret");
+  std::cout << "40 GOST expansion erasure cases and 2 rejection controls passed\n";
+}
 }  // namespace
 
 // std::vector<uint8_t> uses ordinary (not over-aligned) allocations. Replacing
@@ -154,6 +262,52 @@ void operator delete[](void* pointer, size_t) noexcept { Deallocate(pointer); }
 namespace net::httpps {
 class ProtocolRegressionPeer {
  public:
+  static void RetrySecrets(uint16_t first, uint16_t next) {
+    size_t old_allocations = 0;
+    bool accepted, refreshed;
+    const bool allowed = next != first && next != 0xffff;
+    {
+      ClientOptions options;
+      options.groups = {first};
+      if (next && next != first && next != 0xffff) options.groups.push_back(next);
+      Client client("example.test", {}, true, options);
+      Check(client.Start(), "initial traffic share before retry");
+      client.TakeOutput();
+      auto old_scalar = client.ec_private_;
+      auto old_seed = client.kem_seed_;
+      auto old_x = client.b_;
+      Begin();
+      for (auto* secret : {&client.ec_private_, &client.kem_seed_}) {
+        if (secret->empty()) continue;
+        ++old_allocations;
+        Register(secret->data(), secret->size(), true);
+        // FFDHE scalars are padded; watch the random suffix, not leading zeros.
+        WatchPattern(ByteSpan(*secret).last(std::min<size_t>(32, secret->size())));
+      }
+      Bytes application;
+      accepted = client.Receive(RetryRecord(next), &application);
+      if (next == 0) {
+        refreshed = client.ec_private_ == old_scalar && client.kem_seed_ == old_seed && client.b_ == old_x;
+      } else if (accepted) {
+        const bool next_x = next == 29 || next == 4588;
+        const bool next_kem = next >= 4587 && next <= 4589;
+        refreshed = (next_x || client.b_ == Secret{}) &&
+                    (next_kem || client.kem_seed_.empty()) &&
+                    (!next_x || client.ec_private_.empty()) &&
+                    !client.TakeOutput().empty();
+      } else {
+        refreshed = client.error() == Client::Error::kProtocol;
+      }
+      for (auto* bytes : {&old_scalar, &old_seed}) OPENSSL_cleanse(bytes->data(), bytes->size());
+      OPENSSL_cleanse(old_x.data(), old_x.size());
+      // Keep observing through destruction: shrinking a scalar must not leave
+      // the tail of the old key beyond vector::size() in its eventual free.
+    }
+    const auto counts = End();
+    Check(accepted == allowed && refreshed && counts.required_zero_frees == old_allocations &&
+              !counts.uncleansed, "HRR growth/shrink/family change and rejection erase old keys");
+  }
+
   static void Derivation(uint16_t suite, bool aliases, bool invalid) {
     Client client("example.test", {});
     client.suite_ = suite;
@@ -285,14 +439,20 @@ class ProtocolRegressionPeer {
 };
 }  // namespace net::httpps
 
-int main() {
+int main(int argc, char** argv) {
   ObserverSelfTest();
+  if (argc == 4 && std::string_view(argv[1]) == "--gost") {
+    GostExpansionErasure(argv[2], argv[3]);
+    return 0;
+  }
+  Check(argc == 1, "unexpected erasure test arguments");
   for (uint16_t suite : {0x1301, 0x1302, 0x1303}) {
     for (bool alias : {false, true})
       for (bool invalid : {false, true})
         ProtocolRegressionPeer::Derivation(suite, alias, invalid);
     for (bool receiving : {false, true})
       ProtocolRegressionPeer::KeyUpdate(suite, receiving);
+    for (bool valid : {false, true}) PinningErasure(suite, valid);
   }
   for (uint16_t group : {4587, 4588, 4589}) {
     for (int failure : {0, 1, 4, 5})
@@ -300,5 +460,10 @@ int main() {
     if (group == 4588)
       for (int failure : {2, 3}) ProtocolRegressionPeer::Hybrid(group, failure);
   }
-  std::cout << "32 derivation, KeyUpdate and hybrid erasure regressions passed\n";
+  for (auto [first, next] : {std::pair<uint16_t, uint16_t>{23,24}, {24,23},
+       {23,25}, {25,23}, {23,256}, {256,23}, {24,29}, {29,24},
+       {4587,4589}, {4589,4587}, {4588,23}, {23,4588}, {23,0}, {23,23}, {23,0xffff}})
+    ProtocolRegressionPeer::RetrySecrets(first, next);
+  std::cout << "53 derivation, KeyUpdate, hybrid, HRR and pinning erasure regressions passed\n";
+  return 0;
 }

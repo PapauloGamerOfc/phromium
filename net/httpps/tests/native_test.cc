@@ -327,7 +327,8 @@ int Get(const char* host,
         ChainRejection reject_long_chain = ChainRejection::kNone,
         uint8_t expected_handshake_alert = 0,
         bool client_ocsp_authenticator_test = false,
-        bool plaintext_handshake_alert = false) {
+        bool plaintext_handshake_alert = false,
+        uint8_t expected_post_handshake_alert = 0) {
 #if defined(_WIN32)
   WSADATA data;
   Require(WSAStartup(MAKEWORD(2, 2), &data) == 0, "winsock init");
@@ -521,7 +522,33 @@ int Get(const char* host,
     Send(stream, output);
   }
   while (!client.closed()) {
-    Require(client.Receive(Record(stream), &output), "application decrypt");
+    const bool accepted = client.Receive(Record(stream), &output);
+    if (!accepted && expected_post_handshake_alert) {
+      auto alert = client.TakeFatalAlert();
+      Require(client.error() == net::httpps::Client::Error::kProtocol &&
+                  !client.established() && output.empty() && client.TakeOutput().empty() && !alert.empty(),
+              "invalid PHA reference closes without a client proof or application response");
+      // The independent server verifies the exact authenticated alert using
+      // the active application epoch; do not substitute a local error code.
+      Send(stream, alert);
+#if defined(_WIN32)
+      Require(shutdown(stream, SD_SEND) == 0, "finish expected PHA alert write");
+#else
+      Require(shutdown(stream, SHUT_WR) == 0, "finish expected PHA alert write");
+#endif
+      char discarded[4096];
+      while (recv(stream, discarded, sizeof(discarded), 0) > 0) {}
+#if defined(_WIN32)
+      closesocket(stream);
+      WSACleanup();
+#else
+      close(stream);
+#endif
+      std::cout << "PHA reference: authenticated fatal alert "
+                << unsigned{expected_post_handshake_alert} << " sent for peer verification\n";
+      return 0;
+    }
+    Require(accepted, "application decrypt");
     auto controls = client.TakeOutput();
     if (!controls.empty()) {
       Send(stream, controls);
@@ -665,6 +692,7 @@ int Get(const char* host,
     std::cout.write(reinterpret_cast<const char*>(output.data()),
                     output.size());
   }
+  Require(!expected_post_handshake_alert, "invalid cached PHA reference must be rejected");
   if (client.Close(&output)) {
     Send(stream, output);
   }
@@ -1385,6 +1413,21 @@ int main(int argc, char** argv) {
     return Get(argv[2], argv[3], argv[4], false, false, true,
                std::string_view(argv[5]) == "-" ? nullptr : argv[5],
                std::string_view(argv[6]) == "-" ? nullptr : argv[6], options);
+  }
+  if (argc == 10 && std::string_view(argv[1]) == "--cached-request-alert") {
+    net::httpps::ClientOptions options;
+    const auto value = ReadFile(argv[5]);
+    options.cached_request_templates.emplace_back(value.begin(), value.end());
+    const std::string_view mode = argv[8];
+    Require(mode == "initial" || mode == "pha", "explicit cached request phase");
+    options.post_handshake_auth = mode == "pha";
+    const unsigned expected = ParseUnsigned(argv[9]);
+    Require(expected == 0 || expected == 10 || expected == 47 || expected == 50,
+            "explicit cached request syntax or semantic alert");
+    return Get(argv[2], argv[3], argv[4], false, false, true, argv[6], argv[7], options,
+               nullptr, false, false, false, nullptr, false, false, ChainRejection::kNone,
+               mode == "initial" ? static_cast<uint8_t>(expected) : 0, false, false,
+               mode == "pha" ? static_cast<uint8_t>(expected) : 0);
   }
   if (argc == 7 && (std::string_view(argv[1]) == "--get-suite" ||
                    std::string_view(argv[1]) == "--get-suite-resume")) {

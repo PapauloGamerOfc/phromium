@@ -165,6 +165,9 @@ bool PinAttempt::Verify(std::optional<ByteSpan> server_extension,
     auto proof_secret = Derive(suite, handshake_secret, "pinning proof 1",
                                transcript_through_sh, provider);
     Bytes proof_input;
+    // No insertion may release a previous allocation holding proof_secret.
+    proof_input.reserve(StringBytes("pinning proof 2").size() +
+                        proof_secret.size() + hash_length);
     Append(&proof_input, StringBytes("pinning proof 2"));
     Append(&proof_input, proof_secret);
     Append(&proof_input, SuiteHash(suite, effective_spki, provider));

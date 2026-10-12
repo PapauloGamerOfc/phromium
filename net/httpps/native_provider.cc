@@ -450,8 +450,14 @@ Bytes NativeProvider::GostExpand(ByteSpan secret, ByteSpan info, size_t length) 
   Impl::ThreadScope cleanup(*impl_);
   if (!impl_->gost_provider || length > 255 * 32) return {};
   Bytes result, previous;
+  if (info.size() > result.max_size() - 33) return {};
+  // Both buffers will contain derived blocks. Reserve before writing any key
+  // material, rather than letting vector growth free uncleansed copies.
+  result.reserve(length);
   for (size_t counter = 1; result.size() < length; ++counter) {
-    Bytes input(previous);
+    Bytes input;
+    input.reserve(previous.size() + info.size() + 1);
+    input.insert(input.end(), previous.begin(), previous.end());
     input.insert(input.end(), info.begin(), info.end());
     input.push_back(static_cast<uint8_t>(counter));
     auto next = GostMac(secret, input);

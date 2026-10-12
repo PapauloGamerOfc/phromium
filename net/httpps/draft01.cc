@@ -438,8 +438,16 @@ bool RequestTemplate(ByteSpan extensions, Bytes* output) {
 }
 
 bool ResolveCachedCertificate(ByteSpan body, const ClientOptions& options, uint8_t type,
-                               Bytes* reconstructed) {
-  if (body.size() < 36 || body[0] != 0 || Read24(body.subspan(33u, 3u)) != body.size() - 36)
+                               Bytes* reconstructed, uint8_t* alert) {
+  *alert = 50;
+  if (body.empty() || body[0] > body.size() - 1)
+    return false;
+  const size_t hash_offset = size_t{1} + body[0];
+  if (body.size() - hash_offset < 35 ||
+      Read24(body.subspan(hash_offset + 32, 3u)) != body.size() - hash_offset - 35)
+    return false;
+  *alert = 47;
+  if (body[0] != 0)
     return false;
   const std::vector<std::string>* matched = nullptr;
   for (const auto& [kind, chain] : options.cached_certificates) {
@@ -454,11 +462,17 @@ bool ResolveCachedCertificate(ByteSpan body, const ClientOptions& options, uint8
   Bytes entries;
   auto metadata = body.subspan(36u);
   for (const auto& der : *matched) {
-    if (metadata.size() < 2)
+    if (metadata.empty())
       return false;
+    if (metadata.size() < 2) {
+      *alert = 50;
+      return false;
+    }
     const size_t size = Read16(metadata.first(2u));
-    if (size > metadata.size() - 2)
+    if (size > metadata.size() - 2) {
+      *alert = 50;
       return false;
+    }
     auto entry = Frame(0, Octets(der));
     Append(&entries, ByteSpan(entry).subspan(1u));
     Append(&entries, metadata.first(size + 2));
@@ -466,8 +480,12 @@ bool ResolveCachedCertificate(ByteSpan body, const ClientOptions& options, uint8
     if (entries.size() > 1048568)
       return false;
   }
-  if (!metadata.empty())
+  if (!metadata.empty()) {
+    // Distinguish an extra well-framed metadata entry from a truncated V16.
+    if (metadata.size() < 2 || Read16(metadata.first(2u)) > metadata.size() - 2)
+      *alert = 50;
     return false;
+  }
   auto list = Frame(0, entries);
   *reconstructed = {0};
   Append(reconstructed, ByteSpan(list).subspan(1u));
@@ -1159,8 +1177,10 @@ bool Client::AcceptCertificateRequest(ByteSpan frame, bool post_handshake) {
   auto body = frame.subspan(4u);
   Bytes reconstructed;
   if (frame[0] == 252) {
-    if (!cached_request_selected_ || body.empty() || body.size() != size_t{65} + body[0])
-      return Fail();
+    if (!cached_request_selected_)
+      return Fail(Error::kProtocol, 10);
+    if (body.empty() || body.size() != size_t{65} + body[0])
+      return Fail(Error::kProtocol, 50);
     const size_t cursor = size_t{1} + body[0];
     std::optional<Bytes> matched;
     for (const auto& candidate : options_.cached_request_templates) {
@@ -2248,11 +2268,19 @@ bool Client::BindClientHello(Bytes* hello, ByteSpan prefix) const {
 }
 
 bool Client::GenerateTrafficShare(uint16_t group, Bytes* public_key) {
+  // HRR replaces the previous traffic key, possibly with a shorter scalar or
+  // another family. Wipe the complete old size before resize/reallocation so
+  // neither freed storage nor spare capacity can retain that generation.
+  native_traffic_key_.reset();
+  OPENSSL_cleanse(b_.data(), b_.size());
+  for (auto* secret : {&ec_private_, &kem_seed_}) {
+    OPENSSL_cleanse(secret->data(), secret->size());
+    secret->clear();
+  }
   if (options_.native_provider && options_.native_provider->SupportsGroup(group)) {
     native_traffic_key_ = options_.native_provider->Generate(group, public_key);
     return native_traffic_key_ != nullptr;
   }
-  native_traffic_key_.reset();
   if (group >= 256 && group <= 260)
     return FfdheKeypair(group, &ec_private_, public_key);
   const bool hybrid = group >= 4587 && group <= 4589;
@@ -2944,8 +2972,9 @@ bool Client::AcceptFrame(ByteSpan frame) {
       }
       Bytes expanded;
       if (cached_certificate_selected_) {
-        if (!ResolveCachedCertificate(body, options_, server_certificate_type_, &expanded))
-          return Fail();
+        uint8_t cache_alert;
+        if (!ResolveCachedCertificate(body, options_, server_certificate_type_, &expanded, &cache_alert))
+          return Fail(Error::kProtocol, cache_alert);
         body = expanded;
       }
       uint8_t certificate_alert;
