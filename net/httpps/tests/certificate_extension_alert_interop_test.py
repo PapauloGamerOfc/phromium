@@ -61,7 +61,9 @@ async def main(args):
     cases = [("valid", b"", "none", 0),
              ("offered-ocsp", m.extension(5, status), "ocsp", 0),
              ("truncated", b"\xfa\xfa\x00", "none", 50),
-             ("duplicate", m.extension(0xfafa, b"") * 2, "none", 50)]
+             # Well-framed repetitions violate the extension invariant before
+             # offer processing, including compressed/cached reconstructions.
+             ("duplicate", m.extension(0xfafa, b"") * 2, "none", 47)]
     cases += [(f"ocsp-size-{index}", m.extension(5, value), "ocsp", 50)
               for index, value in enumerate((b"", b"\x01", b"\x01\0\0", b"\x01\0\0\0",
                                              b"\x01\0\0\x02\0", b"\x01\0\0\x01\0\0"))]

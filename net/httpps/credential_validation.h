@@ -19,6 +19,17 @@ NET_EXPORT_PRIVATE
 bool ParseCertificateAuthorities(ByteSpan encoded,
                                  std::vector<Bytes>* authorities);
 
+// Validate OID-filter syntax even when no credential can be selected. Unknown
+// OID values remain opaque; recognized KU/EKU values retain their RFC semantics.
+// On failure, alert distinguishes malformed DER/vectors (50) from prohibited
+// well-formed values or repeated identifiers (47). No partial filters escape.
+#if !defined(PHROMIUM_HTTPPS_STANDALONE)
+NET_EXPORT_PRIVATE
+#endif
+bool ParseOidFilters(ByteSpan encoded,
+                     std::vector<std::pair<Bytes, Bytes>>* filters,
+                     uint8_t* alert);
+
 }  // namespace net::httpps
 
 #endif  // NET_HTTPPS_CREDENTIAL_VALIDATION_H_

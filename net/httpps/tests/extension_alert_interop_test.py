@@ -29,7 +29,9 @@ async def main(args):
              ("heartbeat-empty", 15, b"", True, 50),
              ("heartbeat-long", 15, b"\x01\x01", True, 50),
              ("truncated", None, b"\xfa\xfa\x00", False, 50),
-             ("duplicate", 0, b"", False, 50)]
+             # Both extension encodings are complete: repetition is a
+             # semantic violation (RFC9846 Sections 4.3 and 6), not framing.
+             ("duplicate", 0, b"", False, 47)]
     for code, fields in (
         (28, (("valid", b"\x40\x01", None), ("empty", b"", 50),
               ("short", b"\x40", 50), ("long", b"\x40\x01\x00", 50),

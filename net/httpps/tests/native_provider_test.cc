@@ -10,6 +10,8 @@
 #include <chrono>
 #include <filesystem>
 
+void RunNativeStageLifecycleTests(const std::shared_ptr<net::httpps::NativeProvider>& provider);
+
 namespace {
 using namespace net::httpps;
 void Check(bool value, const char* message) {
@@ -103,6 +105,7 @@ void RunNativeProviderTests(std::string_view library, std::string_view helper) {
   Check(!NativeProvider::Load("") && !NativeProvider::Load("libcrypto.so"), "no discovery or relative loading");
   auto provider = NativeProvider::Load(library);
   Check(provider && provider->SupportsSM(), "explicit provider and SM capability");
+  RunNativeStageLifecycleTests(provider);
   Check(provider->Sm3(Bytes{'a','b','c'}) == Hex("66c7f0f462eeedd9d1f2d46bdc10e4e24167c4875cf2f7a2297da02b8f4ba8e0"), "published SM3 abc vector");
   const auto key = Hex("0123456789abcdeffedcba9876543210");
   const auto nonce = Hex("00001234567800000000abcd");
@@ -151,6 +154,7 @@ void RunGostProviderTests(std::string_view library, std::string_view module) {
   using namespace net::httpps;
   auto provider = NativeProvider::Load(library, module);
   Check(provider && provider->SupportsGost(), "explicit GOST capability");
+  RunNativeStageLifecycleTests(provider);
 #if defined(_WIN32)
   // A trusted JSON profile encodes paths as UTF-8, including characters outside
   // the current Windows ANSI code page. This is intentionally constructed here

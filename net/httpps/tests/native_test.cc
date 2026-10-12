@@ -186,10 +186,16 @@ void AuthenticatorTest(SocketHandle socket, net::httpps::Client& client,
   }
   for (size_t i = 0; i < 4; ++i) {
     if (i == 0) {
-      for (size_t invalid = 0; invalid < 3; ++invalid) {
+      // Kept in sync with selection_request_cases() in the Python peer. All
+      // malformed requests reuse the valid request's context, including when
+      // no credential is selected and the eventual result is a refusal.
+      for (size_t invalid = 0; invalid < 36; ++invalid) {
         request = receive();
         Require(!client.AuthenticateClient(request, credential ? &*credential : nullptr, &response),
-                "EA client request rejects nonempty OCSP before claiming its context");
+                "EA client request rejects malformed selection/OCSP before claiming its context");
+        Require(client.established() && !client.closed() && client.TakeFatalAlert().empty() &&
+                    client.TakeOutput().empty(),
+                "EA request syntax failure leaves the underlying TLS connection usable");
       }
     }
     request = receive();
@@ -226,12 +232,24 @@ void AuthenticatorTest(SocketHandle socket, net::httpps::Client& client,
     Require(!client.RequestServerAuthenticator(Bytes{10}, {{5, invalid}}, &request),
             "EA server request rejects nonempty OCSP before claiming its context");
   }
+  for (const Bytes& invalid : {Bytes{}, Bytes{0}, Bytes{0, 3, 2, 6},
+                              Bytes{0, 3, 0, 0, 0},
+                              Bytes{0, 8, 5, 6, 3, 0x55, 0x1d, 0x25, 0, 0, 0}}) {
+    Require(!client.RequestServerAuthenticator(Bytes{10}, {{48, invalid}}, &request),
+            "EA server request rejects malformed OID filters before claiming its context");
+  }
+  for (const Bytes& invalid : {Bytes{}, Bytes{0}, Bytes{0, 0}, Bytes{0, 3, 0, 1, 0}}) {
+    Require(!client.RequestServerAuthenticator(Bytes{10}, {{47, invalid}}, &request),
+            "EA server request rejects malformed authority names before claiming its context");
+  }
   uint8_t context = 10;
   for (const Bytes& schemes : {Bytes{0, 2, 0x0a, 0x0a}, Bytes{0, 2, 0xaa, 0xaa},
                               Bytes{0, 2, 0xfe, 1}, Bytes{0, 4, 0x0a, 0x0a, 0xfe, 0}}) {
     auto offers = unknown_delegation;
     offers[34] = schemes;
     offers[5] = {};
+    // Well-formed unknown OIDs and their opaque values are still ignorable.
+    offers[48] = Bytes{0, 9, 5, 6, 3, 0x2a, 3, 4, 0, 1, 0xff};
     Require(client.RequestServerAuthenticator(Bytes{context++}, offers, &request),
             "EA server request accepts empty OCSP and unsupported delegation offers");
     send_frame(request);
@@ -1414,6 +1432,21 @@ int main(int argc, char** argv) {
                std::string_view(argv[5]) == "-" ? nullptr : argv[5],
                std::string_view(argv[6]) == "-" ? nullptr : argv[6], options);
   }
+  if (argc == 9 && std::string_view(argv[1]) == "--oid-filter-alert") {
+    net::httpps::ClientOptions options;
+    const std::string_view mode = argv[7];
+    Require(mode == "initial" || mode == "pha", "explicit OID request phase");
+    options.post_handshake_auth = mode == "pha";
+    const unsigned expected = ParseUnsigned(argv[8]);
+    Require(expected == 0 || expected == 47 || expected == 50,
+            "explicit OID request syntax or semantic alert");
+    return Get(argv[2], argv[3], argv[4], false, false, true,
+               std::string_view(argv[5]) == "-" ? nullptr : argv[5],
+               std::string_view(argv[6]) == "-" ? nullptr : argv[6], options,
+               nullptr, false, false, false, nullptr, false, false, ChainRejection::kNone,
+               mode == "initial" ? static_cast<uint8_t>(expected) : 0, false, false,
+               mode == "pha" ? static_cast<uint8_t>(expected) : 0);
+  }
   if (argc == 10 && std::string_view(argv[1]) == "--cached-request-alert") {
     net::httpps::ClientOptions options;
     const auto value = ReadFile(argv[5]);
@@ -1459,7 +1492,8 @@ int main(int argc, char** argv) {
     net::httpps::ClientOptions options;
     options.certificate_compression = {static_cast<uint16_t>(ParseUnsigned(argv[5]))};
     const unsigned expected = ParseUnsigned(argv[6]);
-    Require(expected == 42 || expected == 47, "explicit compression rejection alert");
+    Require(expected == 42 || expected == 47 || expected == 50,
+            "explicit compression rejection alert");
     return Get(argv[2], argv[3], argv[4], false, false, true, nullptr, nullptr, options,
                nullptr, false, false, false, nullptr, false, false, ChainRejection::kNone,
                static_cast<uint8_t>(expected));

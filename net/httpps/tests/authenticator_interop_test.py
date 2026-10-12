@@ -12,6 +12,39 @@ from unittest.mock import patch
 from interop_runtime import run, start_process
 
 
+def selection_request_cases():
+    """Malformed selection requests and valid controls, independent of policy."""
+    def vector(value, width=2):
+        return len(value).to_bytes(width, "big") + value
+
+    def entry(oid, value=b""):
+        return vector(oid, 1) + vector(value)
+
+    unknown, ku, eku = (bytes.fromhex(value) for value in ("06032a0304", "0603551d0f", "0603551d25"))
+    malformed = [(48, value) for value in (
+        b"", b"\0", b"\0\x01", b"\0\x03\x02\x06", vector(b"\0\0\0"),
+        vector(entry(unknown)[:-1]),
+        *(vector(entry(bytes.fromhex(value))) for value in (
+            "04012a", "0600", "06028000", "0681012a", "06012a00", "060180")),
+        vector(entry(unknown) * 2),
+        *(vector(entry(ku, bytes.fromhex(value))) for value in (
+            "0400", "030108", "03020101", "0303070001", "0303010001",
+            "03020000", "03020080", "0304000080")),
+        *(vector(entry(eku, bytes.fromhex(value))) for value in (
+            "3000", "0400", "30060604551d2500", "30020600", "300306012a00")),
+    )]
+    malformed += [(47, value) for value in (
+        b"", b"\0", b"\0\0", b"\0\x04\0\x02\x30", b"\0\x04\0\x02\x30\0x",
+        b"\0\x03\0\x01\0", b"\0\x04\0\x02\x31\0")]
+    malformed += [(5, value) for value in (b"\x01\0\0\0\0", b"\x01", b"\xff")]
+    # Unknown extension semantics remain ignorable even with opaque values;
+    # recognized KU/EKU filters retain both presence-only and DER value forms.
+    valid = (vector(b""), vector(entry(unknown, b"\xff")), vector(entry(ku)),
+             vector(entry(ku, bytes.fromhex("03020308")) +
+                    entry(eku, bytes.fromhex("300a06082b06010505070302"))))
+    return malformed, valid
+
+
 async def main(args):
     sys.path.insert(0, str(args.server_source.resolve()))
     from cryptography.hazmat.primitives import serialization
@@ -31,6 +64,8 @@ async def main(args):
     status = fixture.make_ocsp()
     status = b"\x01" + len(status).to_bytes(3, "big") + status
     credential = client_credentials(ed25519.Ed25519PrivateKey.generate())
+    malformed_requests, valid_filters = selection_request_cases()
+    assert len(malformed_requests) == 36  # AuthenticatorTest's receive count.
     password_policy = None
     if args.password_provider:
         from tls20_server import pake_handshake
@@ -88,15 +123,17 @@ async def main(args):
                             for index, schemes in enumerate(((0x0a0a,), (0xaaaa,), (0xfe00,), (0x0a0a, 0xfe01))):
                                 request = manager.request(context=b"client-first" + bytes((index,)), extra_extensions=(
                                     (34, m._vec(b"".join(value.to_bytes(2, "big") for value in schemes), 2)),
-                                    (0xff04, m._vec(b"\x08\x07", 2)), (5, b"")))
+                                    (0xff04, m._vec(b"\x08\x07", 2)), (5, b""),
+                                    (48, valid_filters[index]),
+                                    (47, m._vec(m._vec(ca.subject.public_bytes(), 2), 2))))
                                 if index == 0:
                                     parsed = parse_request(request)
-                                    for invalid in (b"\x01\0\0\0\0", b"\x01", b"\xff"):
+                                    for bad_kind, invalid in malformed_requests:
                                         # These malformed requests reuse the valid pending context.
                                         # The native API must reject them before consuming it,
                                         # whether returning a credential or an authenticated refusal.
                                         await send(m.frame(13, m._vec(parsed.context, 1) + m._vec(b"".join(
-                                            m.extension(kind, invalid if kind == 5 else value)
+                                            m.extension(kind, invalid if kind == bad_kind else value)
                                             for kind, value in parsed.extensions), 2)))
                                 await send(request)
                                 response = await receive()
@@ -205,7 +242,7 @@ async def main(args):
                     if handlers: await asyncio.wait_for(asyncio.gather(*tuple(handlers), return_exceptions=True), 4)
                     await server.wait_closed()
     if password_policy: provider.close()
-    print(f"{2 if password_policy else 6} native application-authenticator cases: client/server MAC, request/response evidence framing, 46 genuine-proof envelope checks per connection, GREASE/unknown delegation fallback, refusals, spontaneous identities, consumed contexts, continued application traffic and channel binding passed; PAKE={password_policy is not None}")
+    print(f"{2 if password_policy else 6} native application-authenticator cases: client/server MAC, 36 malformed requests with credential/refusal controls, recognized/unknown OID filters, request/response evidence framing, 46 genuine-proof envelope checks per connection, GREASE/unknown delegation fallback, refusals, spontaneous identities, consumed contexts, continued application traffic and channel binding passed; PAKE={password_policy is not None}")
 
 
 if __name__ == "__main__":

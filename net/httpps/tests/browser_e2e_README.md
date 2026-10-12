@@ -8,7 +8,7 @@ disables the sandbox, or bypasses a browser certificate error through CDP.
 
 Prerequisites: Python 3.11+, the reference server's `requirements-dev.txt`
 (including the `h2` fixture dependency), and a clean checkout of
-`tls20-server` at `b24403981386063a4b09bf4aa6847acd9364d09a`. The revision is
+`tls20-server` at `a62ffd26e868395280125f5580f2f6e70f2fee01`. The revision is
 checked before importing its protocol implementation. No dependencies are
 downloaded by the script.
 
@@ -21,6 +21,34 @@ provenance check, never certificate validation. Historical clean-revision
 results do not validate a subsequent optional-profile expansion.
 Use the server and browser from the same migration; the old numbered prototype
 is not wire-compatible with the current spec.
+
+## Credential request filters, Finished framing and retired secrets
+
+`oid_filter_interop_test.py` exercises actual encrypted initial and
+post-handshake CertificateRequest messages, both with a provisioned X.509 client
+identity and without one. Malformed OID/KeyUsage/ExtendedKeyUsage encodings must
+produce `decode_error` (50); duplicate OIDs and prohibited `anyExtendedKeyUsage`
+produce `illegal_parameter` (47). Empty filters and unknown OIDs, including
+opaque values, remain valid. Positive controls complete authentication and HTTP
+traffic. The record-layer client and application authenticators share the
+filter parser, so refusing an identity does not bypass syntax validation.
+
+The matching server also checks Finished against the negotiated hash size before
+verifying its MAC. Its wire regressions preserve the password server's
+authentication-failure mask for correctly sized invalid proofs. Additional
+regressions cover compressed-certificate framing and codec alerts, duplicate
+extensions, invalid DH shares, and retiring handshake secrets at epoch changes.
+
+Local Windows validation included a complete browser build, seven native CTests,
+28 ordinary and 22 provider interoperability commands, and 88 OID-filter wire
+cases. The actual browser passed 38 cookie/certificate/resumption checks and,
+under both default and explicitly enabled network-service sandbox policies,
+40 profile, 54 evidence and 14 client-OCSP cases per policy. Of 34,794 network
+tests, 34,793 passed on the first run; the Python runtime test passed separately
+after adding the required depot_tools runtime to the test process's PATH. This
+was an environment correction, not a test exclusion or production-code change.
+These are local results; platform CI results must be checked for the actual
+committed revisions separately.
 
 ## HTTP 425, handshake-stage alerts and SM3 parameter erasure
 

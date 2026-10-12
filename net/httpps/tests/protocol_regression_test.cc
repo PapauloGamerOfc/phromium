@@ -5,6 +5,7 @@
 // Deterministic state/record tests for boundaries that successful connections
 // do not exercise. Secrets below are public test-only traffic-key fixtures.
 #include "net/httpps/draft01.h"
+#include "net/httpps/native_provider.h"
 
 #include <algorithm>
 #include <cstdlib>
@@ -94,6 +95,9 @@ class ProtocolRegressionPeer {
     return true;
   }
   static Bytes HandshakeSendingSecret(const Client& client) { return client.c_hs_; }
+  static bool HasNativeTrafficKey(const Client& client) {
+    return client.native_traffic_key_ != nullptr;
+  }
   static void AwaitVerification(Client& client) {
     client.state_ = Client::State::kVerifyingCertificate;
   }
@@ -1159,6 +1163,111 @@ void CertificateRequestValidation() {
   }
 }
 
+void DelegationRequestDuplicates() {
+  for (bool pha : {false, true}) {
+    for (uint16_t duplicate : {0, 34, 50, 0xff04}) {
+      ClientOptions options;
+      options.post_handshake_auth = true;
+      Client client("example.test", {}, true, options);
+      Check(client.Start(), "delegation request fixture advertises PHA");
+      ProtocolRegressionPeer::Prepare(client);
+      if (!pha) ProtocolRegressionPeer::AwaitInitialCertificateRequest(client);
+      Bytes extensions;
+      Extension(&extensions, 0xff03, Bytes(32, 0x67));
+      Extension(&extensions, 50, Bytes{0, 2, 8, 7});
+      Extension(&extensions, 34, Bytes{0, 2, 0xfe, 1});
+      Extension(&extensions, 0xff04, Bytes{0, 2, 8, 7});
+      if (duplicate)
+        Extension(&extensions, duplicate,
+                  duplicate == 34 ? Bytes{0, 2, 0xfe, 1} : Bytes{0, 2, 8, 7});
+      Bytes body = pha ? Bytes{1, 7} : Bytes{0};
+      Append(&body, Vector16(extensions));
+      auto request = Frame(13, body);
+      request.push_back(22);
+      Bytes application;
+      Check(client.Receive(Protect(request), &application) == (duplicate == 0),
+            "delegation offers reject duplicate extensions, not valid independent lists");
+      Check(application.empty(), "CR never releases application data");
+      if (duplicate) {
+        CheckAlert(client, 47);
+        Check(ProtocolRegressionPeer::SecretsErased(client),
+              "duplicate delegation offers erase failed connection secrets");
+      } else if (pha) {
+        Check(!client.TakeOutput().empty(), "valid delegation PHA permits credential refusal");
+      }
+    }
+  }
+}
+
+void OidFilterRequestValidation() {
+  const Bytes unknown{6, 2, 0x2a, 3}, ku{6, 3, 0x55, 0x1d, 0x0f},
+      eku{6, 3, 0x55, 0x1d, 0x25};
+  auto filter = [](const Bytes& oid, const Bytes& values, bool duplicate = false) {
+    Bytes item{static_cast<uint8_t>(oid.size())};
+    Append(&item, oid);
+    Append(&item, Vector16(values));
+    Bytes entries = item;
+    if (duplicate) Append(&entries, item);
+    return Vector16(entries);
+  };
+  const std::pair<Bytes, uint8_t> cases[] = {
+      {Bytes{0, 0}, 0}, {filter(unknown, {}), 0},
+      // Unknown value semantics must be ignored, including non-DER bytes.
+      {filter(unknown, {0xff, 0, 0x80}), 0},
+      {filter(ku, {}), 0}, {filter(ku, {3, 1, 0}), 0},
+      {filter(ku, {3, 2, 7, 0x80}), 0},
+      {filter(eku, {0x30, 0x0a, 6, 8, 0x2b, 6, 1, 5, 5, 7, 3, 2}), 0},
+      {filter(unknown, {}, true), 47},
+      {{}, 50}, {{0, 1, 0}, 50}, {{0, 0, 0}, 50},
+      {filter({}, {}), 50}, {filter({6, 0}, {}), 50},
+      {filter({6, 1, 0x80}, {}), 50},
+      {filter({6, 2, 0x2a, 3, 0}, {}), 50},
+      {filter({6, 0x81, 2, 0x2a, 3}, {}), 50},
+      {filter(ku, {3, 2, 8, 0x80}), 50},
+      {filter(ku, {3, 2, 0, 0x80}), 50},
+      {filter(ku, {3, 3, 6, 0, 0x40}), 47},
+      {filter(eku, {0x30, 0}), 50},
+      {filter(eku, {0x30, 3, 6, 1, 0x80}), 50},
+      {filter(eku, {0x30, 6, 6, 4, 0x55, 0x1d, 0x25, 0}), 47}};
+  for (const auto& [encoded, alert] : cases) {
+    for (bool pha : {false, true}) {
+      ClientOptions options;
+      options.post_handshake_auth = true;
+      Client client("example.test", {}, true, options);
+      Check(client.Start(), "OID request fixture starts");
+      ProtocolRegressionPeer::Prepare(client);
+      if (!pha) ProtocolRegressionPeer::AwaitInitialCertificateRequest(client);
+      Bytes extensions;
+      Extension(&extensions, 0xff03, Bytes(32, 9));
+      Extension(&extensions, 50, Bytes{0, 2, 8, 7});
+      Extension(&extensions, 48, encoded);
+      Bytes body = pha ? Bytes{1, 7} : Bytes{0};
+      Append(&body, Vector16(extensions));
+      const auto frame = Frame(13, body);
+      auto protected_body = frame;
+      protected_body.push_back(22);
+      Bytes application;
+      Check(client.Receive(Protect(protected_body), &application) == (alert == 0),
+            "CR/PHA validates OID and recognized values without a credential");
+      Check(application.empty(), "OID filter parsing releases no application bytes");
+      if (alert) {
+        CheckAlert(client, alert);
+        Check(ProtocolRegressionPeer::SecretsErased(client) && client.TakeOutput().empty(),
+              "malformed CR/PHA cannot emit a credential refusal and erases secrets");
+      } else if (pha) {
+        Check(!client.TakeOutput().empty(), "valid OID filters permit an empty credential response");
+      }
+      Client authenticator("example.test", {}, true, options);
+      Check(authenticator.Start(), "OID authenticator fixture starts");
+      ProtocolRegressionPeer::Prepare(authenticator);
+      Bytes response;
+      Check(authenticator.AuthenticateClient(frame, nullptr, &response) == (alert == 0),
+            "shared OID parser preserves EA acceptance and refusal policy");
+      Check(response.empty() == (alert != 0), "invalid EA filter has no response");
+    }
+  }
+}
+
 void ClosedWriterControlMessages() {
   ClientCredential credential;
   credential.certificate_type = 2;
@@ -1504,6 +1613,65 @@ net::httpps::Bytes HandshakeSendingSecretForTest(const net::httpps::Client& clie
   return net::httpps::ProtocolRegressionPeer::HandshakeSendingSecret(client);
 }
 
+// Called only by the explicit-provider test runner. This uses the production
+// ServerHello parser/key schedule, not a synthetic destructor-only fixture.
+void RunNativeStageLifecycleTests(const std::shared_ptr<net::httpps::NativeProvider>& provider) {
+  for (uint16_t group : {30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41}) {
+    if (!provider->SupportsGroup(group)) continue;
+    // Valid agreement, invalid peer share, and a PSK-only selection that makes
+    // the previously generated traffic scalar unnecessary without using it.
+    for (int path : {0, 1, 2}) {
+      const bool valid = path != 1;
+      const bool psk_only = path == 2;
+      ClientOptions options;
+      options.native_provider = provider;
+      options.groups = {group};
+      options.cipher_suites = {static_cast<uint16_t>(group == 41 ? 0x00c6 :
+          group >= 34 && group <= 40 ? 0xc103 : 0x1301)};
+      if (psk_only) {
+        ExternalPSK psk;
+        psk.identity = Bytes{1}; psk.secret = Bytes(32, 7);
+        psk.hostname = "example.test";
+        psk.cipher_suite = options.cipher_suites.front();
+        options.external_psks = {psk};
+        options.psk_modes = {0, 1};
+      }
+      Client client("example.test", {}, true, options);
+      Check(client.Start() && ProtocolRegressionPeer::HasNativeTrafficKey(client),
+            "provider traffic scalar exists while awaiting ServerHello");
+      client.TakeOutput();
+      Bytes public_key;
+      auto peer_key = provider->Generate(group, &public_key);
+      Check(peer_key != nullptr, "independent peer traffic key");
+      if (!valid) std::fill(public_key.begin(), public_key.end(), 0);
+      Bytes body{3, 3};
+      Append(&body, Bytes(32, 0x53));
+      body.push_back(0);
+      U16(&body, options.cipher_suites.front());
+      body.push_back(0);
+      Bytes extensions, share;
+      U16(&share, group);
+      Append(&share, Vector16(public_key));
+      Extension(&extensions, 43, Bytes{4, 0});
+      if (psk_only)
+        Extension(&extensions, 41, Bytes{0, 0});
+      else
+        Extension(&extensions, 51, share);
+      Append(&body, Vector16(extensions));
+      Check(ReceivePlaintextHandshake(client, Frame(2, body)) == valid,
+            "provider ServerHello accepts valid and rejects invalid shared secrets");
+      Check(!ProtocolRegressionPeer::HasNativeTrafficKey(client),
+            "provider private scalar ends at agreement or failure, before EE");
+      if (valid)
+        Check(ProtocolRegressionPeer::HasHandshakeSecrets(client),
+              "retiring private scalar preserves the derived handshake keys");
+      else
+        Check(ProtocolRegressionPeer::SecretsErased(client),
+              "invalid provider agreement erases all connection secrets");
+    }
+  }
+}
+
 void RunProtocolRegressionTests() {
   RecordAlerts();
   RecordFramingAlerts();
@@ -1523,6 +1691,8 @@ void RunProtocolRegressionTests() {
   ClosedWriterFailures();
   CertificateResponseOffers();
   CertificateRequestValidation();
+  DelegationRequestDuplicates();
+  OidFilterRequestValidation();
   KeyUpdates();
   PostHandshakeAuthentication();
   RetrospectiveLimits();

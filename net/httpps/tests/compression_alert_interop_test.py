@@ -23,7 +23,12 @@ async def main(args):
         root.write_bytes(ca.public_bytes(serialization.Encoding.DER))
         for algorithm in (1, 2, 3):
             for variant, expected in (("valid", None), ("garbage", 42), ("short", 42),
-                                      ("long", 42), ("envelope", 47), ("unoffered", 47)):
+                                      ("long", 42), ("envelope", 50), ("trailing", 50),
+                                      ("empty-vector", 50), ("truncated-header", 50),
+                                      ("truncated-algorithm", 50), ("empty", 50),
+                                      ("unoffered", 47), ("unsupported", 47),
+                                      ("unoffered-malformed", 50),
+                                      ("zero-mismatch", 42), ("zero-output", 50)):
                 errors, requests, generated, handlers = [], [], [], set()
                 complete = asyncio.Event()
 
@@ -39,8 +44,37 @@ async def main(args):
                         return packed[:2] + declared.to_bytes(3, "big") + packed[5:]
                     if variant == "envelope":
                         return packed[:5] + (len(packed) - 7).to_bytes(3, "big") + packed[8:]
+                    if variant == "trailing":
+                        return packed + b"\x00"
+                    if variant == "empty-vector":
+                        return packed[:5] + bytes(3)
+                    if variant == "truncated-header":
+                        return packed[:7]
+                    if variant == "truncated-algorithm":
+                        return packed[:1]
+                    if variant == "empty":
+                        return b""
                     if variant == "unoffered":
                         return credential_cache.compress_certificate(body, 2 if selected == 1 else 1)
+                    if variant == "unsupported":
+                        return b"\xff\xfe" + packed[2:]
+                    if variant == "unoffered-malformed":
+                        return (2 if selected == 1 else 1).to_bytes(2, "big") + packed[2:-1]
+                    if variant == "zero-mismatch":
+                        return packed[:2] + bytes(3) + packed[5:]
+                    if variant == "zero-output":
+                        # A syntactically valid envelope and successful empty
+                        # decompression still cannot encode a Certificate body.
+                        if selected == 1:
+                            import zlib
+                            data = zlib.compress(b"")
+                        elif selected == 2:
+                            import brotli
+                            data = brotli.compress(b"")
+                        else:
+                            import zstandard
+                            data = zstandard.ZstdCompressor().compress(b"")
+                        return packed[:2] + bytes(3) + len(data).to_bytes(3, "big") + data
                     return packed
 
                 async def peer(reader, writer):
@@ -77,6 +111,10 @@ async def main(args):
                         process = await asyncio.create_subprocess_exec(*command,
                             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
                         output, error = await asyncio.wait_for(process.communicate(), 20)
+                        # A failed native assertion can exit without sending
+                        # the alert. Surface that regression before waiting for
+                        # the peer's close path (which may otherwise time out).
+                        assert process.returncode == 0, (algorithm, variant, output, error)
                         await asyncio.wait_for(complete.wait(), 12)
                         if handlers:
                             await asyncio.gather(*handlers)
@@ -101,7 +139,7 @@ async def main(args):
                         task.cancel()
                     await asyncio.gather(*handlers, return_exceptions=True)
     print(f"{checks} encrypted codec cases passed: algorithms 1/2/3, exact bad_certificate alerts, "
-          "valid controls and distinct envelope/unoffered-algorithm failures")
+          "valid controls, decode_error envelopes and illegal_parameter algorithm selections")
 
 
 if __name__ == "__main__":

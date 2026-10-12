@@ -135,6 +135,76 @@ bool ParseCertificateAuthorities(ByteSpan encoded,
   return true;
 }
 
+bool ParseOidFilters(ByteSpan encoded,
+                     std::vector<std::pair<Bytes, Bytes>>* filters,
+                     uint8_t* alert) {
+  filters->clear();
+  *alert = 50;
+  CBS input, entries;
+  CBS_init(&input, encoded.data(), encoded.size());
+  if (!CBS_get_u16_length_prefixed(&input, &entries) || CBS_len(&input))
+    return false;
+  std::set<Bytes> seen;
+  std::vector<std::pair<Bytes, Bytes>> parsed;
+  while (CBS_len(&entries)) {
+    CBS identifier, values, oid;
+    if (!CBS_get_u8_length_prefixed(&entries, &identifier) ||
+        !CBS_get_u16_length_prefixed(&entries, &values))
+      return false;
+    const auto encoded_oid = BytesOf(identifier);
+    const auto encoded_values = BytesOf(values);
+    if (!CBS_get_asn1(&identifier, &oid, CBS_ASN1_OBJECT) || CBS_len(&identifier) ||
+        !CBS_is_valid_asn1_oid(&oid))
+      return false;
+    if (!seen.emplace(encoded_oid.begin(), encoded_oid.end()).second) {
+      *alert = 47;
+      return false;
+    }
+    const auto oid_bytes = BytesOf(oid);
+    // Empty values require only presence. Unknown OID semantics MUST remain
+    // ignorable; validate their identifier, not an invented value grammar.
+    if (CBS_len(&values) && Equal(oid_bytes, Bytes{0x55, 0x1d, 0x0f})) {
+      CBS bits;
+      if (!CBS_get_asn1(&values, &bits, CBS_ASN1_BITSTRING) || CBS_len(&values) ||
+          !CBS_len(&bits) || CBS_len(&bits) > 3)
+        return false;
+      const auto encoded_bits = BytesOf(bits);
+      const auto unused = encoded_bits[0];
+      const auto count = encoded_bits.size() - 1;
+      if (unused > 7 || (!count && unused))
+        return false;
+      if (count) {
+        const auto last = encoded_bits[count];
+        if ((last & ((1u << unused) - 1u)) || !(last & (1u << unused)))
+          return false;  // Nonminimal named-bit DER or nonzero padding bits.
+        if (count * 8 - unused > 9) {
+          *alert = 47;  // Well-formed encoding of an undefined KeyUsage bit.
+          return false;
+        }
+      }
+    } else if (CBS_len(&values) && Equal(oid_bytes, Bytes{0x55, 0x1d, 0x25})) {
+      CBS sequence;
+      if (!CBS_get_asn1(&values, &sequence, CBS_ASN1_SEQUENCE) || CBS_len(&values) ||
+          !CBS_len(&sequence))
+        return false;
+      while (CBS_len(&sequence)) {
+        CBS purpose;
+        if (!CBS_get_asn1(&sequence, &purpose, CBS_ASN1_OBJECT) ||
+            !CBS_is_valid_asn1_oid(&purpose))
+          return false;
+        if (Equal(BytesOf(purpose), Bytes{0x55, 0x1d, 0x25, 0})) {
+          *alert = 47;  // RFC9846 forbids anyExtendedKeyUsage in this request.
+          return false;
+        }
+      }
+    }
+    parsed.emplace_back(Bytes(encoded_oid.begin(), encoded_oid.end()),
+                        Bytes(encoded_values.begin(), encoded_values.end()));
+  }
+  *filters = std::move(parsed);
+  return true;
+}
+
 bool OCSPRequestMatchesResponse(const ClientOptions& options, ByteSpan response) {
   if (options.ocsp_responder_ids.empty() && options.ocsp_request_extensions.empty()) return true;
   std::optional<Bytes> requested_nonce;

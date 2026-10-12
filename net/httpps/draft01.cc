@@ -128,7 +128,9 @@ bool Extensions(ByteSpan data, std::map<uint16_t, Bytes>* out,
     if (length > data.size() - 4)
       return false;
     if (out->count(type)) {
-      if (alert && type == 43) *alert = 47;
+      // The vector is well formed, but repeating an extension is a semantic
+      // violation (including the independent delegation offers).
+      if (alert) *alert = 47;
       return false;
     }
     auto value = data.subspan(4u, length);
@@ -327,24 +329,34 @@ bool ParseCertificates(ByteSpan body, std::vector<std::string>* certificates,
   return !certificates->empty();
 }
 
+bool CompressedCertificateEnvelopeValid(ByteSpan body) {
+  return body.size() >= 9 && Read24(body.subspan(5u, 3u)) == body.size() - 8;
+}
+
 bool DecompressCertificate(ByteSpan body, Bytes* decompressed, uint8_t* alert) {
-  *alert = 47;
-  if (body.size() < 9 || Read24(body.subspan(5u, 3u)) != body.size() - 8)
+  *alert = 50;
+  if (!CompressedCertificateEnvelopeValid(body))
     return false;
+  *alert = 47;
   const size_t size = Read24(body.subspan(2u, 3u));
   // This is the existing engine handshake memory budget, not a wire limit.
-  if (!size || size > 1048572)
+  if (size > 1048572)
     return false;
   // RFC8879 requires bad_certificate for failed decompression or a declared
   // output-length mismatch, distinct from the envelope/offer checks above.
   *alert = 42;
   auto input = body.subspan(8u);
   decompressed->resize(size);
+  // uint24 uncompressed_length permits zero. Give the decoder a non-null
+  // destination with capacity zero; a true empty output reaches Certificate
+  // syntax validation, while a nonempty output is a decompression mismatch.
+  uint8_t empty_output = 0;
+  uint8_t* output = size ? decompressed->data() : &empty_output;
   switch (Read16(body.first(2u))) {
     case 1: {
       uLongf written = size;
       uLong consumed = input.size();
-      return uncompress2(decompressed->data(), &written, input.data(), &consumed) == Z_OK &&
+      return uncompress2(output, &written, input.data(), &consumed) == Z_OK &&
              written == size && consumed == input.size();
     }
     case 2: {
@@ -353,7 +365,7 @@ bool DecompressCertificate(ByteSpan body, Bytes* decompressed, uint8_t* alert) {
         return false;
       size_t available_in = input.size(), available_out = size;
       const uint8_t* next_in = input.data();
-      uint8_t* next_out = decompressed->data();
+      uint8_t* next_out = output;
       const auto result = BrotliDecoderDecompressStream(state, &available_in, &next_in,
                                                        &available_out, &next_out, nullptr);
       BrotliDecoderDestroyInstance(state);
@@ -364,7 +376,7 @@ bool DecompressCertificate(ByteSpan body, Bytes* decompressed, uint8_t* alert) {
       // not just its first frame. The one-shot decoder consumes the entire
       // input and rejects incomplete/trailing data; its fixed destination
       // enforces the declared output bound even across multiple frames.
-      return ZSTD_decompress(decompressed->data(), size, input.data(), input.size()) == size;
+      return ZSTD_decompress(output, size, input.data(), input.size()) == size;
     default:
       *alert = 47;
       return false;
@@ -1278,25 +1290,9 @@ bool Client::AcceptCertificateRequest(ByteSpan frame, bool post_handshake) {
     return Fail(Error::kProtocol, 50);
   client_oid_filters_.clear();
   if (extensions.count(48)) {
-    ByteSpan filters = extensions[48];
-    if (filters.size() < 2 || Read16(filters.first(2u)) != filters.size() - 2)
-      return Fail(Error::kProtocol, 50);
-    filters = filters.subspan(2u);
-    std::set<Bytes> oids;
-    while (!filters.empty()) {
-      const size_t oid_size = filters[0];
-      if (!oid_size || filters.size() < oid_size + 3)
-        return Fail(Error::kProtocol, 50);
-      Bytes oid(filters.begin() + 1, filters.begin() + 1 + oid_size);
-      size_t size = Read16(filters.subspan(oid_size + 1, 2u));
-      if (size > filters.size() - oid_size - 3)
-        return Fail(Error::kProtocol, 50);
-      if (!oids.insert(oid).second)
-        return Fail();
-      auto value = filters.subspan(oid_size + 3, size);
-      client_oid_filters_.emplace_back(std::move(oid), Bytes(value.begin(), value.end()));
-      filters = filters.subspan(oid_size + 3 + size);
-    }
+    uint8_t filter_alert;
+    if (!ParseOidFilters(extensions[48], &client_oid_filters_, &filter_alert))
+      return Fail(Error::kProtocol, filter_alert);
   }
   client_auth_context_ = std::move(context);
   client_compression_algorithms_.clear();
@@ -2722,6 +2718,10 @@ bool Client::AcceptFrame(ByteSpan frame) {
       } else {
         traffic_group_ = 0;
       }
+      // The provider owns the private scalar as well as its ABI handle.
+      // Agreement (or selection of PSK-only exchange) is its last use: do not
+      // retain it while awaiting EE, verification or the final client write.
+      native_traffic_key_.reset();
       if (!AppendTranscript(frame)) {
         return Fail();
       }
@@ -2965,7 +2965,9 @@ bool Client::AcceptFrame(ByteSpan frame) {
       }
       Bytes decompressed;
       if (frame[0] == 25) {
-        if (body.size() < 2 || std::find(options_.certificate_compression.begin(),
+        if (!CompressedCertificateEnvelopeValid(body))
+          return Fail(Error::kProtocol, 50);
+        if (std::find(options_.certificate_compression.begin(),
               options_.certificate_compression.end(), Read16(body.first(2u))) ==
               options_.certificate_compression.end())
           return Fail();

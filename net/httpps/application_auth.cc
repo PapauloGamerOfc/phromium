@@ -160,6 +160,11 @@ bool ParseRequest(ByteSpan wire, Request* request) {
   if (request->extensions.count(47) &&
       !ParseCertificateAuthorities(request->extensions.at(47), &authorities))
     return false;
+  std::vector<std::pair<Bytes, Bytes>> filters;
+  uint8_t filter_alert;
+  if (request->extensions.count(48) &&
+      !ParseOidFilters(request->extensions.at(48), &filters, &filter_alert))
+    return false;
   std::copy(share->second.begin(), share->second.end(), request->share.begin());
   return Offers(request->extensions);
 }
