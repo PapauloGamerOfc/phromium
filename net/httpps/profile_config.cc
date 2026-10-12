@@ -149,7 +149,8 @@ class Fields {
   }
   bool Binaries(std::string_view key,
                 std::vector<Bytes>* out,
-                bool required = false) {
+                bool required = false,
+                bool allow_empty_entries = false) {
     auto list = Take(key);
     if (!list) {
       return !required;
@@ -164,7 +165,7 @@ class Fields {
       }
       Fields item(base::DictValue().Set("value", value.Clone()));
       Bytes bytes;
-      if (!item.Binary("value", &bytes, true)) {
+      if (!item.Binary("value", &bytes, !allow_empty_entries)) {
         return false;
       }
       out->push_back(std::move(bytes));
@@ -360,6 +361,7 @@ bool Configure(const base::DictValue& dict,
     ClientCredential c;
     Bytes scalar;
     if (!p.Strings("certificates", &c.certificates, true) ||
+        !p.Binaries("ocsp_responses", &c.ocsp_responses, false, true) ||
         !p.Binary("private_key", &scalar, true) || scalar.size() != 32 ||
         !p.Number("certificate_type", &c.certificate_type) ||
         !p.Binary("delegation", &c.delegation)) {

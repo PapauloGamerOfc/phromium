@@ -394,5 +394,20 @@ TEST(HttppsProfileConfigTest, EvidenceAndControlOptionsRetainExactValues) {
   EXPECT_NE(options.certificate_signature_algorithms,
             options.grant_signature_algorithms);
 }
+
+TEST(HttppsProfileConfigTest, ClientOcspEvidencePreservesEntryAlignment) {
+  auto configured = base::DictValue().Set("client_credential", base::DictValue()
+      .Set("certificates", base::ListValue().Append("YQ==").Append("Yg=="))
+      .Set("private_key", "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
+      .Set("ocsp_responses", base::ListValue().Append("").Append("MAMKAQA=")));
+  ClientOptions options;
+  std::optional<ClientCredential> credential;
+  ASSERT_EQ(Apply(CreateProfileProvider(Config(std::move(configured))), Context(),
+                  &options, &credential), true);
+  ASSERT_TRUE(credential);
+  ASSERT_EQ(credential->ocsp_responses.size(), 2u);
+  EXPECT_TRUE(credential->ocsp_responses[0].empty());
+  EXPECT_EQ(credential->ocsp_responses[1], (Bytes{0x30, 3, 0x0a, 1, 0}));
+}
 }  // namespace
 }  // namespace net::httpps

@@ -344,6 +344,10 @@ bool Client::AuthenticateClient(ByteSpan request, const ClientCredential* creden
     identity.extensions.resize(identity.certificates.size());
     if (!credential->delegation.empty())
       identity.extensions.front().emplace(34, credential->delegation);
+    if (parsed.extensions.count(5))
+      for (size_t index = 0; index < credential->ocsp_responses.size(); ++index)
+        if (!credential->ocsp_responses[index].empty())
+          identity.extensions[index].emplace(5, Frame(1, credential->ocsp_responses[index]));
   }
   Bytes certificate, transcript;
   Erase finished;

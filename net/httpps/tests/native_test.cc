@@ -115,7 +115,8 @@ Bytes Record(SocketHandle socket) {
 
 void AuthenticatorTest(SocketHandle socket, net::httpps::Client& client,
                        const std::vector<std::string>& anchors,
-                       const char* leaf, const char* key, const char* grant = nullptr) {
+                       const char* leaf, const char* key, const char* grant = nullptr,
+                       const net::httpps::ClientCredential* evidence_credential = nullptr) {
   Bytes buffered;
   auto receive = [&]() {
     while (true) {
@@ -147,6 +148,16 @@ void AuthenticatorTest(SocketHandle socket, net::httpps::Client& client,
     Require(client.Send(framed, &records), "authenticator application encrypt");
     Send(socket, records);
   };
+  if (evidence_credential) {
+    for (size_t index = 0; index < 2; ++index) {
+      const auto request = receive();
+      Bytes response;
+      Require(client.AuthenticateClient(request, evidence_credential, &response),
+              "EA client evidence follows the current request");
+      send_frame(response);
+    }
+    return;
+  }
   std::optional<net::httpps::ClientCredential> credential;
   if (leaf && key) {
     credential.emplace();
@@ -273,7 +284,8 @@ int Get(const char* host,
         bool bootstrap_inventory_test = false,
         bool ocsp_request_recheck_test = false,
         ChainRejection reject_long_chain = ChainRejection::kNone,
-        uint8_t expected_handshake_alert = 0) {
+        uint8_t expected_handshake_alert = 0,
+        bool client_ocsp_authenticator_test = false) {
 #if defined(_WIN32)
   WSADATA data;
   Require(WSAStartup(MAKEWORD(2, 2), &data) == 0, "winsock init");
@@ -429,6 +441,8 @@ int Get(const char* host,
             "unauthenticated lineage is preserved, including resumption");
   if (authenticator_test)
     AuthenticatorTest(stream, client, anchors, client_leaf, client_key, client_grant);
+  if (client_ocsp_authenticator_test)
+    AuthenticatorTest(stream, client, anchors, nullptr, nullptr, nullptr, selected_credential);
   if (resume_test) {
     Require(client.resumed() == (round != 0), "expected session resumption");
     Require(client.early_data_accepted() == (early && expect_early_acceptance),
@@ -841,7 +855,9 @@ int main(int argc, char** argv) {
     net::httpps::Client client("localhost", {}, false);
     return client.SetClientCredential(credential) ? 0 : 1;
   }
-  if (argc >= 7 && std::string_view(argv[1]) == "--get-client-chain") {
+  if (argc >= 7 && (std::string_view(argv[1]) == "--get-client-chain" ||
+                    std::string_view(argv[1]) == "--get-client-ocsp" ||
+                    std::string_view(argv[1]) == "--get-client-ocsp-ea")) {
 #if defined(_WIN32)
     _setmode(_fileno(stdout), _O_BINARY);
 #endif
@@ -850,12 +866,34 @@ int main(int argc, char** argv) {
     Require(key.size() == credential.private_key.size(), "raw client key length");
     std::copy(key.begin(), key.end(), credential.private_key.begin());
     OPENSSL_cleanse(key.data(), key.size());
-    for (int i = 6; i < argc; ++i)
+    const bool evidence = std::string_view(argv[1]) != "--get-client-chain";
+    const bool evidence_ea = std::string_view(argv[1]) == "--get-client-ocsp-ea";
+    if (evidence) {
+      Require(argc >= 8, "client OCSP response and certificate paths");
+      const auto response = ReadFile(argv[6]);
+      credential.ocsp_responses.emplace_back(response.begin(), response.end());
+    }
+    for (int i = evidence ? 7 : 6; i < argc; ++i)
       credential.certificates.push_back(ReadFile(argv[i]));
+    if (evidence) {
+      auto invalid = credential;
+      invalid.ocsp_responses.resize(invalid.certificates.size() + 1);
+      net::httpps::Client probe("localhost", {}, false);
+      Require(!probe.SetClientCredential(invalid), "OCSP entries cannot exceed certificate entries");
+      invalid = credential;
+      invalid.ocsp_responses = {Bytes{0x30, 1}};
+      Require(!probe.SetClientCredential(invalid), "truncated OCSP DER envelope rejected locally");
+      invalid.ocsp_responses = {Bytes(65528, 0)};
+      Require(!probe.SetClientCredential(invalid), "OCSP cannot overflow CertificateEntry extensions");
+      invalid = credential;
+      invalid.ocsp_responses.front().push_back(0);
+      Require(!probe.SetClientCredential(invalid), "trailing OCSP DER bytes rejected locally");
+    }
     net::httpps::ClientOptions options;
     options.post_handshake_auth = true;
     return Get(argv[2], argv[3], argv[4], false, false, true, nullptr,
-               nullptr, options, nullptr, false, false, false, &credential);
+               nullptr, options, nullptr, false, false, false, &credential,
+               false, false, ChainRejection::kNone, 0, evidence_ea);
   }
   if (argc >= 6 && std::string_view(argv[1]) == "--verify-native-chain") {
     auto provider = net::httpps::NativeProvider::Load(argv[4]);

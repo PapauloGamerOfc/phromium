@@ -22,6 +22,7 @@
 #include "third_party/boringssl/src/include/openssl/aead.h"
 #include "third_party/boringssl/src/include/openssl/curve25519.h"
 #include "third_party/boringssl/src/include/openssl/bn.h"
+#include "third_party/boringssl/src/include/openssl/bytestring.h"
 #include "third_party/boringssl/src/include/openssl/ec.h"
 #include "third_party/boringssl/src/include/openssl/ecdh.h"
 #include "third_party/boringssl/src/include/openssl/hkdf.h"
@@ -1034,6 +1035,20 @@ bool Client::SetClientCredential(const ClientCredential& credential) {
     if (der.empty() || der.size() > 65536 || (total += der.size()) > 262144)
       return false;
   }
+  if (credential.ocsp_responses.size() > credential.certificates.size() ||
+      (credential.certificate_type != 0 && !credential.ocsp_responses.empty()))
+    return false;
+  for (const auto& response : credential.ocsp_responses) {
+    if (response.empty()) continue;
+    // Each CE extension vector is uint16; its status_type/uint24 and extension
+    // header consume eight bytes. This is syntax/budget validation, not trust.
+    CBS input, sequence;
+    CBS_init(&input, response.data(), response.size());
+    if (response.size() > 65527 || (total += response.size() + 8) > 262144 ||
+        !CBS_get_asn1(&input, &sequence, CBS_ASN1_SEQUENCE) || CBS_len(&input) ||
+        !CBS_len(&sequence))
+      return false;
+  }
   Secret actual, expected;
   X25519_public_from_private(actual.data(), credential.private_key.data());
   if (credential.certificate_type == 3) {
@@ -1131,6 +1146,7 @@ bool Client::AcceptCertificateRequest(ByteSpan frame, bool post_handshake) {
   // OCSP request structure. Check known syntax even without a local credential.
   if (extensions.count(5) && !extensions[5].empty())
     return Fail(Error::kProtocol, 50);
+  client_ocsp_requested_ = extensions.count(5) != 0;
   if (!extensions.count(0xff03) ||
       (client_certificate_type_ == 0 && !extensions.count(50)))
     return Fail(Error::kProtocol, 109);
@@ -1303,13 +1319,20 @@ bool Client::AppendClientAuthentication() {
   Bytes entries;
   const bool selected = ClientCredentialMatchesRequest();
   if (selected) {
-    for (const auto& der : client_credential_->certificates) {
+    for (size_t index = 0; index < client_credential_->certificates.size(); ++index) {
+      const auto& der = client_credential_->certificates[index];
       auto entry = Frame(0, Octets(der));
-      // CertificateEntry is uint24 DER length, DER and an empty extensions.
+      // CertificateEntry is uint24 DER length, DER and current-request metadata.
       Append(&entries, ByteSpan(entry).subspan(1u));
       Bytes metadata;
       if (&der == &client_credential_->certificates.front() && !client_credential_->delegation.empty())
         Extension(&metadata, 34, client_credential_->delegation);
+      if (client_ocsp_requested_ && index < client_credential_->ocsp_responses.size() &&
+          !client_credential_->ocsp_responses[index].empty()) {
+        const auto response = Frame(1, client_credential_->ocsp_responses[index]);
+        Extension(&metadata, 5, response);
+      }
+      if (metadata.size() > 65535) return Fail();
       Vector16(&entries, metadata);
     }
   }

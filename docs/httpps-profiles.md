@@ -104,6 +104,16 @@ profile without taking down normal HTTP/HTTPS networking.
   `private_key` (32 raw X25519 scalar bytes), optional `certificate_type`
   (0 certificate, 2 raw key, 3 ITS), `delegation`, and client-role `its` policy.
   Selection is local authorization to disclose this identity in the scope.
+  X.509 credentials may also supply `ocsp_responses`: base64 DER OCSPResponse
+  values aligned by index with `certificates`. Empty or missing trailing entries
+  omit evidence; the array cannot be longer than the certificate array. Each
+  response is limited to 65,527 bytes, with a combined certificate/evidence
+  budget of 262,144 bytes. Responses are sent only if the current initial/PHA
+  CertificateRequest or exported-authenticator request includes empty
+  `status_request` (5); they are not sent unsolicited or carried over to the
+  next request. The receiver still validates signature, issuer/CertID,
+  responder authorization, freshness and status. There is no automatic OCSP
+  fetching or new client-identity UI.
 - `external_psks`: at most 16 objects with `identity`, `secret`, optional
   `alpn` (default `http/1.1`), `cipher_suite` (default 4865), `combined` and
   `max_early_data`. An `import_context` field selects the standard importer;

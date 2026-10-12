@@ -110,6 +110,10 @@ struct HTTPPS_EXPORT SessionTicket {
 // The server remains responsible for trust and authorization of this chain.
 struct HTTPPS_EXPORT ClientCredential {
   std::vector<std::string> certificates;
+  // Raw DER OCSPResponse values aligned with certificates. Empty/missing
+  // entries omit evidence. Sent only for an explicit current status_request;
+  // the peer independently validates status, issuer, signature and freshness.
+  std::vector<Bytes> ocsp_responses;
   Secret private_key{};
   uint8_t certificate_type = 0;
   Bytes delegation;
@@ -573,6 +577,7 @@ class HTTPPS_EXPORT Client {
   Secret client_verifier_share_{};
   Secret authenticated_client_identity_{};
   bool client_auth_requested_ = false;
+  bool client_ocsp_requested_ = false;
   Bytes client_auth_context_;
   std::vector<uint16_t> client_signature_algorithms_;
   std::vector<uint16_t> client_compression_algorithms_;

@@ -8,7 +8,7 @@ disables the sandbox, or bypasses a browser certificate error through CDP.
 
 Prerequisites: Python 3.11+, the reference server's `requirements-dev.txt`
 (including the `h2` fixture dependency), and a clean checkout of
-`tls20-server` at `11cdcb36efb86f4cf8e3208c40106437ec2bd893`. The revision is
+`tls20-server` at `b7a04c1041319fc17010a96d908c61472adc0cc4`. The revision is
 checked before importing its protocol implementation. No dependencies are
 downloaded by the script.
 
@@ -54,6 +54,21 @@ still inherit the full ClientHello OCSP request. Public API and real-wire tests
 exercise valid empty requests, malformed requests, context reuse after rejected
 input, authenticated refusals and spontaneous identities under certificate and
 password authentication.
+
+`client_ocsp_interop_test.py` exercises configured client evidence against the
+reference server's real PKIX/OCSP policy. Native mode covers initial, PHA and
+exported-authenticator requests; browser mode covers initial/PHA through the
+profile loader and network service. Each path includes signed GOOD evidence
+and missing, bad-signature, revoked, unknown, expired and wrong-CertID failures.
+The leaf also requires TLSFeature 50 and client MAC share 0xff03. Subsequent
+PHA/EA requests without extension 5 must not receive previously requested OCSP.
+Browser fixtures explicitly select HTTP/1.1 without ALPN, since a browser offer
+containing HTTP/2 must not advertise PHA.
+
+```sh
+python net/httpps/tests/client_ocsp_interop_test.py --browser out/Default/chrome.exe --server-source ../tls20-server
+python net/httpps/tests/client_ocsp_interop_test.py --browser out/Default/chrome.exe --server-source ../tls20-server --enable-network-sandbox
+```
 
 The production Windows browser and test binaries were incrementally rebuilt.
 Local validation passed six portable CTest targets, 22 interoperability
@@ -263,6 +278,7 @@ under `out/reference-spec` rather than importing the moving default branch.
 ```powershell
 python net/httpps/tests/session_interop_test.py --native out/httpps-native/Release/httpps_native_test.exe --server-source ../tls20-server
 python net/httpps/tests/client_auth_interop_test.py --native out/httpps-native/Release/httpps_native_test.exe --server-source ../tls20-server
+python net/httpps/tests/client_ocsp_interop_test.py --native out/httpps-native/Release/httpps_native_test.exe --server-source ../tls20-server
 python net/httpps/tests/chain_limit_interop_test.py --native out/httpps-native/Release/httpps_native_test.exe --server-source ../tls20-server
 python net/httpps/tests/spec_oracle_test.py --native out/httpps-native/Release/httpps_native_test.exe --server-source ../tls20-server --spec-source ../tls20-spec
 ```
