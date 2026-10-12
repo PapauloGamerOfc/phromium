@@ -8,7 +8,7 @@ disables the sandbox, or bypasses a browser certificate error through CDP.
 
 Prerequisites: Python 3.11+, the reference server's `requirements-dev.txt`
 (including the `h2` fixture dependency), and a clean checkout of
-`tls20-server` at `83801ced17752ba886f59701e56f9de89dd2abe8`. The revision is
+`tls20-server` at `0b5b005aaea65535cd75f27f2afb7f93f1abb7bc`. The revision is
 checked before importing its protocol implementation. No dependencies are
 downloaded by the script.
 
@@ -321,6 +321,10 @@ checked before and after each rejection. The provider
 manifest additionally exercises actual network-service DLL loading for X448,
 SM, GOST, password/mixed authentication, DNSSEC/DANE and IEEE ITS, including
 wrong-password, wrong-TLSA-association and revoked-ITS-grant negatives.
+DANE PKIX-TA, PKIX-EE and DANE-TA cases also preserve an intermediate CA's
+TLS Feature constraints through full handshakes and resumption, and reject a
+leaf which drops those constraints. The DANE-TA cases deliberately have no
+ordinary CA anchors; `--case dane-ta-missing-features` isolates that regression.
 ITS requires freshly generated fixtures: the live grants deliberately expire
 after 25 minutes, so regenerate them after a long browser build rather than
 weakening expiry checks. A portable-engine provider test is not a substitute for these

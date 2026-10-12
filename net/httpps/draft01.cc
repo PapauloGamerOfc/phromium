@@ -306,8 +306,11 @@ bool DecompressCertificate(ByteSpan body, Bytes* decompressed) {
       return result == BROTLI_DECODER_RESULT_SUCCESS && available_in == 0 && available_out == 0;
     }
     case 3:
-      return ZSTD_findFrameCompressedSize(input.data(), input.size()) == input.size() &&
-             ZSTD_decompress(decompressed->data(), size, input.data(), input.size()) == size;
+      // RFC8879 adopts RFC8478's stream of concatenated and skippable frames,
+      // not just its first frame. The one-shot decoder consumes the entire
+      // input and rejects incomplete/trailing data; its fixed destination
+      // enforces the declared output bound even across multiple frames.
+      return ZSTD_decompress(decompressed->data(), size, input.data(), input.size()) == size;
     default:
       return false;
   }

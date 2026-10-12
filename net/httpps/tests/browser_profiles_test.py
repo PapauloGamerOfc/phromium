@@ -132,7 +132,61 @@ def ct_fixture(credentials, root, tampered, *, required_tls_source=False, unknow
     return credentials, policy, root
 
 
-def dane_fixture(credentials, host, port, wrong_association):
+def dane_path_fixture(host, missing_features):
+    """Real DANE-TA path with a constrained intermediate, not a leaf key pin."""
+    from datetime import datetime, timedelta, timezone
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import ec, x25519
+    from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
+    from tls20_server.pki import Credentials
+    from tls20_server.tls_features import validate_feature_path
+    now = datetime.now(timezone.utc)
+    root_key, issuer_key = ec.generate_private_key(ec.SECP256R1()), ec.generate_private_key(ec.SECP256R1())
+    leaf_key = x25519.X25519PrivateKey.generate()
+    root_name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Browser DANE root")])
+    issuer_name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Browser DANE constrained issuer")])
+    def builder(subject, issuer, public_key):
+        return (x509.CertificateBuilder().subject_name(subject).issuer_name(issuer).public_key(public_key)
+            .serial_number(x509.random_serial_number()).not_valid_before(now - timedelta(days=1))
+            .not_valid_after(now + timedelta(days=1)))
+    def ca(subject, issuer, public_key, signing_key, path_length):
+        return (builder(subject, issuer, public_key).add_extension(x509.BasicConstraints(True, path_length), True)
+            .add_extension(x509.KeyUsage(False, False, False, False, False, True, True, False, False), True)
+            .add_extension(x509.SubjectKeyIdentifier.from_public_key(public_key), False)
+            .add_extension(x509.AuthorityKeyIdentifier.from_issuer_public_key(signing_key.public_key()), False))
+    root = ca(root_name, root_name, root_key.public_key(), root_key, 1).sign(root_key, hashes.SHA256())
+    # Unknown, unoffered feature values still constrain every child. The valid
+    # case preserves one without requiring an OCSP fixture; the invalid case
+    # drops its issuer's status_request requirement entirely.
+    feature = b"\x30\x03\x02\x01\x05" if missing_features else b"\x30\x05\x02\x03\x00\xfd\xe8"
+    extension = x509.UnrecognizedExtension(x509.ObjectIdentifier("1.3.6.1.5.5.7.1.24"), feature)
+    issuer = (ca(issuer_name, root_name, issuer_key.public_key(), root_key, 0)
+        .add_extension(extension, False).sign(root_key, hashes.SHA256()))
+    leaf = (builder(x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, host)]), issuer_name, leaf_key.public_key())
+        .add_extension(x509.BasicConstraints(False, None), True)
+        .add_extension(x509.KeyUsage(False, False, False, False, True, False, False, False, False), True)
+        .add_extension(x509.ExtendedKeyUsage([ExtendedKeyUsageOID.SERVER_AUTH]), False)
+        .add_extension(x509.SubjectAlternativeName([x509.DNSName(host)]), False)
+        .add_extension(x509.AuthorityKeyIdentifier.from_issuer_public_key(issuer_key.public_key()), False))
+    if not missing_features:
+        leaf = leaf.add_extension(extension, False)
+    leaf = leaf.sign(issuer_key, hashes.SHA256())
+    if not missing_features:
+        assert validate_feature_path((leaf, issuer, root)) == frozenset((65000,))
+    else:
+        from tls20_server.errors import ProtocolError
+        try:
+            validate_feature_path((leaf, issuer, root))
+        except ProtocolError:
+            pass
+        else:
+            raise AssertionError("Invalid DANE path fixture does not violate issuer constraints")
+    material = [value.public_bytes(serialization.Encoding.DER) for value in (leaf, issuer, root)]
+    return Credentials(material, leaf_key), material[-1]
+
+
+def dane_fixture(credentials, host, port, wrong_association, *, usage=3, root=None):
     import dns.dnssec
     import dns.name
     import dns.rrset
@@ -141,10 +195,12 @@ def dane_fixture(credentials, host, port, wrong_association):
     key = ed25519.Ed25519PrivateKey.generate()
     dnskey = dns.dnssec.make_dnskey(key.public_key(), "ED25519", flags=257)
     keys = dns.rrset.from_rdata(dns.name.root, 300, dnskey)
-    spki = credentials.private_key.public_key().public_bytes(
-        serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)
+    from cryptography import x509
+    public_key = (x509.load_der_x509_certificate(root).public_key() if usage in (0, 2)
+                  else credentials.private_key.public_key())
+    spki = public_key.public_bytes(serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)
     digest = hashlib.sha256(spki).digest() if not wrong_association else bytes(32)
-    tlsa = dns.rrset.from_text(f"_{port}._tcp.{host}.", 300, "IN", "TLSA", "3 1 1 " + digest.hex())
+    tlsa = dns.rrset.from_text(f"_{port}._tcp.{host}.", 300, "IN", "TLSA", f"{usage} 1 1 " + digest.hex())
     now = int(time.time())
     def wire(*records):
         output = io.BytesIO()
@@ -156,7 +212,8 @@ def dane_fixture(credentials, host, port, wrong_association):
         return record, dns.rrset.from_rdata(record.name, record.ttl, signature)
     chain = wire(*signed(keys), *signed(tlsa))
     evidence = b"\0\x18" + len(chain).to_bytes(2, "big") + chain
-    return replace(credentials, entry_extensions=(((59, evidence),),), dnssec_service=(host, port)), wire(keys)
+    metadata = (((59, evidence),),) + ((),) * (len(credentials.chain_der) - 1)
+    return replace(credentials, entry_extensions=metadata, dnssec_service=(host, port)), wire(keys)
 
 
 def its_fixture(environment, revoked):
@@ -235,9 +292,13 @@ async def run(args):
                      "missing-native-library", "invalid-native-library", "ct-v2", "ct-v2-tampered",
                      "ct-v2-required-tls-source-valid", "ct-v2-required-tls-source",
                      "bootstrap-multiple", "bootstrap-multiple-retry", "bootstrap-unknown", "bootstrap-wrong-key"]
+            dane_path_cases = {f"dane-{mode}-{case}": (usage, case == "missing-features")
+                for mode, usage in (("pkix-ta", 0), ("pkix-ee", 1), ("ta", 2))
+                for case in ("features", "missing-features")}
             if args.manifest:
                 cases += ["native-x448", "native-sm", "native-gost", "password", "mixed-password",
                           "mixed-ordinary", "wrong-password", "dane", "dane-wrong-association", "its", "its-revoked"]
+                cases += list(dane_path_cases)
             if args.case:
                 assert set(args.case) <= set(cases), "Unknown or unavailable profile case"
                 cases = [case for case in cases if case in args.case]
@@ -248,7 +309,7 @@ async def run(args):
                 options = {"trust_anchors": [b64(fixtures.root)]}
                 server_options = {}
                 server_bootstrap = None
-                completed, rejected, bootstrap_sessions = [], [], []
+                completed, rejected, bootstrap_sessions, dane_sessions = [], [], [], []
                 client_key = x25519.X25519PrivateKey.generate()
                 client_spki = client_key.public_key().public_bytes(serialization.Encoding.DER,
                                                                  serialization.PublicFormat.SubjectPublicKeyInfo)
@@ -333,18 +394,26 @@ async def run(args):
                         kind.endswith("tampered"), required_tls_source=kind.startswith("ct-v2-required-tls-source"),
                         unknown_tls_staple=kind == "ct-v2-required-tls-source")
                     options["trust_anchors"] = [b64(ct_root)]
+                elif kind in dane_path_cases:
+                    usage, missing_features = dane_path_cases[kind]
+                    credentials, dane_root = dane_path_fixture(case_host, missing_features)
+                    # DANE-TA must use its DNS-authorized path without ordinary
+                    # private anchors. PKIX usages additionally require the CA.
+                    options["trust_anchors"] = [] if usage == 2 else [b64(dane_root)]
                 elif kind.startswith("its"):
                     credentials, its_options = its_fixture(server_environment, kind.endswith("revoked"))
                     its_options["library"] = environment["TLS20_TEST_ITS_LIBRARY"]
                     options.update(server_certificate_types=[3], its=its_options)
 
                 selected_credentials = [credentials]
+                if kind.startswith("dane"):
+                    server_options["ticket_store"] = TicketStore()
 
                 async def peer(reader, writer, *, kind=kind, selected_credentials=selected_credentials,
                                case_host=case_host,
                                server_options=server_options, completed=completed,
                                rejected=rejected, client_spki=client_spki, server_bootstrap=server_bootstrap,
-                               bootstrap_sessions=bootstrap_sessions):
+                               bootstrap_sessions=bootstrap_sessions, dane_sessions=dane_sessions):
                     try:
                         async with asyncio.timeout(15):
                             if kind in ("password", "mixed-password", "wrong-password"):
@@ -358,6 +427,8 @@ async def run(args):
                             if server_bootstrap is not None:
                                 assert channel.authenticated_client == (client_spki,)
                                 bootstrap_sessions.append(channel.resumed)
+                            if kind.startswith("dane"):
+                                dane_sessions.append(channel.resumed)
                             request = b""
                             while b"\r\n\r\n" not in request:
                                 part = await channel.recv()
@@ -381,7 +452,9 @@ async def run(args):
 
                 port = await fixtures.listen(peer)
                 if kind.startswith("dane"):
-                    selected_credentials[0], anchors = dane_fixture(credentials, case_host, port, kind.endswith("association"))
+                    selected_credentials[0], anchors = dane_fixture(credentials, case_host, port, kind.endswith("association"),
+                        usage=dane_path_cases[kind][0] if kind in dane_path_cases else 3,
+                        root=dane_root if kind in dane_path_cases else None)
                     options.update(native_library=environment["TLS20_TEST_OPENSSL"], dane={
                         "library": environment["TLS20_TEST_GETDNS"], "trust_anchors": b64(anchors),
                         "application_policy_context": b64(b"explicit browser DNSSEC fixture")})
@@ -391,7 +464,7 @@ async def run(args):
                     "cross_site": False, "privacy_mode": 0, "route": "direct", "options": options}]}
                 file = folder / (kind + ".json")
                 file.write_text(json.dumps(config), encoding="utf-8")
-                success = kind not in ("wrong-psk", "wrong-raw-key", "wrong-scope", "malformed",
+                success = not kind.endswith("missing-features") and kind not in ("wrong-psk", "wrong-raw-key", "wrong-scope", "malformed",
                                        "wrong-password", "missing-native-library", "invalid-native-library",
                                        "ct-v2-tampered", "ct-v2-required-tls-source", "dane-wrong-association", "its-revoked",
                                        "bootstrap-unknown", "bootstrap-wrong-key")
@@ -420,6 +493,14 @@ async def run(args):
                                 assert await cdp.evaluate("document.body.innerText") == "profile:" + kind
                                 assert bootstrap_sessions[0] is False
                                 assert any(bootstrap_sessions[1:]), bootstrap_sessions
+                            if kind.startswith("dane"):
+                                # A resumed PSK connection must retain the same
+                                # current DANE path policy; no fresh Certificate
+                                # is sent to repair a missing inherited feature.
+                                await cdp.navigate(origin + "/resumed")
+                                assert await cdp.evaluate("document.body.innerText") == "profile:" + kind
+                                assert dane_sessions[0] is False
+                                assert any(dane_sessions[1:]), dane_sessions
                         else:
                             assert not completed, (kind, completed)
                         if health_port:

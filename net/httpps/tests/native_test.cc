@@ -42,9 +42,12 @@ void RunProtocolRegressionTests();
 void RunIntegrityOnlyTests();
 void RunNativeProviderTests(std::string_view library, std::string_view helper);
 void RunGostProviderTests(std::string_view library, std::string_view module);
+net::httpps::Bytes HandshakeSendingSecretForTest(const net::httpps::Client& client);
 
 namespace {
 using net::httpps::Bytes;
+
+enum class ChainRejection { kNone, kSendAlert, kReset };
 
 void Require(bool condition, const char* description) {
   if (!condition) {
@@ -268,7 +271,8 @@ int Get(const char* host,
         bool pinning_test = false,
         const net::httpps::ClientCredential* selected_credential = nullptr,
         bool bootstrap_inventory_test = false,
-        bool ocsp_request_recheck_test = false) {
+        bool ocsp_request_recheck_test = false,
+        ChainRejection reject_long_chain = ChainRejection::kNone) {
 #if defined(_WIN32)
   WSADATA data;
   Require(WSAStartup(MAKEWORD(2, 2), &data) == 0, "winsock init");
@@ -334,12 +338,47 @@ int Get(const char* host,
   }
   while (!client.established()) {
     Bytes unused;
+    auto alert_secret = reject_long_chain != ChainRejection::kNone
+        ? HandshakeSendingSecretForTest(client) : Bytes{};
     const bool accepted = client.Receive(Record(stream), &unused);
     if (!accepted) {
       auto alert = client.TakeFatalAlert();
+      if (reject_long_chain != ChainRejection::kNone) {
+        Require(!client.established() && client.error() == net::httpps::Client::Error::kProtocol &&
+                    unused.empty() && client.TakeOutput().empty() && alert_secret.size() == 32,
+                "oversized chain fails in the authenticated certificate parser");
+        net::httpps::RecordCipher alert_reader(alert_secret);
+        OPENSSL_cleanse(alert_secret.data(), alert_secret.size());
+        uint8_t type = 0;
+        Bytes content;
+        Require(alert_reader.Open(alert, &type, &content) && type == 21 && content == Bytes({2, 50}),
+                "oversized chain generates authenticated fatal decode_error");
+        if (reject_long_chain == ChainRejection::kReset) {
+          // This fixed peer sends one CV and one Finished record after the
+          // Certificate. Drain both before an abortive close so the server is
+          // reading, not racing another write. No timing sleeps are involved.
+          Record(stream);
+          Record(stream);
+          linger reset{1, 0};
+          Require(setsockopt(stream, SOL_SOCKET, SO_LINGER,
+                             reinterpret_cast<const char*>(&reset), sizeof(reset)) == 0,
+                  "force a reset without delivering the locally checked alert");
+        } else {
+          Send(stream, alert);
+        }
+#if defined(_WIN32)
+        closesocket(stream);
+        WSACleanup();
+#else
+        close(stream);
+#endif
+        std::cout << "oversized chain: authenticated fatal decode_error generated\n";
+        return 0;
+      }
       if (!alert.empty())
         Send(stream, alert);
     }
+    OPENSSL_cleanse(alert_secret.data(), alert_secret.size());
     Require(accepted, "authenticated server flight");
     if (client.certificate_verification_pending()) {
       Require(external_verification && !client.established() &&
@@ -361,6 +400,8 @@ int Get(const char* host,
       Require(client.OutputFlushed(), "CF flush");
     }
   }
+  Require(reject_long_chain == ChainRejection::kNone,
+          "oversized chain must never establish a connection");
   Bytes output;
   if (bootstrap_inventory_test) {
     const auto group = std::find(options.groups.begin(), options.groups.end(), client.traffic_group());
@@ -1249,6 +1290,13 @@ int main(int argc, char** argv) {
     return Get(argv[2], argv[3], argv[4], false,
                std::string_view(argv[1]) == "--get-unauthenticated-resume", true,
                nullptr, nullptr, options);
+  }
+  if (argc == 5 && (std::string_view(argv[1]) == "--reject-long-chain" ||
+                   std::string_view(argv[1]) == "--reject-long-chain-reset")) {
+    return Get(argv[2], argv[3], argv[4], false, false, true, nullptr, nullptr, {},
+               nullptr, false, false, false, nullptr, false, false,
+               std::string_view(argv[1]) == "--reject-long-chain-reset"
+                   ? ChainRejection::kReset : ChainRejection::kSendAlert);
   }
   if (argc == 5 && (std::string_view(argv[1]) == "--get-resume-reject" ||
                     std::string_view(argv[1]) == "--get-resume" ||

@@ -481,7 +481,7 @@ bool Configure(const base::DictValue& dict,
       }
       auto path =
           native_provider->VerifyCertificatePath(chain, public_roots, hostname);
-      if (!path) {
+      if (!path || !CertificateTLSFeaturesAllowed(*path)) {
         return {};
       }
       std::vector<Bytes> result;
@@ -497,11 +497,13 @@ bool Configure(const base::DictValue& dict,
       for (const auto& b : material) {
         chain.emplace_back(b.begin(), b.end());
       }
-      return native_provider
-          ->VerifyCertificatePath(chain,
-                                  {std::string(anchor.begin(), anchor.end())},
-                                  hostname, true, true)
-          .has_value();
+      const auto path = native_provider->VerifyCertificatePath(
+          chain, {std::string(anchor.begin(), anchor.end())}, hostname, true,
+          true);
+      // DANE-TA changes the authorized anchor, not its path constraints. Use
+      // the verifier's actual path (including omitted issuers), just as the
+      // ordinary browser/private-CA path does, on full and resumed handshakes.
+      return path && CertificateTLSFeaturesAllowed(*path);
     };
     if (!policy->IsValid()) {
       return false;

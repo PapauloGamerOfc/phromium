@@ -470,6 +470,31 @@ the distinction between engine, async-adapter and real-browser coverage.
 
 ### Local validation status
 
+The 2026-10-12 Zstandard/DANE follow-up accepts bounded RFC8478 multi-frame and
+skippable-frame certificate streams. The built-in DANE PKIX and trust-anchor
+callbacks additionally check TLS Feature inheritance on the native verifier's
+actual path; a DANE authorization cannot erase an intermediate CA's constraints.
+Positive and negative real-browser cases cover usages 0, 1 and 2, resumption,
+and a DANE-TA path with no ordinary CA anchors. DANE-EE retains its separate
+endpoint-authentication rules.
+
+Local Windows validation passed 15,803 selected network tests with no retries,
+30 service and eight component tests, six standalone CTest suites, 23 portable
+interoperability invocations, and 19 native-provider commands. The 28 new
+compression cases cover full and cached certificate flights, exact transcripts,
+truncation, trailing bytes, checksum failure and output bounds. Cached negative
+cases first complete a valid connection, then corrupt the cached representation.
+The actual browser passed 38 end-to-end assertions and 40 provisioned-profile
+cases under each of the default and explicitly enabled network-sandbox policies.
+Logs are retained under `out/*/zstd-dane-*`; these are local results, not a claim
+that the next Linux/macOS CI or all upstream Chromium tests have passed.
+
+The oversized-chain interoperability fixture now verifies its locally generated
+authenticated fatal `decode_error` independently of TCP alert delivery. A
+deterministic forced-reset case covers the macOS transport race without sleeps;
+negative controls reject an accepted oversized chain or a different TLS alert.
+No production certificate limit or rejection requirement was relaxed.
+
 #### Conformance and secret-lifecycle corrections: 2026-10-11
 
 The Windows x64 browser and `net_unittests` were rebuilt successfully. All

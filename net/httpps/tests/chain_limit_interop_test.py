@@ -182,14 +182,22 @@ async def main(args):
                 with (patch.object(m, "MAX_CERTIFICATES", 65) if too_many else nullcontext(),
                       patch.object(credential_cache, "MAX_CERTIFICATES", 65) if too_many else nullcontext()):
                     try:
-                        output = await command(*arguments, success=not too_many)
+                        output = await command(*arguments)
                     except AssertionError as error:
                         await asyncio.wait_for(finished.wait(), 16)
                         raise AssertionError((str(error), observations, errors)) from error
                     await asyncio.wait_for(finished.wait(), 16)
                 if too_many:
                     assert not observations and len(errors) == 1, (observations, errors)
-                    assert getattr(errors[0], "alert", None) == 50, errors
+                    # The native driver independently decrypts its generated
+                    # fatal alert and checks decode_error before reporting this
+                    # marker. TCP may reset when a rejecting client closes with
+                    # unread server-flight bytes; alert delivery is best effort.
+                    assert output == b"oversized chain: authenticated fatal decode_error generated\n", output
+                    if mode == "--reject-long-chain-reset":
+                        assert isinstance(errors[0], ConnectionResetError), errors
+                    else:
+                        assert getattr(errors[0], "alert", None) == 50 or isinstance(errors[0], ConnectionResetError), errors
                 else:
                     assert not errors, errors
                     assert output.endswith(b"\r\n\r\nOK"), output
@@ -203,7 +211,8 @@ async def main(args):
             for mode in ("--get", "--get-external"):
                 await connection(count, mode)
             await connection(count, "--get-client-chain", client_auth=True)
-        await connection(64, "--get", too_many=True)
+        await connection(64, "--reject-long-chain", too_many=True)
+        await connection(64, "--reject-long-chain-reset", too_many=True)
 
     print(f"{checks} native chain checks passed, including {connections} real connections: "
           "9/64 certificates, 65 rejected, separate anchor, initial/PHA, trust/key and byte budgets")

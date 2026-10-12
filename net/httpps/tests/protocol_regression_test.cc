@@ -1174,6 +1174,12 @@ void HeartbeatLimits() {
 }
 }  // namespace
 
+// The loopback negative-chain driver verifies the locally generated fatal alert
+// before closing its TCP socket. Never expose this test helper in production.
+net::httpps::Bytes HandshakeSendingSecretForTest(const net::httpps::Client& client) {
+  return net::httpps::ProtocolRegressionPeer::HandshakeSendingSecret(client);
+}
+
 void RunProtocolRegressionTests() {
   RecordAlerts();
   RecordFramingAlerts();
