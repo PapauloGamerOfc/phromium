@@ -399,7 +399,9 @@ int Get(const char* host,
     if (!accepted) {
       auto alert = client.TakeFatalAlert();
       if (reject_long_chain != ChainRejection::kNone || expected_handshake_alert) {
-        Require(!client.established() && client.error() == net::httpps::Client::Error::kProtocol &&
+        const auto expected_error = options.delegated_credentials
+            ? net::httpps::Client::Error::kCertificate : net::httpps::Client::Error::kProtocol;
+        Require(!client.established() && client.error() == expected_error &&
                     unused.empty() && client.TakeOutput().empty(),
                 "expected rejection does not establish a channel or expose data");
         const uint8_t expected = expected_handshake_alert ? expected_handshake_alert : 50;
@@ -1150,6 +1152,20 @@ int main(int argc, char** argv) {
                std::string_view(argv[6]) == "-" ? nullptr : argv[6], options,
                std::string_view(argv[7]) == "-" ? nullptr : argv[7]);
   }
+  if (argc == 7 && std::string_view(argv[1]) == "--delegation-alert") {
+    net::httpps::ClientOptions options;
+    options.delegated_credentials = true;
+    options.allow_unauthenticated = std::string_view(argv[5]) == "unauthenticated";
+    options.ordinary_httpps = !options.allow_unauthenticated;
+    if (std::string_view(argv[5]) == "compressed")
+      options.certificate_compression = {1, 2, 3};
+    const auto expected = ParseUnsigned(argv[6]);
+    Require(expected == 0 || expected == 42 || expected == 47 || expected == 50,
+            "explicit delegated credential rejection alert or positive control");
+    return Get(argv[2], argv[3], argv[4], false, false, true, nullptr, nullptr,
+               options, nullptr, false, false, false, nullptr, false, false,
+               ChainRejection::kNone, static_cast<uint8_t>(expected));
+  }
   if (argc == 9 && std::string_view(argv[1]) == "--get-delegation-direction") {
     net::httpps::ClientOptions options;
     options.delegated_credentials = true;
@@ -1426,7 +1442,7 @@ int main(int argc, char** argv) {
       options.ct_v2_policy = std::move(policy);
     }
     const auto expected = ParseUnsigned(argv[9]);
-    Require(expected == 0 || expected == 47 || expected == 50 || expected == 110,
+    Require(expected == 0 || expected == 10 || expected == 47 || expected == 50 || expected == 110,
             "explicit CertificateEntry rejection alert or positive control");
     return Get(argv[2], argv[3], argv[4], false, false, true, nullptr, nullptr,
                options, nullptr, false, false, false, nullptr, false, false,

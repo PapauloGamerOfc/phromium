@@ -486,7 +486,8 @@ class HTTPPS_EXPORT Client {
     kClosed,
     kFailed
   };
-  bool Fail(Error error = Error::kProtocol, uint8_t alert = 47);
+  bool Fail(Error error = Error::kProtocol);
+  bool Fail(Error error, uint8_t alert);
   bool AcceptFrame(ByteSpan frame);
   bool DrainHandshakeFrames();
   bool PrepareServerProof();

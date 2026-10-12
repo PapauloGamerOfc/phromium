@@ -76,7 +76,7 @@ async def main(args):
     cases += [(f"ct-size-{index}", m.extension(52, value), "ct", 50) for index, value in enumerate(
         (b"\0", b"\0\0", b"\0\x02\0\0", b"\0\x03\0\x01\xff",
          b"\0\x04\0\x03\xff\xff", b"\0\x04\0\x02\xff\xff\0"))]
-    cases += [(f"unoffered-{code}", m.extension(code, status if code == 5 else b""), "none", 110)
+    cases += [(f"unoffered-{code}", m.extension(code, status if code == 5 else b""), "none", 10 if code == 34 else 110)
               for code in (0xfafa, 5, 18, 34, 52, 59)]
     cases += [(f"misplaced-{code}", m.extension(code, b""), "none", 47)
               for code in (0, 1, 2, 3, 4, 10, 13, 15, 16, 17, 19, 20, 21, 25, 27, 28,

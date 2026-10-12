@@ -57,6 +57,14 @@ class ProtocolRegressionPeer {
     ticket.psk = Bytes(32, 0x70);
     client.tickets_.push_back(std::move(ticket));
   }
+  static void PrepareTicket(Client& client) {
+    Prepare(client);
+    client.resumption_ = Bytes(32, 0x52);
+  }
+  static bool CertificateFailure(Client& client, bool explicit_alert) {
+    return explicit_alert ? client.Fail(Client::Error::kCertificate, 47)
+                          : client.Fail(Client::Error::kCertificate);
+  }
   static void HeartbeatLimits(Client& client, uint16_t local, uint16_t peer,
                               uint16_t fragment = 16384) {
     client.local_record_limit_ = local;
@@ -1038,7 +1046,7 @@ void CertificateResponseOffers() {
     Bytes application;
     Check(!client.Receive(Protect(certificate), &application) && application.empty(),
           "CertificateEntry response cannot invent an offer");
-    CheckAlert(client, code == 15 || code == 43 || code == 0xff02 ? 47 : 110);
+    CheckAlert(client, code == 34 ? 10 : code == 15 || code == 43 || code == 0xff02 ? 47 : 110);
   }
 }
 
@@ -1386,6 +1394,68 @@ void HeartbeatLimits() {
           "bounded heartbeat response matches request");
   }
 }
+
+void TicketSyntaxAlerts() {
+  const Bytes prefix{0, 0, 0x0e, 0x10, 0, 0, 0, 0};
+  auto ticket = [&](ByteSpan extensions) {
+    Bytes body = prefix;
+    Append(&body, Bytes{1, 'N', 0, 1, 'T'});
+    Append(&body, Vector16(extensions));
+    return body;
+  };
+  std::vector<std::pair<Bytes, uint8_t>> cases{{ticket({}), 0}};
+  Bytes unknown;
+  Extension(&unknown, 0xfafa, Bytes{1, 2});
+  cases.emplace_back(ticket(unknown), 0);
+  Bytes early;
+  Extension(&early, 42, Bytes(4));
+  cases.emplace_back(ticket(early), 0);
+  for (const auto& suffix : {Bytes{255, 0, 0, 0, 0, 0, 0, 0},
+                            Bytes{1, 'N', 0, 0, 0, 0},
+                            Bytes{1, 'N', 1, 0, 'T', 0, 0}}) {
+    auto body = prefix;
+    Append(&body, suffix);
+    cases.emplace_back(std::move(body), 50);
+  }
+  for (size_t size : {0u, 1u, 3u, 5u}) {
+    Bytes malformed;
+    Extension(&malformed, 42, Bytes(size));
+    cases.emplace_back(ticket(malformed), 50);
+  }
+  for (const auto& [body, alert] : cases) {
+    Client client("example.test", {}, true);
+    ProtocolRegressionPeer::PrepareTicket(client);
+    Bytes plaintext = Frame(4, body);
+    plaintext.push_back(22);
+    Bytes application;
+    Check(client.Receive(Protect(plaintext), &application) == (alert == 0),
+          "ticket syntax rejection versus well-formed extensible ticket");
+    Check(application.empty(), "tickets never release application bytes");
+    if (alert) {
+      CheckAlert(client, alert);
+      Check(ProtocolRegressionPeer::SecretsErased(client),
+            "ticket parse failure erases connection-owned secrets and tickets");
+      Check(client.TakeTickets().empty(), "malformed tickets cannot reach the session cache");
+    } else {
+      Check(client.TakeTickets().size() == 1 && client.established(),
+            "well-formed ticket is retained without ending the connection");
+      Check(client.TakeFatalAlert().empty(), "valid ticket has no fatal alert");
+    }
+  }
+}
+
+void CertificateAlertOverrides() {
+  for (bool explicit_alert : {false, true}) {
+    Client client("example.test", {}, true);
+    ProtocolRegressionPeer::Prepare(client);
+    Check(!ProtocolRegressionPeer::CertificateFailure(client, explicit_alert) &&
+              client.error() == Client::Error::kCertificate,
+          "wire alert override preserves the local certificate-error classification");
+    CheckAlert(client, explicit_alert ? 47 : 42);
+    Check(ProtocolRegressionPeer::SecretsErased(client),
+          "both certificate alert paths erase connection secrets");
+  }
+}
 }  // namespace
 
 // The loopback negative-chain driver verifies the locally generated fatal alert
@@ -1417,5 +1487,7 @@ void RunProtocolRegressionTests() {
   RetrospectiveLimits();
   FixedExtensionFields();
   HeartbeatLimits();
+  TicketSyntaxAlerts();
+  CertificateAlertOverrides();
   std::cout << "Protocol alert, key-update, PHA, record-limit and heartbeat regressions passed\n";
 }

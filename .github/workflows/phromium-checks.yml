@@ -41,7 +41,7 @@ jobs:
           set -euo pipefail
           git submodule update --init --depth 1 third_party/boringssl/src third_party/zstd/src
           git clone --no-checkout https://github.com/PapauloGamerOfc/tls20-server.git out/reference-server
-          git -C out/reference-server checkout --detach f6a786f5b798b8abe07d6a355c45065d2edd1c62
+          git -C out/reference-server checkout --detach 904b8fc03e5f2344fae7f806dfdae5235ce35c23
           git clone --no-checkout https://github.com/PapauloGamerOfc/tls20-spec.git out/reference-spec
           git -C out/reference-spec checkout --detach dee31da9826e10bd590f58acc0f9f46143505fd1
           python -m pip install -r out/reference-server/requirements-dev.txt

@@ -8,7 +8,7 @@ disables the sandbox, or bypasses a browser certificate error through CDP.
 
 Prerequisites: Python 3.11+, the reference server's `requirements-dev.txt`
 (including the `h2` fixture dependency), and a clean checkout of
-`tls20-server` at `f6a786f5b798b8abe07d6a355c45065d2edd1c62`. The revision is
+`tls20-server` at `904b8fc03e5f2344fae7f806dfdae5235ce35c23`. The revision is
 checked before importing its protocol implementation. No dependencies are
 downloaded by the script.
 
@@ -21,6 +21,21 @@ provenance check, never certificate validation. Historical clean-revision
 results do not validate a subsequent optional-profile expansion.
 Use the server and browser from the same migration; the old numbered prototype
 is not wire-compatible with the current spec.
+
+## Ticket and delegated-credential alert regressions
+
+The portable protocol regressions verify that malformed NewSessionTicket
+vectors and early-data limits produce `decode_error` (50), never enter the
+ticket cache, and erase connection-owned secrets. Valid tickets and unknown
+well-formed ticket extensions remain accepted.
+
+`delegation_interop_test.py` checks actual encrypted alerts for malformed grants
+(50), invalid signatures or direction (47), and independent parent-trust
+failure (42), including compressed flights and the explicitly selected
+unauthenticated profile. The local certificate-error classification is retained
+when a delegated-grant alert differs from `bad_certificate`. The certificate
+extension matrix checks the RFC 9345-specific unsolicited-delegation alert (10)
+without changing the generic unsupported-extension alert (110).
 
 ## Negotiated features and private/DANE evidence regressions
 

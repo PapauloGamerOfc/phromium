@@ -5,6 +5,110 @@ import asyncio
 from pathlib import Path
 import sys
 import tempfile
+from unittest.mock import patch
+
+from interop_runtime import start_process
+
+
+async def rejection_alerts(args):
+    """A bad grant is illegal_parameter without losing certificate diagnostics."""
+    from cryptography.hazmat.primitives.serialization import Encoding
+    from tls20_server import messages
+    from tls20_server.errors import PeerClosed
+    from tls20_server.handshake import server_handshake
+    from tls20_server.lab import generate_lab_credentials
+    from tls20_server.pki import Credentials
+    from tests.test_credential_profiles import CredentialProfileTests
+
+    fixture = CredentialProfileTests()
+    fixture.setUp()
+    parent, grant = fixture.parent_and_grant()
+    credential = Credentials([parent.public_bytes(Encoding.DER)], fixture.key, delegation=grant)
+    _, unrelated_root = generate_lab_credentials("localhost")
+    original = messages.certificate
+    spki_size = int.from_bytes(grant[6:9], "big")
+    variants = [("valid", grant, 0),
+                ("signature", grant[:-1] + bytes([grant[-1] ^ 1]), 47),
+                ("direction", grant[:4] + b"\xfe\x01" + grant[6:], 47),
+                ("empty", b"", 50), ("truncated", grant[:-1], 50),
+                ("trailing", grant + b"\0", 50),
+                ("empty-spki", grant[:6] + bytes(3) + grant[9:], 50),
+                ("overflow-spki", grant[:6] + b"\xff\xff\xff" + grant[9:], 50),
+                ("empty-signature", grant[:11 + spki_size] + bytes(2), 50)]
+    cases = [(mode, label, value, False, expected)
+             for mode in ("normal", "compressed", "unauthenticated")
+             for label, value, expected in variants]
+    cases.append(("normal", "untrusted-parent", grant, True, 42))
+    with tempfile.TemporaryDirectory(prefix="httpps-delegation-alert-") as directory:
+        root = Path(directory) / "root.der"
+        for mode, label, value, untrusted, expected in cases:
+            root.write_bytes((unrelated_root if untrusted else fixture.root).public_bytes(Encoding.DER))
+            observations, errors, cleanup_errors, handlers = [], [], [], set()
+
+            def certificate(*arguments, **options):
+                assert grant in original(*arguments, **options)
+                options["entry_extensions"] = tuple(
+                    tuple((kind, value if kind == 34 else content) for kind, content in entries)
+                    for entries in options["entry_extensions"])
+                return original(*arguments, **options)
+
+            async def peer(reader, writer):
+                task = asyncio.current_task()
+                handlers.add(task)
+                channel = None
+                try:
+                    async with asyncio.timeout(8):
+                        channel = await server_handshake(reader, writer, credential, "example.test")
+                        request = await channel.recv()
+                        assert request.startswith(b"GET / HTTP/1.1\r\n")
+                        observations.append("application")
+                        await channel.send(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nOK")
+                        await channel.close()
+                except PeerClosed as error:
+                    observations.append(error.alert)
+                except Exception as error:
+                    errors.append(error)
+                finally:
+                    if channel is not None:
+                        channel.abort()
+                    writer.close()
+                    try:
+                        await asyncio.wait_for(writer.wait_closed(), 2)
+                    except TimeoutError as error:
+                        cleanup_errors.append(error)
+                        writer.transport.abort()
+                    except OSError:
+                        pass
+                    handlers.discard(task)
+
+            listener = await asyncio.start_server(peer, "127.0.0.1", 0)
+            process = None
+            try:
+                with patch.object(messages, "certificate", certificate):
+                    process = await start_process(str(args.native.resolve()), "--delegation-alert",
+                        "example.test", str(listener.sockets[0].getsockname()[1]), str(root),
+                        mode, str(expected), stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+                    stdout, stderr = await asyncio.wait_for(process.communicate(), 12)
+                    if handlers:
+                        await asyncio.wait_for(asyncio.gather(*handlers), 10)
+                assert process.returncode == 0 and not errors and not cleanup_errors, (
+                    mode, label, untrusted, stdout, stderr, errors, cleanup_errors)
+                assert observations == ([expected] if expected else ["application"]), (
+                    mode, label, untrusted, observations)
+                if expected:
+                    assert f"fatal alert {expected} generated".encode() in stdout, stdout
+                print("PASS delegation alert", mode, label, untrusted, expected, flush=True)
+            finally:
+                if process is not None and process.returncode is None:
+                    process.kill()
+                    await process.wait()
+                listener.close()
+                for task in tuple(handlers):
+                    task.cancel()
+                if handlers:
+                    await asyncio.wait_for(asyncio.gather(*tuple(handlers), return_exceptions=True), 4)
+                await listener.wait_closed()
+    return len(cases)
 
 
 async def independent_directions(args):
@@ -241,7 +345,8 @@ async def main(args):
                 server.close()
                 await server.wait_closed()
     await independent_directions(args)
-    print("10 native delegated credential connections and 9 local validity checks passed: both roles, compression, resume/early, independent initial/PHA/EA grant offers and unoffered refusals")
+    rejection_checks = await rejection_alerts(args)
+    print(f"{10 + rejection_checks} native delegated credential connections and 9 local validity checks passed: both roles, compression, resume/early, independent initial/PHA/EA grant offers, unoffered refusals and exact rejection alerts")
 
 
 if __name__ == "__main__":

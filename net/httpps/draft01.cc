@@ -994,6 +994,10 @@ void Client::EraseConnectionSecrets() {
   options_.pinning.reset();
 }
 
+bool Client::Fail(Error error) {
+  return Fail(error, error == Error::kCertificate ? 42 : 47);
+}
+
 bool Client::Fail(Error error, uint8_t alert) {
   if (state_ == State::kFailed) {
     return false;
@@ -1002,7 +1006,7 @@ bool Client::Fail(Error error, uint8_t alert) {
   // The transport may also suppress it if an application write is in flight.
   if (state_ != State::kNew && !close_sent_ && output_.empty() && alert &&
       error != Error::kTimeout) {
-    Bytes value{2, error == Error::kCertificate && alert == 47 ? uint8_t{42} : alert};
+    Bytes value{2, alert};
     if (sender_)
       sender_->Seal(value, 21, &fatal_alert_);
     else if (state_ == State::kHello) {
@@ -2913,8 +2917,18 @@ bool Client::AcceptFrame(ByteSpan frame) {
           if (!ResponseExtensionAllowed(code, ResponseContext::kCertificate))
             return Fail(Error::kProtocol, 47);
           if (!offered_features_.count(code))
-            return Fail(Error::kProtocol, 110);
+            return Fail(Error::kProtocol, code == 34 ? 10 : 110);
           if (code == 34 && i == 0 && server_certificate_type_ == 0 && options_.delegated_credentials) {
+            // Decode the nested vectors before cryptographic grant validation.
+            // RFC 9345 distinguishes malformed encoding from a bad grant.
+            if (value.size() < 13)
+              return Fail(Error::kCertificate, 50);
+            const auto spki_size = Read24(ByteSpan(value).subspan(6u, 3u));
+            if (!spki_size || spki_size > value.size() - 13)
+              return Fail(Error::kCertificate, 50);
+            const auto signature_size = Read16(ByteSpan(value).subspan(11 + spki_size, 2u));
+            if (!signature_size || signature_size != value.size() - 13 - spki_size)
+              return Fail(Error::kCertificate, 50);
             server_delegation_ = value;
           } else if (code == 5 && options_.request_ocsp && server_certificate_type_ == 0) {
             if (value.empty()) return Fail(Error::kProtocol, 50);
@@ -2970,13 +2984,14 @@ bool Client::AcceptFrame(ByteSpan frame) {
       if (options_.allow_unauthenticated) {
         // Selected before the attempt, never a fallback from failed validation.
         // A delegated key still requires a cryptographically valid grant.
+        if (delegated() && !ValidateDelegation(certificates_.front(), server_delegation_, true,
+                options_.grant_signature_algorithms, &S_, options_.native_provider.get()))
+          return Fail(Error::kCertificate, 47);
         const bool key_ok = server_certificate_type_ == 2
             ? certificates_.size() == 1 && ExtractRawPublicKey(Octets(certificates_[0]), &S_)
             : server_certificate_type_ == 0 &&
                 CertificateAlgorithmsAllowed(certificates_, options_.certificate_signature_algorithms) &&
-                (delegated() ? ValidateDelegation(certificates_.front(), server_delegation_, true,
-                    options_.grant_signature_algorithms, &S_, options_.native_provider.get())
-                  : ExtractServerPublicKey(certificates_.front(), &S_));
+                (delegated() || ExtractServerPublicKey(certificates_.front(), &S_));
         if (!key_ok || combined_psk_ || !AppendTranscript(frame))
           return Fail(Error::kCertificate);
         authentication_ = Authentication::kUnauthenticated;
@@ -3049,7 +3064,7 @@ bool Client::AcceptFrame(ByteSpan frame) {
         private_trusted = false;
       if (delegated() && !ValidateDelegation(certificates_.front(), server_delegation_, true,
                                             options_.grant_signature_algorithms, &S_, options_.native_provider.get()))
-        return Fail(Error::kCertificate);
+        return Fail(Error::kCertificate, 47);
       if (!private_trusted &&
           (!use_external_verifier_ ||
            (!delegated() && !ExtractServerPublicKey(certificates_.front(), &S_)))) {
@@ -3325,11 +3340,11 @@ bool Client::AcceptPostHandshake(ByteSpan frame) {
   ticket.age_add = Read32(body.subspan(4u, 4u));
   size_t nonce_length = body[8];
   if (nonce_length > body.size() - 11)
-    return Fail();
+    return Fail(Error::kProtocol, 50);
   auto nonce = body.subspan(9u, nonce_length);
   size_t ticket_length = Read16(body.subspan(9 + nonce_length, 2u));
   if (ticket_length == 0 || ticket_length > body.size() - 11 - nonce_length)
-    return Fail();
+    return Fail(Error::kProtocol, 50);
   auto identity = body.subspan(11 + nonce_length, ticket_length);
   ticket.identity.assign(identity.begin(), identity.end());
   std::map<uint16_t, Bytes> extensions;
@@ -3342,7 +3357,7 @@ bool Client::AcceptPostHandshake(ByteSpan frame) {
     if (type != 42)
       continue;  // NewSessionTicket is extensible; unknown well-formed values.
     if (data.size() != 4)
-      return Fail();
+      return Fail(Error::kProtocol, 50);
     ticket.max_early_data = Read32(data);
   }
   if (ticket.lifetime == 0 || ticket.lifetime > 604800)

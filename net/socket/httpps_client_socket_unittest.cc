@@ -1411,7 +1411,10 @@ TEST_F(HttppsClientSocketTest, CertificateExtensionAlertsDistinguishOfferAndCont
     TestCompletionCallback connected;
     EXPECT_EQ(ERR_SSL_PROTOCOL_ERROR, connected.GetResult(socket->Connect(connected.callback())));
     EXPECT_EQ(peer_.client_finished, 0);
-    EXPECT_EQ(peer_.last_client_alert, type == 15 || type == 43 || type == 0xff02 ? 47 : 110);
+    // RFC 9345 requires unexpected_message for an unsolicited delegated credential.
+    const uint8_t expected_alert = type == 34 ? 10 :
+        (type == 15 || type == 43 || type == 0xff02 ? 47 : 110);
+    EXPECT_EQ(peer_.last_client_alert, expected_alert);
   }
 }
 
