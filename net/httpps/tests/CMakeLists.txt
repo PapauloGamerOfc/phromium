@@ -43,13 +43,19 @@ set(ZSTD_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(ZSTD_BUILD_SHARED OFF CACHE BOOL "" FORCE)
 set(ZSTD_MULTITHREAD_SUPPORT OFF CACHE BOOL "" FORCE)
 add_subdirectory("${CHROMIUM_ROOT}/third_party/zstd/src/build/cmake" zstd EXCLUDE_FROM_ALL)
+# Both drivers exercise the same production objects. The allocation observer
+# belongs only to the erasure driver, never the normal interoperability binary.
+add_library(httpps_test_engine STATIC
+    ../draft01.cc ../lab_pki.cc ../application_auth.cc ../pinning.cc ../bootstrap.cc ../control_profiles.cc ../ffdhe.cc ../certificate_algorithms.cc ../credential_requests.cc ../integrity_only.cc ../native_provider.cc ../transparency.cc ../dnssec.cc ../its_credentials.cc)
+target_compile_definitions(httpps_test_engine PUBLIC PHROMIUM_HTTPPS_STANDALONE PHROMIUM_HTTPPS_TEST_DIAGNOSTICS)
+target_include_directories(httpps_test_engine PUBLIC "${CHROMIUM_ROOT}")
+target_link_libraries(httpps_test_engine PUBLIC crypto zlibstatic httpps_brotli libzstd_static ${CMAKE_DL_LIBS})
 add_executable(httpps_native_test
-    tls_features_test.cc
-    protocol_regression_test.cc
-    native_test.cc pinning_test.cc control_profiles_test.cc integrity_only_test.cc native_provider_test.cc ../draft01.cc ../lab_pki.cc ../application_auth.cc ../pinning.cc ../bootstrap.cc ../control_profiles.cc ../ffdhe.cc ../certificate_algorithms.cc ../credential_requests.cc ../integrity_only.cc ../native_provider.cc ../transparency.cc ../dnssec.cc ../its_credentials.cc)
-target_compile_definitions(httpps_native_test PRIVATE PHROMIUM_HTTPPS_STANDALONE PHROMIUM_HTTPPS_TEST_DIAGNOSTICS)
-target_include_directories(httpps_native_test PRIVATE "${CHROMIUM_ROOT}")
-target_link_libraries(httpps_native_test PRIVATE crypto zlibstatic httpps_brotli libzstd_static ${CMAKE_DL_LIBS})
+    tls_features_test.cc protocol_regression_test.cc
+    native_test.cc pinning_test.cc control_profiles_test.cc integrity_only_test.cc native_provider_test.cc)
+target_link_libraries(httpps_native_test PRIVATE httpps_test_engine)
+add_executable(httpps_secret_erasure_test secret_erasure_test.cc)
+target_link_libraries(httpps_secret_erasure_test PRIVATE httpps_test_engine)
 add_executable(httpps_pki_test pki_test.cc)
 target_include_directories(httpps_pki_test PRIVATE "${CHROMIUM_ROOT}")
 target_link_libraries(httpps_pki_test PRIVATE pki)
@@ -61,10 +67,11 @@ target_compile_definitions(httpps_transparency_test PRIVATE PHROMIUM_HTTPPS_STAN
 target_include_directories(httpps_transparency_test PRIVATE "${CHROMIUM_ROOT}")
 target_link_libraries(httpps_transparency_test PRIVATE crypto)
 if(WIN32)
-  target_link_libraries(httpps_native_test PRIVATE ws2_32)
+  target_link_libraries(httpps_test_engine PUBLIC ws2_32)
 endif()
 enable_testing()
 add_test(NAME tls20_primitives COMMAND httpps_native_test)
+add_test(NAME httpps_secret_erasure COMMAND httpps_secret_erasure_test)
 add_test(NAME httpps_spki_and_https_policy COMMAND httpps_pki_test)
 add_test(NAME httpps_pki_path_builder COMMAND httpps_pki_chain_test)
 add_test(NAME httpps_ct_v2_provider COMMAND httpps_transparency_test)

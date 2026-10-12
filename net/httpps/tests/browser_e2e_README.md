@@ -8,7 +8,7 @@ disables the sandbox, or bypasses a browser certificate error through CDP.
 
 Prerequisites: Python 3.11+, the reference server's `requirements-dev.txt`
 (including the `h2` fixture dependency), and a clean checkout of
-`tls20-server` at `904b8fc03e5f2344fae7f806dfdae5235ce35c23`. The revision is
+`tls20-server` at `ac1889ea7f77cbf8b9ffcf11ce11f93dd4a50dcc`. The revision is
 checked before importing its protocol implementation. No dependencies are
 downloaded by the script.
 
@@ -23,6 +23,13 @@ Use the server and browser from the same migration; the old numbered prototype
 is not wire-compatible with the current spec.
 
 ## Ticket and delegated-credential alert regressions
+
+Secret-lifecycle regressions cover both KeyUpdate directions and rejected
+hybrid key agreements. They check that replacing an application traffic secret
+or abandoning a decapsulated ML-KEM secret clears the old allocation before it
+is released, while valid traffic derivation and hybrid handshakes still work.
+These checks concern native buffers owned by the engine, not erasure of copies
+retained by applications, diagnostic logs or external providers.
 
 The portable protocol regressions verify that malformed NewSessionTicket
 vectors and early-data limits produce `decode_error` (50), never enter the

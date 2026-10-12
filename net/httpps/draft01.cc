@@ -19,6 +19,10 @@
 #include <map>
 #include <utility>
 
+#if !defined(PHROMIUM_HTTPPS_STANDALONE)
+#include "base/memory/stack_allocated.h"
+#endif
+
 #include "third_party/boringssl/src/include/openssl/aead.h"
 #include "third_party/boringssl/src/include/openssl/curve25519.h"
 #include "third_party/boringssl/src/include/openssl/bn.h"
@@ -41,6 +45,25 @@
 
 namespace net::httpps {
 namespace {
+
+// Keep temporary key material covered on every return path. The vector itself
+// must outlive this guard; moving its storage transfers the cleanup obligation.
+class ScopedSecretCleanser {
+#if !defined(PHROMIUM_HTTPPS_STANDALONE)
+  STACK_ALLOCATED();
+#endif
+
+ public:
+  explicit ScopedSecretCleanser(Bytes& secret) : secret_(secret) {}
+  ~ScopedSecretCleanser() {
+    OPENSSL_cleanse(secret_.data(), secret_.size());
+  }
+  ScopedSecretCleanser(const ScopedSecretCleanser&) = delete;
+  ScopedSecretCleanser& operator=(const ScopedSecretCleanser&) = delete;
+
+ private:
+  Bytes& secret_;
+};
 
 ByteSpan Octets(std::string_view value) {
   return StringBytes(value);
@@ -941,8 +964,16 @@ Bytes Client::Label(ByteSpan secret, std::string_view label, ByteSpan context,
 }
 bool Client::DeriveSecret(ByteSpan secret, std::string_view label,
                           ByteSpan context, Bytes* output) const {
-  *output = Label(secret, label, context);
-  return output->size() == SuiteHashLength(suite_);
+  // KeyUpdate derives in place. Read all inputs before erasing the previous
+  // generation, including when the secret or context aliases the destination.
+  auto derived = Label(secret, label, context);
+  ScopedSecretCleanser cleanse_derived(derived);
+  OPENSSL_cleanse(output->data(), output->size());
+  output->clear();
+  if (derived.size() != SuiteHashLength(suite_))
+    return false;
+  output->swap(derived);
+  return true;
 }
 Bytes Client::Finished(ByteSpan secret, ByteSpan transcript) const {
   auto key = Label(secret, "finished", {});
@@ -2261,7 +2292,13 @@ bool Client::TrafficAgreement(uint16_t group, ByteSpan public_key, Bytes* shared
     return FfdheAgreement(group, ec_private_, public_key, shared);
   const bool hybrid = group >= 4587 && group <= 4589;
   const uint16_t classical = group == 4588 ? 29 : group == 4587 ? 23 : group == 4589 ? 24 : group;
-  Bytes kem_shared(MLKEM_SHARED_SECRET_BYTES);
+  Bytes kem_shared(hybrid ? MLKEM_SHARED_SECRET_BYTES : 0);
+  ScopedSecretCleanser cleanse_kem(kem_shared);
+  Bytes agreement;
+  ScopedSecretCleanser cleanse_agreement(agreement);
+  // Concatenating the KEM contribution must not reallocate a buffer already
+  // containing the classical secret and release that allocation without wiping.
+  agreement.reserve((classical == 29 ? 32 : ec_private_.size()) + kem_shared.size());
   auto peer = public_key;
   if (hybrid) {
     const size_t ciphertext_size = group == 4589 ? MLKEM1024_CIPHERTEXT_BYTES : MLKEM768_CIPHERTEXT_BYTES;
@@ -2289,19 +2326,21 @@ bool Client::TrafficAgreement(uint16_t group, ByteSpan public_key, Bytes* shared
     if (peer.size() != 32)
       return false;
     CopySecret(peer, &E_);
-    shared->resize(32);
-    if (E_ == A_ || E_ == B_ || !X25519(shared->data(), b_.data(), E_.data()))
+    agreement.resize(32);
+    if (E_ == A_ || E_ == B_ || !X25519(agreement.data(), b_.data(), E_.data()))
       return false;
-  } else if (!EcAgreement(classical, ec_private_, peer, shared)) {
+  } else if (!EcAgreement(classical, ec_private_, peer, &agreement)) {
     return false;
   }
   if (hybrid) {
     if (group == 4588)
-      shared->insert(shared->begin(), kem_shared.begin(), kem_shared.end());
+      agreement.insert(agreement.begin(), kem_shared.begin(), kem_shared.end());
     else
-      Append(shared, kem_shared);
+      Append(&agreement, kem_shared);
   }
-  OPENSSL_cleanse(kem_shared.data(), kem_shared.size());
+  OPENSSL_cleanse(shared->data(), shared->size());
+  shared->clear();
+  shared->swap(agreement);
   return true;
 }
 
@@ -2633,6 +2672,7 @@ bool Client::AcceptFrame(ByteSpan frame) {
       if (!dhe && (!psk_selected_ || combined))
         return Fail();
       Bytes shared(SuiteHashLength(suite_));
+      ScopedSecretCleanser cleanse_shared(shared);
       if (dhe) {
         if (extensions[51].size() < 5 ||
             Read16(ByteSpan(extensions[51]).subspan(2u, 2u)) != extensions[51].size() - 4)
