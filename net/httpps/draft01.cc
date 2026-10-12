@@ -1235,10 +1235,12 @@ bool Client::AcceptCertificateRequest(ByteSpan frame, bool post_handshake) {
     if (!RequestExtensionAllowed(type, RequestExtensionContext::kCertificateRequest))
       return Fail(Error::kProtocol, 47);
   }
-  // A CR requests OCSP evidence with an empty extension, not the ClientHello
-  // OCSP request structure. Check known syntax even without a local credential.
-  if (extensions.count(5) && !extensions[5].empty())
-    return Fail(Error::kProtocol, 50);
+  // CR requests OCSP/CT evidence with empty extension_data, not a response
+  // or ClientHello OCSP structure. This also covers reconstructed cached CRs
+  // and PHA, even when no local credential will be selected.
+  for (uint16_t type : {5, 18, 52})
+    if (extensions.count(type) && !extensions[type].empty())
+      return Fail(Error::kProtocol, 50);
   client_ocsp_requested_ = extensions.count(5) != 0;
   if (!extensions.count(0xff03) ||
       (client_certificate_type_ == 0 && !extensions.count(50)))

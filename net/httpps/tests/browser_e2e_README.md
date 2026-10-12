@@ -8,7 +8,7 @@ disables the sandbox, or bypasses a browser certificate error through CDP.
 
 Prerequisites: Python 3.11+, the reference server's `requirements-dev.txt`
 (including the `h2` fixture dependency), and a clean checkout of
-`tls20-server` at `219f0a15a6c9d253feec78a6fc6010219aacc7b5`. The revision is
+`tls20-server` at `da399bb040e24120fc4f303c746291a4a9088a1e`. The revision is
 checked before importing its protocol implementation. No dependencies are
 downloaded by the script.
 
@@ -21,6 +21,36 @@ provenance check, never certificate validation. Historical clean-revision
 results do not validate a subsequent optional-profile expansion.
 Use the server and browser from the same migration; the old numbered prototype
 is not wire-compatible with the current spec.
+
+## Empty CT requests and ClientHello extension pairing
+
+Known CT18/52 request extensions require empty `extension_data`. Nonempty
+requests fail with `decode_error` (50) in initial/PHA CertificateRequest,
+including reconstructed cached requests. Application-authenticator requests
+fail locally without closing TLS or consuming the context. This does not
+change CT response encodings: SCT/TransItem lists and the permitted empty CT52
+CertificateEntry remain valid under the existing evidence policy. Unknown
+request extensions remain ignorable. The wire harness now covers 124 combined
+OID/CT cases with and without client credentials; the authenticator peer sends
+42 malformed requests alongside successful identity/refusal controls.
+
+The reference server also rejects unpaired `supported_groups`/`key_share`
+ClientHello extensions with `missing_extension` (109), including PSK-only
+offers. PSK-ke without either extension is still valid. Twelve native initial
+and retry ClientHello controls check that Phromium keeps the pair together
+across PSK modes and early-data offers.
+
+Local Windows validation for this correction passed a full browser/network-test
+build, all 34,794 network tests without retries, seven CTests, 28 ordinary and
+22 provider interoperability commands. The real browser passed 38 end-to-end
+checks and the 40-profile, 54-evidence and 14-client-OCSP matrices under each of
+the default and explicitly enabled network-service sandbox policies. The
+matching server passed 847 tests on both Python 3.11 and 3.12 with all native
+providers and only two Windows-specific skips. An older PSK fixture was updated
+to send the required empty key_share alongside its advisory group list; the
+production validation was not relaxed. Logs use the `ct-pair` prefix under
+`out/Phromium`, `out/httpps-native` and the server's `build` directory. These
+local results do not imply completed cross-platform CI or a formal security proof.
 
 ## Credential request filters, Finished framing and retired secrets
 
@@ -39,7 +69,7 @@ authentication-failure mask for correctly sized invalid proofs. Additional
 regressions cover compressed-certificate framing and codec alerts, duplicate
 extensions, invalid DH shares, and retiring handshake secrets at epoch changes.
 
-Local Windows validation included a complete browser build, seven native CTests,
+Earlier OID-only validation included a complete browser build, seven native CTests,
 28 ordinary and 22 provider interoperability commands, and 88 OID-filter wire
 cases. The actual browser passed 38 cookie/certificate/resumption checks and,
 under both default and explicitly enabled network-service sandbox policies,

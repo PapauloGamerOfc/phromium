@@ -116,6 +116,9 @@ class ProtocolRegressionPeer {
   static void AwaitInitialCertificateRequest(Client& client) {
     client.state_ = Client::State::kCertificate;
   }
+  static void SelectCachedRequest(Client& client) {
+    client.cached_request_selected_ = true;
+  }
   static void PopulateSecrets(Client& client) {
     for (auto* secret : {&client.a_, &client.b_, &client.authenticator_a_,
                          &client.client_verifier_share_, &client.password_context_,
@@ -1362,6 +1365,104 @@ void OidFilterRequestValidation() {
   }
 }
 
+void CertificateTransparencyRequestSyntax() {
+  for (uint16_t type : {18, 52, 0xaaaa}) {
+    for (const Bytes& value : {Bytes{}, Bytes{1}, Bytes{0, 0}, Bytes{0, 3, 0, 1, 0xff}}) {
+      const bool valid = type == 0xaaaa || value.empty();
+      Bytes template_extensions;
+      Extension(&template_extensions, 50, Bytes{0, 2, 8, 7});
+      Extension(&template_extensions, type, value);
+      const auto request_template = Vector16(template_extensions);
+      for (bool pha : {false, true}) {
+        for (bool cached : {false, true}) {
+          ClientOptions options;
+          options.post_handshake_auth = true;
+          if (cached) options.cached_request_templates = {request_template};
+          Client client("example.test", {}, true, options);
+          Check(client.Start(), "CT request fixture starts");
+          ProtocolRegressionPeer::Prepare(client);
+          if (!pha) ProtocolRegressionPeer::AwaitInitialCertificateRequest(client);
+          Bytes body = pha ? Bytes{1, 7} : Bytes{0};
+          if (cached) {
+            ProtocolRegressionPeer::SelectCachedRequest(client);
+            Append(&body, net::httpps::Hash(request_template));
+            Append(&body, Bytes(32, 0x67));
+          } else {
+            Bytes extensions = template_extensions;
+            Extension(&extensions, 0xff03, Bytes(32, 0x67));
+            Append(&body, Vector16(extensions));
+          }
+          const auto frame = Frame(cached ? 252 : 13, body);
+          Bytes record, application;
+          RecordCipher sender(ProtocolRegressionPeer::ReceivingSecret());
+          Check(sender.Seal(frame, 22, &record), "protect ordinary or cached CT request");
+          Check(client.Receive(record, &application) == valid && application.empty(),
+                "CR/PHA and reconstructed cache require empty CT requests, not opaque responses");
+          if (!valid) {
+            CheckAlert(client, 50);
+            Check(ProtocolRegressionPeer::SecretsErased(client), "malformed CT request erases secrets");
+          } else if (pha) {
+            Check(!client.TakeOutput().empty(), "empty CT or unknown offer permits PHA refusal");
+          }
+        }
+      }
+      Client client("example.test", {}, true);
+      Check(client.Start(), "EA CT fixture starts");
+      ProtocolRegressionPeer::Prepare(client);
+      Bytes extensions = template_extensions;
+      Extension(&extensions, 0xff03, Bytes(32, 0x67));
+      Bytes body{1, 7};
+      Append(&body, Vector16(extensions));
+      Bytes response, request;
+      Check(client.AuthenticateClient(Frame(13, body), nullptr, &response) == valid,
+            "EA client request validates CT syntax even for refusal");
+      Check(client.established() && client.TakeFatalAlert().empty() && client.TakeOutput().empty(),
+            "EA request syntax never emits a TLS alert or closes its channel");
+      if (!valid) {
+        extensions.clear();
+        Extension(&extensions, 50, Bytes{0, 2, 8, 7});
+        Extension(&extensions, type, {});
+        Extension(&extensions, 0xff03, Bytes(32, 0x67));
+        body = Bytes{1, 7};
+        Append(&body, Vector16(extensions));
+        Check(client.AuthenticateClient(Frame(13, body), nullptr, &response),
+              "invalid EA client CT request does not consume its context");
+      }
+      Check(client.RequestServerAuthenticator(Bytes{8}, {{type, value}}, &request) == valid,
+            "EA server request requires empty known CT requests but accepts unknown opaque offers");
+      if (!valid)
+        Check(client.RequestServerAuthenticator(Bytes{8}, {{type, {}}}, &request),
+              "invalid EA server CT request does not consume its context");
+      Check(client.CancelAuthenticator(request), "valid EA CT request can be cancelled");
+    }
+  }
+}
+
+void PskHelloGroupSharePair() {
+  for (const auto& modes : {Bytes{0}, Bytes{1}, Bytes{0, 1}}) {
+    for (bool early : {false, true}) {
+      ClientOptions options;
+      options.psk_modes = modes;
+      ExternalPSK psk;
+      psk.identity = Bytes{1}; psk.secret = Bytes(32, 0x70);
+      psk.hostname = "example.test"; psk.max_early_data = 1024;
+      options.external_psks.push_back(psk);
+      Client client("example.test", {}, true, options);
+      Check(client.Start(nullptr, {}, early), "PSK ClientHello starts");
+      auto output = client.TakeOutput();
+      auto first = HelloExtensions(JoinPlaintextRecords(ByteSpan(output).subspan(kPreface.size())));
+      Check(first.count(10) == 1 && first.count(51) == 1 && first.count(41) == 1,
+            "ClientHello1 keeps supported_groups/key_share paired, including PSK-ke");
+      Check(first.count(42) == size_t(early), "PSK early offer control");
+      Check(ReceivePlaintextHandshake(client, CookieRetry()), "PSK cookie-only HRR accepted");
+      auto second = HelloExtensions(JoinPlaintextRecords(client.TakeOutput()));
+      Check(second.count(10) == 1 && second.count(51) == 1 && second.count(41) == 1 &&
+                second.count(42) == 0 && first.at(10) == second.at(10) && first.at(51) == second.at(51),
+            "ClientHello2 preserves group/share pair while rejecting early data");
+    }
+  }
+}
+
 void AuthenticatorServerNameValidation() {
   auto entry = [](std::string_view name, uint8_t type = 0) {
     Bytes value{type};
@@ -1864,6 +1965,8 @@ void RunProtocolRegressionTests() {
   CertificateRequestValidation();
   DelegationRequestDuplicates();
   OidFilterRequestValidation();
+  CertificateTransparencyRequestSyntax();
+  PskHelloGroupSharePair();
   AuthenticatorServerNameValidation();
   KeyUpdates();
   RequestedKeyUpdatePreservesResponse();

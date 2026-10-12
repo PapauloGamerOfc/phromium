@@ -173,10 +173,12 @@ bool ParseRequest(ByteSpan wire, Request* request) {
     return false;
   if (request->extensions.count(0) && !ServerName(request->extensions.at(0)))
     return false;
-  // Both requested directions inherit CR's empty OCSP request. Only a
-  // spontaneous server authenticator inherits the ClientHello request.
-  if (request->extensions.count(5) && !request->extensions.at(5).empty())
-    return false;
+  // Both requested directions use empty OCSP/CT offers, not evidence-response
+  // vectors. Only a spontaneous server authenticator inherits ClientHello's
+  // OCSP structure. Keep this validation before consuming the EA context.
+  for (uint16_t type : {5, 18, 52})
+    if (request->extensions.count(type) && !request->extensions.at(type).empty())
+      return false;
   std::vector<Bytes> authorities;
   if (request->extensions.count(47) &&
       !ParseCertificateAuthorities(request->extensions.at(47), &authorities))

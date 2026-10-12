@@ -189,10 +189,10 @@ void AuthenticatorTest(SocketHandle socket, net::httpps::Client& client,
       // Kept in sync with selection_request_cases() in the Python peer. All
       // malformed requests reuse the valid request's context, including when
       // no credential is selected and the eventual result is a refusal.
-      for (size_t invalid = 0; invalid < 36; ++invalid) {
+      for (size_t invalid = 0; invalid < 42; ++invalid) {
         request = receive();
         Require(!client.AuthenticateClient(request, credential ? &*credential : nullptr, &response),
-                "EA client request rejects malformed selection/OCSP before claiming its context");
+                "EA client request rejects malformed selection/OCSP/CT before claiming its context");
         Require(client.established() && !client.closed() && client.TakeFatalAlert().empty() &&
                     client.TakeOutput().empty(),
                 "EA request syntax failure leaves the underlying TLS connection usable");
@@ -232,6 +232,14 @@ void AuthenticatorTest(SocketHandle socket, net::httpps::Client& client,
     Require(!client.RequestServerAuthenticator(Bytes{10}, {{5, invalid}}, &request),
             "EA server request rejects nonempty OCSP before claiming its context");
   }
+  for (uint16_t type : {18, 52}) {
+    for (const Bytes& invalid : {Bytes{1}, Bytes{0, 0}, Bytes{0, 3, 0, 1, 0xff}}) {
+      Require(!client.RequestServerAuthenticator(Bytes{10}, {{type, invalid}}, &request),
+              "EA server request rejects nonempty CT before claiming its context");
+      Require(client.established() && client.TakeFatalAlert().empty() && client.TakeOutput().empty(),
+              "EA CT syntax rejection leaves the channel usable");
+    }
+  }
   for (const Bytes& invalid : {Bytes{}, Bytes{0}, Bytes{0, 3, 2, 6},
                               Bytes{0, 3, 0, 0, 0},
                               Bytes{0, 8, 5, 6, 3, 0x55, 0x1d, 0x25, 0, 0, 0}}) {
@@ -259,6 +267,8 @@ void AuthenticatorTest(SocketHandle socket, net::httpps::Client& client,
     auto offers = unknown_delegation;
     offers[34] = schemes;
     offers[5] = {};
+    offers[18] = {};
+    offers[52] = {};
     // Well-formed unknown OIDs and their opaque values are still ignorable.
     offers[48] = Bytes{0, 9, 5, 6, 3, 0x2a, 3, 4, 0, 1, 0xff};
     const auto name = requested_names[context - 10];

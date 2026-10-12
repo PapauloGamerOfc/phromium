@@ -37,6 +37,8 @@ def selection_request_cases():
         b"", b"\0", b"\0\0", b"\0\x04\0\x02\x30", b"\0\x04\0\x02\x30\0x",
         b"\0\x03\0\x01\0", b"\0\x04\0\x02\x31\0")]
     malformed += [(5, value) for value in (b"\x01\0\0\0\0", b"\x01", b"\xff")]
+    malformed += [(kind, value) for kind in (18, 52)
+                  for value in (b"\x01", b"\0\0", b"\0\x03\0\x01\xff")]
     # Unknown extension semantics remain ignorable even with opaque values;
     # recognized KU/EKU filters retain both presence-only and DER value forms.
     valid = (vector(b""), vector(entry(unknown, b"\xff")), vector(entry(ku)),
@@ -65,7 +67,7 @@ async def main(args):
     status = b"\x01" + len(status).to_bytes(3, "big") + status
     credential = client_credentials(ed25519.Ed25519PrivateKey.generate())
     malformed_requests, valid_filters = selection_request_cases()
-    assert len(malformed_requests) == 36  # AuthenticatorTest's receive count.
+    assert len(malformed_requests) == 42  # AuthenticatorTest's receive count.
     password_policy = None
     if args.password_provider:
         from tls20_server import pake_handshake
@@ -118,12 +120,14 @@ async def main(args):
                                 assert identity.chain == tuple(credential.chain_der)
                                 assert request.role == "client"
                                 assert dict(request.extensions)[5] == b""
+                                assert dict(request.extensions)[18] == dict(request.extensions)[52] == b""
                                 return AuthorizedIdentity(credential.private_key.public_key(), "authorized-loopback-client")
                             from tls20_server import messages as m
                             for index, schemes in enumerate(((0x0a0a,), (0xaaaa,), (0xfe00,), (0x0a0a, 0xfe01))):
                                 request = manager.request(context=b"client-first" + bytes((index,)), extra_extensions=(
                                     (34, m._vec(b"".join(value.to_bytes(2, "big") for value in schemes), 2)),
                                     (0xff04, m._vec(b"\x08\x07", 2)), (5, b""),
+                                    (18, b""), (52, b""),
                                     (48, valid_filters[index]),
                                     (47, m._vec(m._vec(ca.subject.public_bytes(), 2), 2))))
                                 if index == 0:
@@ -147,6 +151,7 @@ async def main(args):
                                 offers = dict(parse_request(request).extensions)
                                 assert m._u16_list(offers[34]) == schemes
                                 assert offers[5] == b""
+                                assert offers[18] == offers[52] == b""
                                 # Validate syntax without normalizing transcript bytes or
                                 # imposing a new identity policy on this permissive fixture.
                                 assert offers[0] == m._vec(b"\0" + m._vec(name, 2), 2)
@@ -247,7 +252,7 @@ async def main(args):
                     if handlers: await asyncio.wait_for(asyncio.gather(*tuple(handlers), return_exceptions=True), 4)
                     await server.wait_closed()
     if password_policy: provider.close()
-    print(f"{2 if password_policy else 6} native application-authenticator cases: client/server MAC, 36 malformed requests with credential/refusal controls, recognized/unknown OID filters, malformed SNI rejected before context use, optional/case-preserving SNI preferences, request/response evidence framing, 46 genuine-proof envelope checks per connection, GREASE/unknown delegation fallback, refusals, spontaneous identities, consumed contexts, continued application traffic and channel binding passed; PAKE={password_policy is not None}")
+    print(f"{2 if password_policy else 6} native application-authenticator cases: client/server MAC, 42 malformed requests with credential/refusal controls, empty CT18/52 request validation in both directions, recognized/unknown OID filters, malformed SNI rejected before context use, optional/case-preserving SNI preferences, request/response evidence framing, 46 genuine-proof envelope checks per connection, GREASE/unknown delegation fallback, refusals, spontaneous identities, consumed contexts, continued application traffic and channel binding passed; PAKE={password_policy is not None}")
 
 
 if __name__ == "__main__":

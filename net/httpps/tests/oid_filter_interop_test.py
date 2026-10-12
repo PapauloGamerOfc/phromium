@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # Copyright 2026 The Phromium Authors. BSD-style license: see LICENSE.
-"""Validate CR/PHA OID filters before identity selection, including empty replies."""
+"""Validate CR/PHA selection and CT request syntax, including empty replies."""
 import argparse
 import asyncio
 from pathlib import Path
@@ -32,7 +32,7 @@ async def main(args):
     credentials, ca = generate_lab_credentials('localhost')
     credential = client_credentials(ed25519.Ed25519PrivateKey.generate())
     unknown, ku, eku = (bytes.fromhex(value) for value in ('06022a03', '0603551d0f', '0603551d25'))
-    cases = (
+    oid_cases = (
         ('empty-list', b'\0\0', 0),
         ('unknown', filters(unknown), 0),
         ('unknown-opaque-value', filters(unknown, b'\xff\0\x80'), 0),
@@ -56,6 +56,13 @@ async def main(args):
         ('incomplete-eku-oid', filters(eku, bytes.fromhex('3003060180')), 50),
         ('forbidden-any-eku', filters(eku, bytes.fromhex('30060604551d2500')), 47),
     )
+    cases = tuple((label, 48, encoded, expected) for label, encoded, expected in oid_cases)
+    cases += tuple((f'ct-{kind}-{label}', kind, encoded, expected) for kind in (18, 52)
+                   for label, encoded, expected in (
+                       ('empty-request', b'', 0), ('nonempty-request', b'\x01', 50),
+                       ('empty-response-vector', b'\0\0', 50),
+                       ('response-in-request', b'\0\x03\0\x01\xff', 50)))
+    cases += (('unknown-opaque-request', 0xaaaa, b'\xff\0\x80', 0),)
     checks = 0
     with tempfile.TemporaryDirectory(prefix='httpps-oid-filter-') as directory:
         root, leaf, key = (Path(directory)/name for name in ('root.der', 'client.der', 'client.raw'))
@@ -64,7 +71,7 @@ async def main(args):
         key.write_bytes(credential.private_key.private_bytes_raw())
         for selected in (False, True):
             for pha in (False, True):
-                for label, encoded, expected in cases:
+                for label, extension_type, encoded, expected in cases:
                     case = (selected, pha, label)
                     errors, requests, identities, channels, generated = [], [], [], [], []
                     futures, handlers, cleanup_errors = [], set(), []
@@ -73,8 +80,8 @@ async def main(args):
 
                     def inject(context, share, algorithms=m.CERT_ALGORITHMS, *, extra_extensions=()):
                         if bool(context) == pha:
-                            extra_extensions = tuple(pair for pair in extra_extensions if pair[0] != 48)
-                            extra_extensions += ((48, encoded),)
+                            extra_extensions = tuple(pair for pair in extra_extensions if pair[0] != extension_type)
+                            extra_extensions += ((extension_type, encoded),)
                             generated.append(context)
                         return original(context, share, algorithms, extra_extensions=extra_extensions)
 
@@ -172,8 +179,8 @@ async def main(args):
                         if handlers:
                             await asyncio.wait_for(asyncio.gather(*tuple(handlers), return_exceptions=True), 4)
                         await listener.wait_closed()
-                print('PASS OID filters selected', selected, 'PHA', pha, flush=True)
-    print(f'{checks} initial/PHA OID-filter wire cases passed with selected credentials and ordinary refusals')
+                print('PASS selection/CT requests selected', selected, 'PHA', pha, flush=True)
+    print(f'{checks} initial/PHA OID-filter/CT request wire cases passed with selected credentials and ordinary refusals')
 
 
 if __name__ == '__main__':
