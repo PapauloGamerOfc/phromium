@@ -1354,6 +1354,16 @@ int main(int argc, char** argv) {
                nullptr, false, false, false, nullptr, false, false, ChainRejection::kNone,
                static_cast<uint8_t>(expected));
   }
+  if (argc == 7 && std::string_view(argv[1]) == "--reject-ee-alert") {
+    net::httpps::ClientOptions options;
+    if (std::string_view(argv[5]) == "heartbeat") options.heartbeat_mode = 1;
+    const unsigned expected = ParseUnsigned(argv[6]);
+    Require(expected == 47 || expected == 50 || expected == 110,
+            "explicit encrypted-extension rejection alert");
+    return Get(argv[2], argv[3], argv[4], false, false, true, nullptr, nullptr, options,
+               nullptr, false, false, false, nullptr, false, false, ChainRejection::kNone,
+               static_cast<uint8_t>(expected));
+  }
   if (argc == 5 && (std::string_view(argv[1]) == "--reject-long-chain" ||
                    std::string_view(argv[1]) == "--reject-long-chain-reset")) {
     return Get(argv[2], argv[3], argv[4], false, false, true, nullptr, nullptr, {},

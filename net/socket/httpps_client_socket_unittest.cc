@@ -336,6 +336,7 @@ class Peer : public SocketDataProvider {
   Bytes client_pin;
   std::optional<Bytes> pin_response;
   Bytes initial_cr_extra;
+  Bytes encrypted_extensions_extra;
   uint8_t last_client_alert = 0;
   std::optional<httpps::SessionTicket> resume_ticket;
   IoMode mode = ASYNC;
@@ -589,6 +590,9 @@ class Peer : public SocketDataProvider {
       extensions[1] += 4;
       extensions.insert(extensions.end(), {0, 42, 0, 0});
     }
+    Append(extensions, encrypted_extensions_extra);
+    extensions[0] = static_cast<uint8_t>((extensions.size() - 2) >> 8);
+    extensions[1] = static_cast<uint8_t>(extensions.size() - 2);
     Bytes flight = Frame(8, extensions);
     Append(transcript_, flight);
     if (!resumed) {
@@ -1320,6 +1324,44 @@ TEST_F(HttppsClientSocketTest, PartialAsyncHandshakeAndApplication) {
   EXPECT_EQ("world", std::string(buffer->data(), 5));
   result = socket->Read(buffer.get(), 100, read.callback());
   EXPECT_EQ(0, read.GetResult(result));
+}
+
+TEST_F(HttppsClientSocketTest, EncryptedExtensionAlertsDistinguishMissingOffer) {
+  struct Case { uint16_t type; Bytes value; bool offered; uint8_t alert; };
+  const Case cases[] = {{0xfafa, {}, false, 110}, {15, {1}, false, 110},
+                        {28, {0, 64}, false, 110}, {15, {0}, true, 47},
+                        {15, {}, true, 47}, {15, {1, 1}, true, 47}};
+  peer_.write_chunk = 65536;
+  for (const auto& test : cases) {
+    SCOPED_TRACE(test.type);
+    peer_.encrypted_extensions_extra.clear();
+    U16(peer_.encrypted_extensions_extra, test.type);
+    U16(peer_.encrypted_extensions_extra, test.value.size());
+    Append(peer_.encrypted_extensions_extra, test.value);
+    httpps::ClientOptions options;
+    if (test.offered) options.heartbeat_mode = 1;
+    auto socket = Make(true, nullptr, std::nullopt, false, options);
+    TestCompletionCallback connected;
+    EXPECT_EQ(ERR_SSL_PROTOCOL_ERROR, connected.GetResult(socket->Connect(connected.callback())));
+    EXPECT_EQ(peer_.client_finished, 0);
+    EXPECT_EQ(peer_.last_client_alert, test.alert);
+  }
+}
+
+TEST_F(HttppsClientSocketTest, MisplacedEncryptedExtensionsKeepIllegalParameter) {
+  peer_.write_chunk = 65536;
+  for (uint16_t type : {2, 3, 4, 5, 13, 17, 18, 21, 27, 29, 30, 31, 33, 34,
+                        41, 43, 44, 45, 47, 48, 49, 50, 51, 52, 59, 0xff02, 0xff03, 0xff04}) {
+    SCOPED_TRACE(type);
+    peer_.encrypted_extensions_extra.clear();
+    U16(peer_.encrypted_extensions_extra, type);
+    U16(peer_.encrypted_extensions_extra, 0);
+    auto socket = Make();
+    TestCompletionCallback connected;
+    EXPECT_EQ(ERR_SSL_PROTOCOL_ERROR, connected.GetResult(socket->Connect(connected.callback())));
+    EXPECT_EQ(peer_.client_finished, 0);
+    EXPECT_EQ(peer_.last_client_alert, 47);
+  }
 }
 
 TEST_F(HttppsClientSocketTest, KnownExtensionsAreRejectedInCertificateRequest) {

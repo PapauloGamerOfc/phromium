@@ -1125,6 +1125,7 @@ void RetrospectiveLimits() {
         else
           options.record_size_limit = 64;
         Client client("example.test", {}, true, options);
+        Check(client.Start(), "record-limit test builds the actual extension offer");
         ProtocolRegressionPeer::Prepare(client, true);
         Bytes extensions;
         Extension(&extensions, mfl ? 1 : 28, mfl ? Bytes{1} : Bytes{0, 64});

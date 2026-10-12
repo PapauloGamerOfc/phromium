@@ -41,7 +41,7 @@ jobs:
           set -euo pipefail
           git submodule update --init --depth 1 third_party/boringssl/src third_party/zstd/src
           git clone --no-checkout https://github.com/PapauloGamerOfc/tls20-server.git out/reference-server
-          git -C out/reference-server checkout --detach b7a04c1041319fc17010a96d908c61472adc0cc4
+          git -C out/reference-server checkout --detach d5ae7a7f156ddc5759c23f563b4fd6d9b7d5c77a
           git clone --no-checkout https://github.com/PapauloGamerOfc/tls20-spec.git out/reference-spec
           git -C out/reference-spec checkout --detach dee31da9826e10bd590f58acc0f9f46143505fd1
           python -m pip install -r out/reference-server/requirements-dev.txt
@@ -51,6 +51,8 @@ jobs:
         run: cmake --build out/httpps-native --config Release --parallel 3
       - name: Primitive tests
         run: ctest --test-dir out/httpps-native -C Release --output-on-failure
+      - name: Interoperability harness regression tests
+        run: python net/httpps/tests/interop_runtime_unittest.py -v
       - name: Build explicit optional providers from pinned permissive sources
         run: |
           rustup toolchain install 1.98.0 --profile minimal --no-self-update
@@ -81,6 +83,7 @@ jobs:
           python net/httpps/tests/pha_interop_test.py --native "$executable" --server-source out/reference-server --cache
           python net/httpps/tests/compression_interop_test.py --native "$executable" --server-source out/reference-server
           python net/httpps/tests/compression_alert_interop_test.py --native "$executable" --server-source out/reference-server
+          python net/httpps/tests/extension_alert_interop_test.py --native "$executable" --server-source out/reference-server
           python net/httpps/tests/authenticator_interop_test.py --native "$executable" --server-source out/reference-server
           python net/httpps/tests/bootstrap_interop_test.py --native "$executable" --server-source out/reference-server
           python net/httpps/tests/pinning_interop_test.py --native "$executable" --server-source out/reference-server

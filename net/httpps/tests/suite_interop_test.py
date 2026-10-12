@@ -9,6 +9,8 @@ from pathlib import Path
 import sys
 import tempfile
 
+from interop_runtime import run, start_process
+
 
 async def main(args):
     sys.path.insert(0, str(args.server_source.resolve()))
@@ -60,25 +62,33 @@ async def main(args):
                         errors.append(repr(error))
                     finally:
                         writer.close()
-                        await writer.wait_closed()
-                        handlers.discard(task)
+                        try:
+                            await asyncio.wait_for(writer.wait_closed(), 2)
+                        except TimeoutError as error:
+                            errors.append(f"writer cleanup timeout: {error!r}")
+                            writer.transport.abort()
+                        except (ConnectionError, OSError) as error:
+                            errors.append(f"writer cleanup failed: {error!r}")
+                        finally:
+                            handlers.discard(task)
 
                 server = await asyncio.start_server(peer, "127.0.0.1", 0)
                 try:
                     port = str(server.sockets[0].getsockname()[1])
                     arguments = (["--get-gost", "localhost", port, str(root), str(args.native_provider.resolve()), str(args.gost_module.resolve()), f"{suite:x}", str(group)] if args.gost_module else ["--get-native-provider", "localhost", port, str(root), str(args.native_provider), str(group), f"{suite:x}"]
                                  if provider else ["--get-suite-resume", f"{suite:x}", str(group), "localhost", port, str(root)])
-                    process = await asyncio.create_subprocess_exec(
+                    process = await start_process(
                         str(args.native.resolve()), *arguments,
                         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
                     try:
                         output, error = await asyncio.wait_for(process.communicate(), 100)
                     except BaseException:
-                        process.kill()
+                        if process.returncode is None:
+                            process.kill()
                         await process.wait()
                         raise
                     if handlers:
-                        await asyncio.gather(*handlers)
+                        await asyncio.wait_for(asyncio.gather(*handlers), 32)
                     assert process.returncode == 0, (suite, group, error, errors)
                     assert not errors, (suite, group, errors)
                     assert output.count(b"HTTP/1.1 200 OK") == 3
@@ -86,6 +96,10 @@ async def main(args):
                     print(f"suite={suite:04x} group={group}: full/resume/early/KU passed", flush=True)
                 finally:
                     server.close()
+                    for task in tuple(handlers):
+                        task.cancel()
+                    if handlers:
+                        await asyncio.wait_for(asyncio.gather(*tuple(handlers), return_exceptions=True), 4)
                     await server.wait_closed()
     print(f"{len(suites) * len(groups) * 3} native negotiated-suite/group connections passed")
 
@@ -97,4 +111,4 @@ if __name__ == "__main__":
     parser.add_argument("--ffdhe", action="store_true")
     parser.add_argument("--native-provider", type=Path)
     parser.add_argument("--gost-module", type=Path)
-    asyncio.run(main(parser.parse_args()))
+    run(main(parser.parse_args()))

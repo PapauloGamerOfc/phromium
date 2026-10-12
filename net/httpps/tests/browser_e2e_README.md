@@ -8,7 +8,7 @@ disables the sandbox, or bypasses a browser certificate error through CDP.
 
 Prerequisites: Python 3.11+, the reference server's `requirements-dev.txt`
 (including the `h2` fixture dependency), and a clean checkout of
-`tls20-server` at `b7a04c1041319fc17010a96d908c61472adc0cc4`. The revision is
+`tls20-server` at `d5ae7a7f156ddc5759c23f563b4fd6d9b7d5c77a`. The revision is
 checked before importing its protocol implementation. No dependencies are
 downloaded by the script.
 
@@ -44,6 +44,39 @@ checks encrypted native-client alerts against a wire peer for all three codecs:
 invalid payload/length yields `bad_certificate` (42), while malformed envelopes
 and unoffered algorithms keep their distinct errors. Positive controls require
 an established connection and exchanged application data.
+
+## EncryptedExtensions offers and OCSP responder rollover: 2026-10-12
+
+`extension_alert_interop_test.py` checks the actual encrypted fatal alert:
+an unoffered response in EncryptedExtensions is `unsupported_extension` (110),
+while recognized extensions in a prohibited message remain
+`illegal_parameter` (47). Offered but invalid content and malformed framing
+keep their distinct errors. Positive controls complete the handshake and HTTP
+exchange; negative controls must not produce Finished or application data.
+
+The browser evidence suite includes private-CA and DANE-TA OCSP responses with
+multiple authorized responder certificates sharing a subject name during key
+rollover. It covers both auxiliary-list orders, responder-name/key identifiers,
+irrelevant expired/unauthorized candidates and invalid actual signers. Successful
+cases must also resume; name equality alone never authorizes a response.
+
+The Windows browser and integrated network-test binaries were rebuilt. All
+34,789 integrated network tests passed with retries disabled, as did six portable
+CTest targets, 24 ordinary interoperability commands and 19 optional-provider
+commands. Actual-browser checks passed: 38 end-to-end assertions, plus 54
+evidence cases, 40 profile cases and 14 client-OCSP cases under each of the
+default and explicitly enabled network-sandbox policies. The 15 browser-harness
+and nine branding tests passed.
+
+The suite, signature-profile and extension-alert interop harnesses use selector
+networking on Windows to avoid a Proactor shutdown race; other platforms retain
+their asyncio subprocess implementation. Six helper regressions cover subprocess
+output, deadlines, cleanup and fatal callback errors, and passed on Python 3.11
+and 3.12. Cleanup timeouts and unexpected event-loop exceptions fail the tests.
+Reports are retained under `out/httpps-native/audit-fixes-*`,
+`out/Phromium/audit-fixes-*` and `out/ee-alert-evidence-all-*`. These are local
+Windows results, not a claim that remote Linux/macOS CI or all Chromium tests
+have run locally.
 
 ## Requested authenticator OCSP semantics: 2026-10-12
 

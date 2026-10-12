@@ -7,6 +7,8 @@ from pathlib import Path
 import sys
 import tempfile
 
+from interop_runtime import run, start_process
+
 
 async def main(args):
     sys.path.insert(0, str(args.server_source.resolve()))
@@ -88,7 +90,7 @@ async def main(args):
                     parent_file, grant_file = Path(directory) / "parent.der", Path(directory) / "grant.bin"
                     parent_file.write_bytes(certificate)
                     grant_file.write_bytes(selected_grant)
-                    check = await asyncio.create_subprocess_exec(str(args.native.resolve()), "--check-delegated-credential",
+                    check = await start_process(str(args.native.resolve()), "--check-delegated-credential",
                         str(parent_file), str(root_file), str(grant_file), str(args.provider.resolve()),
                         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
                     try:
@@ -102,7 +104,7 @@ async def main(args):
                 # Deliberately omit the issuer: algorithm selection must use the
                 # validated path, not insist that the peer sends our trust root.
                 credentials = Credentials([certificate], fixture.proof_key, delegation=selected_grant)
-                store, tasks, seen, errors = TicketStore(), set(), [], []
+                store, tasks, seen, errors, cleanup_errors = TicketStore(), set(), [], [], []
 
                 async def peer(reader, writer):
                     task = asyncio.current_task()
@@ -124,14 +126,17 @@ async def main(args):
                     finally:
                         writer.close()
                         try:
-                            await writer.wait_closed()
+                            await asyncio.wait_for(writer.wait_closed(), 2)
+                        except TimeoutError as error:
+                            cleanup_errors.append(error)
+                            writer.transport.abort()
                         except (ConnectionError, OSError):
                             pass
                         tasks.discard(task)
 
                 listener = await asyncio.start_server(peer, "127.0.0.1", 0)
                 try:
-                    process = await asyncio.create_subprocess_exec(str(args.native.resolve()), "--get-public-signature",
+                    process = await start_process(str(args.native.resolve()), "--get-public-signature",
                         "example.test", str(listener.sockets[0].getsockname()[1]), str(root_file), str(args.provider.resolve()),
                         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
                     try:
@@ -142,7 +147,8 @@ async def main(args):
                         await process.wait()
                         raise
                     if tasks:
-                        await asyncio.gather(*tasks)
+                        await asyncio.wait_for(asyncio.gather(*tasks), 12)
+                    assert not cleanup_errors, (hex(scheme), case, cleanup_errors)
                     if case in ("certificate", "delegated"):
                         assert process.returncode == 0 and not errors, (hex(scheme), case, output, error, errors)
                         assert seen == [(False, False), (True, False), (True, True)], seen
@@ -164,4 +170,4 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("native", "server-source", "provider"):
         parser.add_argument("--" + name, type=Path, required=True)
-    asyncio.run(main(parser.parse_args()))
+    run(main(parser.parse_args()))

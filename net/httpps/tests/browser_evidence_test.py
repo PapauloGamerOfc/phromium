@@ -55,6 +55,8 @@ def material(feature):
 
 
 def ocsp_fixture(leaf, root, ca, kind):
+    if kind.startswith("rollover-"):
+        return ocsp_rollover_fixture(leaf, root, ca, kind)
     from cryptography import x509
     from cryptography.hazmat.primitives import hashes, serialization
     from cryptography.hazmat.primitives.asymmetric import ec
@@ -87,6 +89,56 @@ def ocsp_fixture(leaf, root, ca, kind):
     return b"\x01" + len(response).to_bytes(3, "big") + response, next_update
 
 
+def ocsp_rollover_fixture(leaf, issuer, ca, kind):
+    """Same responder DN, distinct keys: only an authorized actual signer counts."""
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from cryptography.x509 import ocsp
+    from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
+    now = datetime.now(timezone.utc)
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "OCSP responder rollover")])
+    keys = [ec.generate_private_key(ec.SECP256R1()) for _ in range(2)]
+    certs = []
+    for index, key in enumerate(keys):
+        unauthorized = ((index == 0 and kind == "rollover-unauthorized-first") or
+                        (index == 1 and kind == "rollover-signer-unauthorized"))
+        expired = ((index == 0 and kind == "rollover-expired-first") or
+                   (index == 1 and kind == "rollover-signer-stale"))
+        builder = (x509.CertificateBuilder().subject_name(name).issuer_name(issuer.subject)
+            .public_key(key.public_key()).serial_number(x509.random_serial_number())
+            .not_valid_before(now-timedelta(days=2))
+            .not_valid_after(now+timedelta(days=-1 if expired else 1))
+            .add_extension(x509.BasicConstraints(False, None), True)
+            .add_extension(x509.KeyUsage(True,False,False,False,False,False,False,False,False), True))
+        if not unauthorized:
+            builder = builder.add_extension(x509.ExtendedKeyUsage([ExtendedKeyUsageOID.OCSP_SIGNING]), False)
+        certs.append(builder.sign(ca, hashes.SHA256()))
+    assert certs[0].subject == certs[1].subject
+    assert certs[0].public_key().public_numbers() != certs[1].public_key().public_numbers()
+    next_update = now+timedelta(hours=1)
+    response = (ocsp.OCSPResponseBuilder().add_response(leaf, issuer, hashes.SHA256(),
+        ocsp.OCSPCertStatus.GOOD, now-timedelta(minutes=1), next_update, None, None)
+        .responder_id(ocsp.OCSPResponderEncoding.HASH if kind == "rollover-by-key" else
+                      ocsp.OCSPResponderEncoding.NAME, certs[1])
+        .certificates(certs[::-1] if kind == "rollover-new-first" else certs)
+        .sign(keys[1], hashes.SHA256()))
+    # Check fixture integrity independently of the Python verifier under test:
+    # both are issuer-signed, but only the second key signed this OCSP response.
+    for cert in certs:
+        cert.verify_directly_issued_by(issuer)
+    certs[1].public_key().verify(response.signature, response.tbs_response_bytes,
+                               ec.ECDSA(response.signature_hash_algorithm))
+    encoded = response.public_bytes(serialization.Encoding.DER)
+    if kind == "rollover-bad-signature":
+        # Embedded certificates follow the OCSP signature. Mutate the response
+        # signature itself, not an unrelated trailing certificate signature.
+        assert encoded.count(response.signature) == 1
+        offset = encoded.index(response.signature) + len(response.signature) - 1
+        encoded = encoded[:offset] + bytes((encoded[offset] ^ 1,)) + encoded[offset+1:]
+    return b"\x01" + len(encoded).to_bytes(3, "big") + encoded, next_update
+
+
 async def run(args, provider_directory):
     sys.path.insert(0, str(args.server_source.resolve()))
     from cryptography.hazmat.primitives import serialization
@@ -104,6 +156,9 @@ async def run(args, provider_directory):
     cases += [f"{trust}-ocsp-{kind}" for trust in ("private", "dane") for kind in
               ("good", "missing", "bad-signature", "wrong-certid", "stale", "revoked", "unknown",
                "unauthorized", "nonce-good", "nonce-mismatch", "expires")]
+    cases += [f"{trust}-ocsp-rollover-{kind}" for trust in ("private", "dane") for kind in
+              ("old-first", "new-first", "by-key", "expired-first", "unauthorized-first",
+               "bad-signature", "signer-unauthorized", "signer-stale")]
     cases += ["dane-ct-omitted-issuer", "private-sct-required"]
     if args.case:
         assert set(args.case) <= set(cases), "Unknown evidence case"

@@ -2634,7 +2634,20 @@ bool Client::AcceptFrame(ByteSpan frame) {
       uint8_t extension_alert;
       if (!Extensions(body, &extensions, &extension_alert))
         return Fail(Error::kProtocol, extension_alert);
-      if (extensions.count(43)) return Fail(Error::kProtocol, 47);
+      for (const auto& [type, unused] : extensions) {
+        // Recognized extensions in the wrong message retain illegal_parameter.
+        // Otherwise a response needs an actual offer in this connection's CH,
+        // including when the type is unknown (RFC 9846 section 4.3).
+        switch (type) {
+          case 2: case 3: case 4: case 5: case 13: case 17: case 18: case 21:
+          case 27: case 29: case 30: case 31: case 33: case 34: case 41:
+          case 43: case 44: case 45: case 47: case 48: case 49: case 50:
+          case 51: case 52: case 59: case 0xff02: case 0xff03: case 0xff04:
+            return Fail(Error::kProtocol, 47);
+        }
+        if (!offered_features_.count(type))
+          return Fail(Error::kProtocol, 110);
+      }
       if (!AppendTranscript(frame)) return Fail(Error::kProtocol, 50);
       if (options_.signaling && !options_.signaling->Validate(extensions))
         return Fail();
