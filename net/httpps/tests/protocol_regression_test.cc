@@ -588,6 +588,46 @@ void HelloResponseSyntax() {
   }
 }
 
+void HelloSessionSyntax() {
+  struct Case { uint8_t declared; size_t present; uint8_t alert; };
+  const Case cases[] = {
+      {0, 0, 0}, {1, 1, 47}, {32, 32, 47},
+      {33, 33, 50}, {255, 0, 50}, {32, 0, 50}};
+  for (bool retry : {false, true}) {
+    for (const auto& test : cases) {
+      Client client("example.test", {}, true);
+      Check(client.Start(), "session-vector fixture starts with empty session ID");
+      client.TakeOutput();
+      const auto baseline = CookieRetry();
+      Bytes body(baseline.begin() + 4, baseline.begin() + 42), extensions;
+      Extension(&extensions, 43, Bytes{4, 0});
+      if (retry) {
+        Extension(&extensions, 44, Bytes{0, 1, 7});
+      } else {
+        std::fill(body.begin() + 2, body.begin() + 34, 0x12);
+        Secret key, private_key;
+        X25519_keypair(key.data(), private_key.data());
+        Bytes share{0, 29};
+        Append(&share, Vector16(key));
+        Extension(&extensions, 51, share);
+      }
+      Append(&body, Vector16(extensions));
+      body[34] = test.declared;
+      body.insert(body.begin() + 35, test.present, 0x17);
+      // Keep the length byte but truncate the vector even if a normal SH
+      // would have enough extension bytes to be mistaken for its contents.
+      if (test.declared == 32 && test.present == 0)
+        body.resize(40);
+      Check(ReceivePlaintextHandshake(client, Frame(2, body)) == (test.alert == 0),
+            "SH and HRR distinguish session-vector framing from echo mismatch");
+      if (test.alert)
+        CheckAlert(client, test.alert, false);
+      else
+        Check(client.TakeFatalAlert().empty(), "empty session echo remains valid");
+    }
+  }
+}
+
 Bytes HelloPsk(ByteSpan hello) {
   const auto extensions = HelloExtensions(hello);
   Check(extensions.count(41), "ClientHello offers PSK");
@@ -1471,6 +1511,7 @@ void RunProtocolRegressionTests() {
   VersionAlerts();
   HelloResponseOffers();
   HelloResponseSyntax();
+  HelloSessionSyntax();
   RetryGroups();
   RetryCookieBounds();
   RetryTicketAges();

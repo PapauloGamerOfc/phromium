@@ -126,6 +126,8 @@ struct NativeProvider::Impl {
   int (*OSSL_PARAM_BLD_push_utf8_string)(void*, const char*, const char*, size_t) = nullptr;
   int (*OSSL_PARAM_BLD_push_octet_string)(void*, const char*, const void*, size_t) = nullptr;
   void* (*OSSL_PARAM_BLD_to_param)(void*) = nullptr;
+  void* (*OSSL_PARAM_locate)(void*, const char*) = nullptr;
+  int (*OSSL_PARAM_get_octet_string_ptr)(const void*, const void**, size_t*) = nullptr;
   void (*OSSL_PARAM_free)(void*) = nullptr;
   void* (*EVP_CIPHER_fetch)(void*, const char*, const char*) = nullptr;
   void (*EVP_CIPHER_free)(void*) = nullptr;
@@ -216,6 +218,7 @@ struct NativeProvider::Impl {
     LOAD(EVP_KDF_CTX_new); LOAD(EVP_KDF_CTX_free); LOAD(EVP_KDF_derive);
     LOAD(OSSL_PARAM_BLD_new); LOAD(OSSL_PARAM_BLD_free); LOAD(OSSL_PARAM_BLD_push_utf8_string);
     LOAD(OSSL_PARAM_BLD_push_octet_string); LOAD(OSSL_PARAM_BLD_to_param); LOAD(OSSL_PARAM_free);
+    LOAD(OSSL_PARAM_locate); LOAD(OSSL_PARAM_get_octet_string_ptr);
     LOAD(EVP_CIPHER_fetch); LOAD(EVP_CIPHER_free); LOAD(EVP_CIPHER_CTX_new); LOAD(EVP_CIPHER_CTX_free);
     LOAD(EVP_CIPHER_CTX_ctrl); LOAD(EVP_EncryptInit_ex2); LOAD(EVP_DecryptInit_ex2);
     LOAD(EVP_EncryptUpdate); LOAD(EVP_DecryptUpdate); LOAD(EVP_EncryptFinal_ex); LOAD(EVP_DecryptFinal_ex);
@@ -591,7 +594,19 @@ Bytes NativeProvider::Sm3Expand(ByteSpan secret, ByteSpan info, size_t length) c
       api.OSSL_PARAM_BLD_push_octet_string(builder.get(), "key", secret.data(), secret.size()) != 1 ||
       api.OSSL_PARAM_BLD_push_octet_string(builder.get(), "info", info.data(), info.size()) != 1)
     return {};
-  Handle parameters(api.OSSL_PARAM_BLD_to_param(builder.get()), api.OSSL_PARAM_free);
+  // BLD_to_param copies octet strings into its allocation. OSSL_PARAM_free
+  // alone does not wipe an ordinary allocation, including its copy of the PRK.
+  // Keep that copy only for derivation and erase it on every exit path.
+  const auto erase_parameters = [locate = api.OSSL_PARAM_locate,
+      octets = api.OSSL_PARAM_get_octet_string_ptr, release = api.OSSL_PARAM_free](void* parameters) {
+    const void* key = nullptr;
+    size_t size = 0;
+    if (const auto* field = locate(parameters, "key"); field && octets(field, &key, &size) == 1)
+      OPENSSL_cleanse(const_cast<void*>(key), size);
+    release(parameters);
+  };
+  std::unique_ptr<void, decltype(erase_parameters)> parameters(
+      api.OSSL_PARAM_BLD_to_param(builder.get()), erase_parameters);
   Bytes output(length);
   if (!parameters || api.EVP_KDF_derive(context.get(), output.data(), output.size(), parameters.get()) != 1) {
     OPENSSL_cleanse(output.data(), output.size());

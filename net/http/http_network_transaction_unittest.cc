@@ -128,6 +128,7 @@
 #include "net/ssl/ssl_cert_request_info.h"
 #include "net/ssl/ssl_config.h"
 #include "net/ssl/ssl_config_service.h"
+#include "net/ssl/ssl_connection_status_flags.h"
 #include "net/ssl/ssl_info.h"
 #include "net/ssl/ssl_private_key.h"
 #include "net/ssl/test_ssl_config_service.h"
@@ -27159,6 +27160,87 @@ TEST_P(HttpNetworkTransactionTest, ZeroRTTReject) {
       EXPECT_EQ(200, response->headers->response_code());
       EXPECT_EQ(1u, response->headers->GetContentLength()->InBytes());
     }
+  }
+}
+
+TEST_P(HttpNetworkTransactionTest, ZeroRTTTooEarlyRequiresAcceptedSafeTransport) {
+  struct Case {
+    const char* scheme;
+    bool httpps_transport;
+    bool certificate;
+    bool early_accepted;
+    bool safe_method;
+    bool retry;
+  };
+  for (const auto& test : std::to_array<Case>({
+           {"https", false, true, true, true, true},
+           {"httpps", true, true, true, true, true},
+           {"httpps", true, false, true, true, true},
+           {"https", false, false, true, true, false},
+           {"https", true, false, true, true, false},
+           {"httpps", false, false, true, true, false},
+           {"httpps", true, false, false, true, false},
+           {"httpps", true, false, true, false, false},
+       })) {
+    SCOPED_TRACE(testing::Message()
+                 << test.scheme << " transport=" << test.httpps_transport
+                 << " certificate=" << test.certificate
+                 << " early=" << test.early_accepted
+                 << " safe=" << test.safe_method);
+    session_deps_.socket_factory = std::make_unique<MockClientSocketFactory>();
+    session_deps_.enable_early_data = true;
+    HttpRequestInfo request;
+    request.method = test.safe_method ? "GET" : "POST";
+    request.url = GURL(std::string(test.scheme) + "://www.example.org/");
+    request.traffic_annotation =
+        MutableNetworkTrafficAnnotationTag(TRAFFIC_ANNOTATION_FOR_TESTS);
+    const std::string request_bytes =
+        request.method + " / HTTP/1.1\r\nHost: www.example.org\r\n"
+                         "Connection: keep-alive\r\n" +
+        (test.safe_method ? "\r\n" : "Content-Length: 0\r\n\r\n");
+    MockWrite writes[] = {MockWrite(request_bytes)};
+    MockRead reads[] = {
+        MockRead("HTTP/1.1 425 Too Early\r\nContent-Length: 0\r\n\r\n")};
+    StaticSocketDataProvider first(reads, writes);
+    StaticSocketDataProvider second(reads, writes);
+    session_deps_.socket_factory->AddSocketDataProvider(&first);
+    session_deps_.socket_factory->AddSocketDataProvider(&second);
+    SSLSocketDataProvider ssl1(SYNCHRONOUS, OK);
+    ssl1.confirm = MockConfirm(SYNCHRONOUS, OK);
+    ssl1.ssl_info.early_data_accepted = test.early_accepted;
+    if (test.httpps_transport) {
+      ssl1.ssl_info.connection_status |= SSL_CONNECTION_HTTPPS;
+    }
+    if (test.certificate) {
+      ssl1.ssl_info.cert =
+          ImportCertFromFile(GetTestCertsDirectory(), "ok_cert.pem");
+      ASSERT_TRUE(ssl1.ssl_info.cert);
+    }
+    SSLSocketDataProvider ssl2(SYNCHRONOUS, OK);
+    ssl2.confirm = MockConfirm(ASYNC, OK);
+    ssl2.ssl_info = ssl1.ssl_info;
+    session_deps_.socket_factory->AddSSLSocketDataProvider(&ssl1);
+    session_deps_.socket_factory->AddSSLSocketDataProvider(&ssl2);
+    auto session = CreateSession(&session_deps_);
+    HttpNetworkTransaction trans(DEFAULT_PRIORITY, session.get());
+    TestCompletionCallback callback;
+    EXPECT_THAT(callback.GetResult(trans.Start(&request, callback.callback(),
+                                               NetLogWithSource())),
+                IsOk());
+    ASSERT_TRUE(trans.GetResponseInfo()->headers);
+    // The second 425 must not loop even if the stream reports early support:
+    // the retry disabled early data and confirmed its handshake before writing.
+    EXPECT_EQ(425, trans.GetResponseInfo()->headers->response_code());
+    EXPECT_TRUE(first.AllReadDataConsumed());
+    EXPECT_TRUE(first.AllWriteDataConsumed());
+    EXPECT_EQ(test.retry, second.AllReadDataConsumed());
+    EXPECT_EQ(test.retry, second.AllWriteDataConsumed());
+    EXPECT_EQ(test.retry, ssl2.ConfirmDataConsumed());
+    EXPECT_FALSE(ssl2.WriteBeforeConfirm());
+    EXPECT_EQ(!test.safe_method, ssl1.ConfirmDataConsumed());
+    EXPECT_EQ(test.safe_method, ssl1.WriteBeforeConfirm());
+    // No global reinterpretation of certificate validity for a non-X.509 peer.
+    EXPECT_EQ(test.certificate, ssl1.ssl_info.is_valid());
   }
 }
 

@@ -56,6 +56,10 @@ add_executable(httpps_native_test
 target_link_libraries(httpps_native_test PRIVATE httpps_test_engine)
 add_executable(httpps_secret_erasure_test secret_erasure_test.cc)
 target_link_libraries(httpps_secret_erasure_test PRIVATE httpps_test_engine)
+# Provider memory hooks must live in a separate process. The optional-provider
+# runner supplies the explicit library path; ordinary CTests need no provider.
+add_executable(httpps_provider_erasure_test provider_erasure_test.cc)
+target_link_libraries(httpps_provider_erasure_test PRIVATE httpps_test_engine)
 add_executable(httpps_pki_test pki_test.cc)
 target_include_directories(httpps_pki_test PRIVATE "${CHROMIUM_ROOT}")
 target_link_libraries(httpps_pki_test PRIVATE pki)

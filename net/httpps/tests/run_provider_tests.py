@@ -52,6 +52,7 @@ def main():
             '--server-source', server, *extra)
 
     run(native, '--native-provider-test', provider, helper)
+    run(directory/f'httpps_provider_erasure_test{suffix}', provider)
     run(native, '--gost-provider-test', provider, gost)
     run(directory/f'httpps_secret_erasure_test{suffix}', '--gost', provider, gost)
     run(directory/f'httpps_its_test{suffix}', its, fixtures)

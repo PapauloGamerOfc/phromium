@@ -8,7 +8,7 @@ disables the sandbox, or bypasses a browser certificate error through CDP.
 
 Prerequisites: Python 3.11+, the reference server's `requirements-dev.txt`
 (including the `h2` fixture dependency), and a clean checkout of
-`tls20-server` at `ed529547887c28e5965624021aa5e849b4dea848`. The revision is
+`tls20-server` at `b24403981386063a4b09bf4aa6847acd9364d09a`. The revision is
 checked before importing its protocol implementation. No dependencies are
 downloaded by the script.
 
@@ -21,6 +21,37 @@ provenance check, never certificate validation. Historical clean-revision
 results do not validate a subsequent optional-profile expansion.
 Use the server and browser from the same migration; the old numbered prototype
 is not wire-compatible with the current spec.
+
+## HTTP 425, handshake-stage alerts and SM3 parameter erasure
+
+HTTP 425 recovery also covers explicitly provisioned non-X.509 HTTPPS
+identities. Accepted early requests are retried only under the existing safe
+request policy, after handshake confirmation and without early data. The
+browser profile tests exercise X.509, RPK, external/imported/combined PSKs and
+password sessions, and reject unsafe or repeated retry loops. This does not
+change certificate validity or authorize a new trust path.
+
+Handshake-stage tests distinguish malformed ServerHello/HelloRetryRequest
+session-id vectors (`decode_error`, 50) from well-formed nonmatching echoes
+(`illegal_parameter`, 47). The optional SM3 provider regression observes owned
+parameter allocations before release, checking that the copied HKDF secret is
+cleared on successful derivation, failure and exception unwinding. It runs in
+an isolated executable with the explicitly selected provider, never by
+installing allocation hooks in the browser. Seventeen expansion cases and
+three observer controls check actual pre-free storage; the old engine fails
+the success, error and exception controls. Twelve framing cases cover both
+ServerHello and HelloRetryRequest.
+
+Local Windows validation rebuilt the full browser and network-test executable:
+34,794 network tests passed with retries disabled, together with seven CTests,
+27 ordinary interoperability commands and 22 provider commands. The actual
+browser passed 38 end-to-end assertions and the 40-profile, 54-evidence and
+14-client-OCSP matrices under each of the default and explicitly enabled
+network-sandbox policies. Harness/runtime regressions (21) and branding tests
+(nine) also passed. Logs use `out/Phromium/stage-sm3-425-*`,
+`out/httpps-native/stage-sm3-425-*` and `out/stage-sm3-425-*`. These local results
+do not claim a Linux/macOS full-browser build, a future CI result or a formal
+security proof.
 
 ## Ticket and delegated-credential alert regressions
 

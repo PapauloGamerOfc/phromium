@@ -1707,7 +1707,14 @@ int HttpNetworkTransaction::DoReadHeadersComplete(int result) {
     if (can_send_early_data_ && IsSecureRequest()) {
       SSLInfo ssl_info;
       stream_->GetSSLInfo(&ssl_info);
-      if (ssl_info.is_valid() && ssl_info.early_data_accepted) {
+      // HTTPPS can authenticate an origin with RPK, PSK or PAKE without an
+      // X.509 certificate. Its socket reports authenticated transport state
+      // separately; do not reinterpret SSLInfo::is_valid() as a trust gate.
+      const bool authenticated_httpps =
+          request_->url.SchemeIs("httpps") &&
+          SSLConnectionStatusIsHttpps(ssl_info.connection_status);
+      if ((ssl_info.is_valid() || authenticated_httpps) &&
+          ssl_info.early_data_accepted) {
         return HandleIOError(ERR_EARLY_DATA_REJECTED);
       }
     }

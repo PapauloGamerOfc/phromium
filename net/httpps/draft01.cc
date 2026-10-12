@@ -2577,6 +2577,12 @@ bool Client::AcceptFrame(ByteSpan frame) {
       if (body.size() < 40) return Fail(Error::kProtocol, 50);
       if (body[0] != 3 || body[1] != 3)
         return Fail(Error::kProtocol, 70);
+      // The inherited session-id vector permits 0..32 bytes. Decode its
+      // bounds before comparing the echo, so malformed SH/HRR is not mistaken
+      // for a well-formed but unoffered session identifier.
+      const size_t session_size = body[34];
+      if (session_size > 32 || session_size > body.size() - 40)
+        return Fail(Error::kProtocol, 50);
       if (body[34] != 0 || body[37] != 0) {
         return Fail();
       }

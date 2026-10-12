@@ -26,7 +26,7 @@ import tempfile
 from urllib.parse import parse_qs, urlsplit
 
 
-SERVER_REVISION = "ed529547887c28e5965624021aa5e849b4dea848"
+SERVER_REVISION = "b24403981386063a4b09bf4aa6847acd9364d09a"
 HOST = "cookie.test"
 MAX_MESSAGE = 4 * 1024 * 1024
 

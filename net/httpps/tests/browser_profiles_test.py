@@ -311,6 +311,9 @@ async def run(args):
                 server_options = {}
                 server_bootstrap = None
                 completed, rejected, bootstrap_sessions, dane_sessions = [], [], [], []
+                early_profile = kind in ("private-ca", "raw-key", "external-psk",
+                                         "imported-psk", "combined-psk", "password")
+                early_sessions = []
                 client_key = x25519.X25519PrivateKey.generate()
                 client_spki = client_key.public_key().public_bytes(serialization.Encoding.DER,
                                                                  serialization.PublicFormat.SubjectPublicKeyInfo)
@@ -409,28 +412,45 @@ async def run(args):
                 selected_credentials = [credentials]
                 if kind.startswith("dane"):
                     server_options["ticket_store"] = TicketStore()
+                if early_profile:
+                    # Each response closes its transport. The next request can
+                    # use a ticket, including one descended from RPK/PSK/PAKE.
+                    server_options.update(ticket_store=TicketStore(), max_early_data=16384)
 
                 async def peer(reader, writer, *, kind=kind, selected_credentials=selected_credentials,
                                case_host=case_host,
                                server_options=server_options, completed=completed,
                                rejected=rejected, client_spki=client_spki, server_bootstrap=server_bootstrap,
-                               bootstrap_sessions=bootstrap_sessions, dane_sessions=dane_sessions):
+                               bootstrap_sessions=bootstrap_sessions, dane_sessions=dane_sessions,
+                               early_profile=early_profile, early_sessions=early_sessions):
+                    early_request = bytearray()
+
+                    async def accept_early(data):
+                        # Observe actual application bytes before ClientFinished;
+                        # a resumed session alone does not demonstrate 0-RTT.
+                        # No early request is executed by this fixture callback.
+                        early_request.extend(data)
+                        assert len(early_request) <= 16384
+
                     try:
                         async with asyncio.timeout(15):
+                            handshake_options = dict(server_options)
+                            if early_profile:
+                                handshake_options["on_early_data"] = accept_early
                             if kind in ("password", "mixed-password", "wrong-password"):
                                 from tls20_server import pake_handshake
-                                channel = await pake_handshake.server(reader, writer, password_policy, **server_options)
+                                channel = await pake_handshake.server(reader, writer, password_policy, **handshake_options)
                             elif server_bootstrap is not None:
                                 channel = await bootstrap_server_handshake(reader, writer, selected_credentials[0],
-                                    server_bootstrap, **server_options)
+                                    server_bootstrap, **handshake_options)
                             else:
-                                channel = await server_handshake(reader, writer, selected_credentials[0], case_host, **server_options)
+                                channel = await server_handshake(reader, writer, selected_credentials[0], case_host, **handshake_options)
                             if server_bootstrap is not None:
                                 assert channel.authenticated_client == (client_spki,)
                                 bootstrap_sessions.append(channel.resumed)
                             if kind.startswith("dane"):
                                 dane_sessions.append(channel.resumed)
-                            request = b""
+                            request = bytes(early_request)
                             while b"\r\n\r\n" not in request:
                                 part = await channel.recv()
                                 if part is None:
@@ -442,6 +462,18 @@ async def run(args):
                                 assert channel.authenticated_client == (client_spki,)
                             if kind in ("password", "mixed-password"):
                                 assert channel.pake_identity == b"alice"
+                            method, target, _ = request.split(b" ", 2)
+                            if early_profile:
+                                early_sessions.append({"method": method.decode("ascii"),
+                                    "target": target.decode("ascii"), "resumed": channel.resumed,
+                                    "accepted": channel.early_data_accepted,
+                                    "before_finished": bool(early_request)})
+                            if early_profile and (target == b"/always-too-early" or
+                                                  target == b"/early-reject" and early_request):
+                                from tls20_server.early_http import TOO_EARLY_RESPONSE
+                                await channel.send(TOO_EARLY_RESPONSE)
+                                await channel.close()
+                                return
                             body = ("profile:" + kind).encode()
                             await channel.send(b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: " +
                                 str(len(body)).encode() + b"\r\nConnection: close\r\n\r\n" + body)
@@ -487,6 +519,36 @@ async def run(args):
                         if success:
                             assert await cdp.evaluate("document.body.innerText") == "profile:" + kind
                             assert completed, kind
+                            if early_profile:
+                                async def fetch_status(path, method="GET"):
+                                    return await cdp.evaluate(
+                                        "fetch(" + json.dumps(path) + ", {method:" + json.dumps(method) +
+                                        "}).then(async r => { await r.arrayBuffer(); return r.status; })")
+
+                                for _ in range(2):
+                                    assert await fetch_status("/early-ok") == 200
+                                assert any(item["resumed"] and item["accepted"] and item["before_finished"]
+                                           for item in early_sessions), early_sessions
+                                start = len(early_sessions)
+                                status = await fetch_status("/early-reject")
+                                attempts = [item for item in early_sessions[start:] if item["target"] == "/early-reject"]
+                                assert status == 200 and len(attempts) == 2, (kind, status, attempts)
+                                assert attempts[0]["accepted"] and attempts[0]["before_finished"], attempts
+                                assert not attempts[1]["before_finished"], attempts
+                                # An unsafe POST must be confirmed before write,
+                                # and a 425 received without early data is final.
+                                start = len(early_sessions)
+                                status = await fetch_status("/always-too-early", "POST")
+                                attempts = [item for item in early_sessions[start:] if item["target"] == "/always-too-early"]
+                                assert status == 425 and len(attempts) == 1, (kind, status, attempts)
+                                assert attempts[0]["method"] == "POST" and not attempts[0]["before_finished"], attempts
+                                # A second 425 after the safe retry must not loop.
+                                start = len(early_sessions)
+                                status = await fetch_status("/always-too-early")
+                                attempts = [item for item in early_sessions[start:] if item["target"] == "/always-too-early"]
+                                assert status == 425 and len(attempts) == 2, (kind, status, attempts)
+                                assert attempts[0]["accepted"] and attempts[0]["before_finished"], attempts
+                                assert not attempts[1]["before_finished"], attempts
                             if server_bootstrap is not None:
                                 # Connection: close requires a new transport, while
                                 # the same partition may reuse the selected BSK's ticket.
@@ -514,7 +576,8 @@ async def run(args):
                         assert "Network service crashed" not in log_text, "Optional library caused network-service restart"
                 except BaseException as error:
                     error.add_note(f"Profile case: {kind}; network sandbox requested: {args.enable_network_sandbox}; "
-                                   f"completed requests: {len(completed)}; peer rejections: {rejected}")
+                                   f"completed requests: {len(completed)}; peer rejections: {rejected}; "
+                                   f"early requests: {early_sessions}")
                     log = folder / (kind + "-profile.browser.log")
                     if log.exists():
                         with log.open("rb") as stream:
