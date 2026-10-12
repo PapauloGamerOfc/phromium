@@ -107,7 +107,10 @@ async def main(args):
             padding = size - 400
             for _ in range(5):
                 encoded = der(issue(padding_key, padding_key, padding_name, padding_name,
-                    ca=True, extra=[(x509.UnrecognizedExtension(x509.ObjectIdentifier("1.2.3.4.99"),
+                    # Fix the serial across sizing passes: random DER INTEGER
+                    # widths must not change while adjusting the padding.
+                    ca=True, serial=size,
+                    extra=[(x509.UnrecognizedExtension(x509.ObjectIdentifier("1.2.3.4.99"),
                                                                bytes(padding)), False)]))
                 if len(encoded) == size:
                     return encoded
