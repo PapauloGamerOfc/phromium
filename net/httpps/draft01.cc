@@ -3522,9 +3522,14 @@ bool Client::RequestKeyUpdate(bool request_peer, Bytes* record) {
   sender_ = std::make_unique<RecordCipher>(c_app_, suite_, options_.native_provider);
   sender_->SetLimit(peer_record_limit_);
   sender_->SetContentLimit(fragment_limit_);
-  update_response_pending_ = false;
   update_requested_pending_ |= request_peer;
   ++sending_epoch_;
+  // A locally requested update is not the required KU0 response to a peer's
+  // KU1. Keep that independent obligation until KU0 is actually queued. At
+  // the final epoch, RFC 9846 4.7.3 instead permits ignoring a request whose
+  // response would exceed the sending-epoch bound.
+  if (!request_peer || sending_epoch_ == (uint64_t{1} << 48) - 1)
+    update_response_pending_ = false;
   *record = TakeOutput();
   Append(record, update);
   return true;

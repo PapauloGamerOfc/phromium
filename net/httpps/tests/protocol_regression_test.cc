@@ -1062,6 +1062,100 @@ void KeyUpdates() {
   Check(!client.RequestKeyUpdate(false, &record), "sending epoch cannot wrap");
 }
 
+void RequestedKeyUpdatePreservesResponse() {
+  const auto inspect = [](const Bytes& records, const Bytes& expected_updates,
+                          const Bytes& expected_application) {
+    auto secret = ProtocolRegressionPeer::SendingSecret();
+    auto receiver = std::make_unique<RecordCipher>(secret);
+    size_t cursor = 0, updates = 0, applications = 0;
+    while (cursor < records.size()) {
+      Check(records.size() - cursor >= 5, "KU response record header");
+      const size_t length = 5 + (size_t{records[cursor + 3]} << 8) + records[cursor + 4];
+      Check(length <= records.size() - cursor, "KU response record length");
+      Bytes content;
+      uint8_t type;
+      Check(receiver->Open(ByteSpan(records).subspan(cursor, length), &type, &content),
+            "every response record opens in the exact successive sending epoch");
+      if (type == 22) {
+        Check(!applications && updates < expected_updates.size() &&
+                  content == Frame(24, Bytes{expected_updates[updates]}),
+              "KU response flags and ordering match the independent expectation");
+        ++updates;
+        secret = SuiteLabel(0x1301, secret, "traffic upd", {}, 32);
+        receiver = std::make_unique<RecordCipher>(secret);
+      } else {
+        Check(type == 23 && updates == expected_updates.size() &&
+                  content == expected_application,
+              "all required KU0 responses precede even empty application data");
+        ++applications;
+      }
+      cursor += length;
+    }
+    Check(updates == expected_updates.size() && applications == 1,
+          "exact KU response and application record counts");
+  };
+
+  for (bool crossed_request : {false, true}) {
+    for (uint8_t incoming_request : {0, 1}) {
+      for (int manual_request : {-1, 0, 1}) {
+        for (const Bytes application : {Bytes{}, Bytes{0x42, 0x43}}) {
+          Client client("example.test", {}, true);
+          ProtocolRegressionPeer::Prepare(client);
+          Bytes part, records, updates, received;
+          if (crossed_request) {
+            Check(client.RequestKeyUpdate(true, &part), "own KU1 precedes crossing peer update");
+            Append(&records, part);
+            updates.push_back(1);
+            Check(!client.RequestKeyUpdate(true, &part),
+                  "own outstanding request prohibits another KU1");
+          }
+          RecordCipher sender(ProtocolRegressionPeer::ReceivingSecret());
+          Check(sender.Seal(Frame(24, Bytes{incoming_request}), 22, &part) &&
+                    client.Receive(part, &received), "receive crossing or independent peer update");
+          Check(ProtocolRegressionPeer::UpdateResponsePending(client) == (incoming_request == 1),
+                "only peer KU1 creates a response obligation");
+          if (manual_request >= 0) {
+            Check(client.RequestKeyUpdate(manual_request != 0, &part),
+                  "peer update permits a fresh manual key update");
+            Append(&records, part);
+            updates.push_back(static_cast<uint8_t>(manual_request));
+          }
+          const bool response_pending = incoming_request == 1 && manual_request != 0;
+          Check(ProtocolRegressionPeer::UpdateResponsePending(client) == response_pending,
+                "manual KU1 cannot consume the peer's required KU0 response");
+          if (response_pending) updates.push_back(0);
+          Check(client.Send(application, &part), "application flushes the outstanding KU0");
+          Append(&records, part);
+          inspect(records, updates, application);
+          Check(!ProtocolRegressionPeer::UpdateResponsePending(client),
+                "actual KU0 consumes the response obligation");
+          Check(client.RequestKeyUpdate(true, &part) == (manual_request != 1),
+                "automatic KU0 never clears an independent outbound KU1 latch");
+        }
+      }
+    }
+  }
+
+  // The RFC epoch exception also applies when an explicitly initiated KU1
+  // consumes the last allowed epoch after a peer request was already received.
+  constexpr uint64_t kLastEpoch = (uint64_t{1} << 48) - 1;
+  Client client("example.test", {}, true);
+  ProtocolRegressionPeer::Prepare(client);
+  ProtocolRegressionPeer::SendingEpoch(client, kLastEpoch - 1);
+  RecordCipher sender(ProtocolRegressionPeer::ReceivingSecret());
+  Bytes part, records, received;
+  Check(sender.Seal(Frame(24, Bytes{1}), 22, &part) && client.Receive(part, &received) &&
+            ProtocolRegressionPeer::UpdateResponsePending(client),
+        "peer KU1 is pending before the last locally initiated epoch");
+  Check(client.RequestKeyUpdate(true, &records), "manual KU1 consumes the final permitted epoch");
+  Check(!ProtocolRegressionPeer::UpdateResponsePending(client),
+        "RFC epoch ceiling ignores only the now-impossible extra response");
+  Check(client.Send(Bytes{0x51}, &part), "final epoch remains usable within its key quota");
+  Append(&records, part);
+  inspect(records, Bytes{1}, Bytes{0x51});
+  Check(!client.RequestKeyUpdate(false, &part), "pending response cannot cause an epoch wrap");
+}
+
 Bytes CertificateRequest() {
   Secret private_key{}, public_key{};
   private_key.fill(0x29);
@@ -1694,6 +1788,7 @@ void RunProtocolRegressionTests() {
   DelegationRequestDuplicates();
   OidFilterRequestValidation();
   KeyUpdates();
+  RequestedKeyUpdatePreservesResponse();
   PostHandshakeAuthentication();
   RetrospectiveLimits();
   FixedExtensionFields();

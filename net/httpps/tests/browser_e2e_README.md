@@ -8,7 +8,7 @@ disables the sandbox, or bypasses a browser certificate error through CDP.
 
 Prerequisites: Python 3.11+, the reference server's `requirements-dev.txt`
 (including the `h2` fixture dependency), and a clean checkout of
-`tls20-server` at `a62ffd26e868395280125f5580f2f6e70f2fee01`. The revision is
+`tls20-server` at `5b4411fe53d598f32d6b230783b99645adac063c`. The revision is
 checked before importing its protocol implementation. No dependencies are
 downloaded by the script.
 
