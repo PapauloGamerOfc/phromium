@@ -62,6 +62,7 @@ def main():
     interop('gost_credentials_interop_test.py', '--provider', provider, '--module', gost, '--openssl', cli)
     interop('signature_profiles_interop_test.py', '--provider', provider)
     interop('password_interop_test.py', '--provider', provider, '--helper', helper)
+    interop('hello_structure_interop_test.py', '--provider', provider, '--helper', helper)
     interop('mixed_password_interop_test.py', '--provider', provider, '--helper', helper)
     interop('authenticator_interop_test.py', '--password-provider', provider,
             '--password-helper', helper)

@@ -115,6 +115,32 @@ bool Extensions(ByteSpan data, std::map<uint16_t, Bytes>* out,
   return true;
 }
 
+enum class ResponseContext { kServerHello, kRetry, kEncryptedExtensions, kCertificate };
+
+bool ResponseExtensionAllowed(uint16_t type, ResponseContext context) {
+  // Placement and solicitation are independent. Unknown responses still need
+  // an actual offer; known extensions in a forbidden message use alert 47.
+  switch (type) {
+    case 0: case 1: case 10: case 15: case 16: case 19: case 20: case 25:
+    case 28: case 32: case 42: case 55: case 56: case 58:
+      return context == ResponseContext::kEncryptedExtensions;
+    case 33: case 41:
+      return context == ResponseContext::kServerHello;
+    case 31: case 44:
+      return context == ResponseContext::kRetry;
+    case 43: case 51:
+      return context == ResponseContext::kServerHello || context == ResponseContext::kRetry;
+    case 5: case 18: case 34: case 52: case 59:
+      return context == ResponseContext::kCertificate;
+    case 2: case 3: case 4: case 13: case 17: case 21:
+    case 27: case 29: case 30: case 45: case 47: case 48:
+    case 49: case 50: case 0xff02: case 0xff03: case 0xff04:
+      return false;
+    default:
+      return true;
+  }
+}
+
 int GroupNid(uint16_t group) {
   switch (group) {
     case 23: return NID_X9_62_prime256v1;
@@ -2501,6 +2527,17 @@ bool Client::AcceptFrame(ByteSpan frame) {
       const bool retry = Equal(body.subspan(2u, 32u), kRetryRandom);
       if (retry && retried_)
         return Fail(Error::kProtocol, 10);
+      for (const auto& [type, unused] : extensions) {
+        if (!ResponseExtensionAllowed(type, retry ? ResponseContext::kRetry
+                                                 : ResponseContext::kServerHello))
+          return Fail(Error::kProtocol, 47);
+        // Cookie is expressly unsolicited. PWD salt responds to the actual
+        // username offer (29/30), rather than an impossible CH salt extension.
+        const bool retry_request = retry && (type == 44 ||
+            (type == 31 && (offered_features_.count(29) || offered_features_.count(30))));
+        if (!retry_request && !offered_features_.count(type))
+          return Fail(Error::kProtocol, 110);
+      }
       const auto selected_suite = static_cast<uint16_t>(Read16(body.subspan(35u, 2u)));
       if (std::find(options_.cipher_suites.begin(), options_.cipher_suites.end(), selected_suite) ==
               options_.cipher_suites.end() || (retried_ && selected_suite != suite_))
@@ -2511,7 +2548,8 @@ bool Client::AcceptFrame(ByteSpan frame) {
         for (const auto& [type, data] : extensions) {
           if (type == 43)
             continue;
-          if (type == 51 && data.size() == 2) {
+          if (type == 51) {
+            if (data.size() != 2) return Fail(Error::kProtocol, 50);
             group = static_cast<uint16_t>(Read16(data));
             // Zero denotes an omitted key_share only in RetryHello's API;
             // an explicit reserved group is not a cookie-only retry.
@@ -2519,11 +2557,15 @@ bool Client::AcceptFrame(ByteSpan frame) {
               return Fail(Error::kProtocol, 47);
             continue;
           }
-          if (type == 44 && data.size() >= 3 &&
-              Read16(ByteSpan(data).first(2u)) == data.size() - 2)
+          if (type == 44) {
+            if (data.size() < 3 || Read16(ByteSpan(data).first(2u)) != data.size() - 2)
+              return Fail(Error::kProtocol, 50);
             continue;
-          if (type == 31 && PasswordSuite(suite_) && options_.password &&
-              data.size() == 34 && data[0] == 0 && data[1] == 32) {
+          }
+          if (type == 31 && PasswordSuite(suite_) && options_.password) {
+            if (data.size() < 2 || Read16(ByteSpan(data).first(2u)) != data.size() - 2)
+              return Fail(Error::kProtocol, 50);
+            if (data.size() != 34) return Fail(Error::kProtocol, 47);
             password_salt_.assign(data.begin() + 2, data.end());
             continue;
           }
@@ -2539,7 +2581,7 @@ bool Client::AcceptFrame(ByteSpan frame) {
       psk_selected_ = extensions.count(41) != 0;
       if (psk_selected_) {
         if (extensions[41].size() != 2)
-          return Fail();
+          return Fail(Error::kProtocol, 50);
         selected_psk_ = Read16(extensions[41]);
         if (selected_psk_ >= offered_psks_.size() ||
             bool(IntegrityTagLength(offered_psks_[selected_psk_].cipher_suite)) != bool(IntegrityTagLength(suite_)) ||
@@ -2566,7 +2608,8 @@ bool Client::AcceptFrame(ByteSpan frame) {
                                                     : (password_only_ && !resumed_)))
         return Fail(Error::kCertificate);
       const bool combined = extensions.count(33) != 0;
-      if ((combined && (!combined_psk_ || !psk_selected_ || !extensions[33].empty())) ||
+      if (combined && !extensions[33].empty()) return Fail(Error::kProtocol, 50);
+      if ((combined && (!combined_psk_ || !psk_selected_)) ||
           (combined_psk_ && !combined && !PasswordSuite(suite_)))
         return Fail();
       combined_psk_ = combined;
@@ -2587,10 +2630,11 @@ bool Client::AcceptFrame(ByteSpan frame) {
         return Fail();
       Bytes shared(SuiteHashLength(suite_));
       if (dhe) {
-        if (extensions[51].size() < 4 ||
-            Read16(ByteSpan(extensions[51]).first(2u)) != traffic_group_ ||
+        if (extensions[51].size() < 5 ||
             Read16(ByteSpan(extensions[51]).subspan(2u, 2u)) != extensions[51].size() - 4)
-          return Fail();
+          return Fail(Error::kProtocol, 50);
+        if (Read16(ByteSpan(extensions[51]).first(2u)) != traffic_group_)
+          return Fail(Error::kProtocol, 47);
         auto peer = ByteSpan(extensions[51]).subspan(4u);
         const bool agreed = PasswordSuite(suite_) ? password_state_->Finish(peer, &shared)
                                                  : TrafficAgreement(traffic_group_, peer, &shared);
@@ -2638,13 +2682,8 @@ bool Client::AcceptFrame(ByteSpan frame) {
         // Recognized extensions in the wrong message retain illegal_parameter.
         // Otherwise a response needs an actual offer in this connection's CH,
         // including when the type is unknown (RFC 9846 section 4.3).
-        switch (type) {
-          case 2: case 3: case 4: case 5: case 13: case 17: case 18: case 21:
-          case 27: case 29: case 30: case 31: case 33: case 34: case 41:
-          case 43: case 44: case 45: case 47: case 48: case 49: case 50:
-          case 51: case 52: case 59: case 0xff02: case 0xff03: case 0xff04:
-            return Fail(Error::kProtocol, 47);
-        }
+        if (!ResponseExtensionAllowed(type, ResponseContext::kEncryptedExtensions))
+          return Fail(Error::kProtocol, 47);
         if (!offered_features_.count(type))
           return Fail(Error::kProtocol, 110);
       }
@@ -2669,6 +2708,22 @@ bool Client::AcceptFrame(ByteSpan frame) {
         return Fail();
       if (extensions.count(1) && extensions.count(28))
         return Fail();
+      // Extension presence/placement was checked above. Fixed-width fields
+      // with missing or trailing octets are syntax errors, not bad enums
+      // (RFC 9846 section 6); well-formed invalid values still use alert 47.
+      for (const auto& [type, data] : extensions) {
+        switch (type) {
+          case 0: case 42:
+            if (!data.empty()) return Fail(Error::kProtocol, 50);
+            break;
+          case 1: case 15: case 19: case 20: case 58:
+            if (data.size() != 1) return Fail(Error::kProtocol, 50);
+            break;
+          case 28:
+            if (data.size() != 2) return Fail(Error::kProtocol, 50);
+            break;
+        }
+      }
       if (extensions.count(28)) {
         if (!options_.record_size_limit || extensions[28].size() != 2)
           return Fail();
@@ -2855,28 +2910,49 @@ bool Client::AcceptFrame(ByteSpan frame) {
       }
       for (size_t i = 0; i < certificate_extensions_.size(); ++i) {
         for (const auto& [code, value] : certificate_extensions_[i]) {
+          if (!ResponseExtensionAllowed(code, ResponseContext::kCertificate))
+            return Fail(Error::kProtocol, 47);
+          if (!offered_features_.count(code))
+            return Fail(Error::kProtocol, 110);
           if (code == 34 && i == 0 && server_certificate_type_ == 0 && options_.delegated_credentials) {
             server_delegation_ = value;
           } else if (code == 5 && options_.request_ocsp && server_certificate_type_ == 0) {
-            if (value.size() < 5 || value[0] != 1 ||
-                ((size_t(value[1]) << 16) | (size_t(value[2]) << 8) | value[3]) != value.size() - 4 ||
-                !OCSPRequestMatchesResponse(options_, ByteSpan(value).subspan(4u)))
+            if (value.empty()) return Fail(Error::kProtocol, 50);
+            if (value[0] != 1) return Fail(Error::kProtocol, 47);
+            if (value.size() < 5 ||
+                ((size_t(value[1]) << 16) | (size_t(value[2]) << 8) | value[3]) != value.size() - 4)
+              return Fail(Error::kProtocol, 50);
+            if (!OCSPRequestMatchesResponse(options_, ByteSpan(value).subspan(4u)))
               return Fail();
           } else if (code == 18 && i == 0 && options_.request_scts && server_certificate_type_ == 0) {
             ByteSpan entries = value;
             if (entries.size() < 5 || Read16(entries.first(2u)) != entries.size() - 2)
-              return Fail();
+              return Fail(Error::kProtocol, 50);
             entries = entries.subspan(2u);
             while (!entries.empty()) {
               if (entries.size() < 3)
-                return Fail();
+                return Fail(Error::kProtocol, 50);
               const auto length = Read16(entries.first(2u));
               if (!length || length > entries.size() - 2)
-                return Fail();
+                return Fail(Error::kProtocol, 50);
               entries = entries.subspan(size_t{2} + length);
             }
           } else if (code == 52 && i == 0 && options_.ct_v2_policy && server_certificate_type_ == 0) {
-            // Full framing and signed evidence are checked only after PKIX.
+            // RFC9162 permits empty TLS extension_data. A present TransItemList
+            // and each serialized TransItem must still have valid framing;
+            // signature/log policy is checked only after credential trust.
+            ByteSpan entries = value;
+            if (entries.empty()) continue;
+            if (entries.size() < 6 || Read16(entries.first(2u)) != entries.size() - 2)
+              return Fail(Error::kProtocol, 50);
+            entries = entries.subspan(2u);
+            while (!entries.empty()) {
+              if (entries.size() < 4) return Fail(Error::kProtocol, 50);
+              const auto length = Read16(entries.first(2u));
+              if (length < 2 || length > entries.size() - 2)
+                return Fail(Error::kProtocol, 50);
+              entries = entries.subspan(size_t{2} + length);
+            }
           } else if (code == 59 && i == 0 && options_.dane_policy) {
             // DNSSEC/TLSA authorization is verified below, never the AD bit.
           } else {

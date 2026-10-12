@@ -96,6 +96,11 @@ class ProtocolRegressionPeer {
     client.state_ = Client::State::kCertificate;
     client.client_auth_requested_ = true;
   }
+  static void SelectFirstExternalPsk(Client& client) {
+    client.psk_selected_ = true;
+    client.selected_psk_ = 0;
+    client.authentication_ = Authentication::kExternalPsk;
+  }
   static void AwaitInitialCertificateRequest(Client& client) {
     client.state_ = Client::State::kCertificate;
   }
@@ -477,6 +482,102 @@ std::map<uint16_t, Bytes> HelloExtensions(ByteSpan hello) {
   }
   Check(cursor == hello.size(), "ClientHello has no trailing extension bytes");
   return extensions;
+}
+
+void HelloResponseOffers() {
+  for (bool retry : {false, true}) {
+    for (bool grease : {false, true}) {
+      for (int fault = 0; fault < 6; ++fault) {
+        ClientOptions options;
+        options.grease = grease;
+        Client client("example.test", {}, true, options);
+        Check(client.Start(), "Hello response fixture starts");
+        auto records = client.TakeOutput();
+        auto offers = HelloExtensions(JoinPlaintextRecords(ByteSpan(records).subspan(kPreface.size())));
+        uint16_t unknown = 0x1234;
+        Check(!offers.count(unknown) && !offers.count(41), "negative response types were not offered");
+        Bytes response = CookieRetry();
+        Bytes body(response.begin() + 4, response.begin() + 42);
+        Bytes extensions;
+        Extension(&extensions, 43, Bytes{4, 0});
+        if (retry) {
+          Extension(&extensions, 44, Bytes{0, 1, 7});
+        } else {
+          std::fill(body.begin() + 2, body.begin() + 34, 0x12);
+          Secret key, private_key;
+          X25519_keypair(key.data(), private_key.data());
+          Bytes share{0, 29};
+          Append(&share, Vector16(key));
+          Extension(&extensions, 51, share);
+        }
+        if (fault == 1) Extension(&extensions, unknown, {});
+        if (fault == 2) Extension(&extensions, 15, Bytes{1});
+        if (fault == 3) Extension(&extensions, 41, Bytes{0, 0});
+        if (fault == 4) Append(&extensions, Bytes{0x12, 0x34, 0});
+        if (fault == 5) {
+          // An offered GREASE response is still not a negotiated capability.
+          if (!grease) continue;
+          for (const auto& [type, unused] : offers)
+            if ((type & 0x0f0f) == 0x0a0a) unknown = type;
+          Check(offers.count(unknown), "GREASE response uses the actual CH offer");
+          Extension(&extensions, unknown, {});
+        }
+        Append(&body, Vector16(extensions));
+        const bool accepted = ReceivePlaintextHandshake(client, Frame(2, body));
+        Check(accepted == (fault == 0), "Hello responses enforce offer and context separately");
+        if (fault) CheckAlert(client, fault == 1 || (fault == 3 && !retry) ? 110 : fault == 4 ? 50 : 47, false);
+        else if (retry) {
+          const auto second = HelloExtensions(JoinPlaintextRecords(client.TakeOutput()));
+          Check(second.at(44) == Bytes({0, 1, 7}) && second.at(51) == offers.at(51),
+                "unsolicited valid cookie is echoed without changing traffic share");
+        }
+      }
+    }
+  }
+}
+
+void HelloResponseSyntax() {
+  struct Case { bool retry; uint16_t type; Bytes value; uint8_t alert; };
+  const Case cases[] = {
+      {false, 41, {}, 50}, {false, 41, {0}, 50}, {false, 41, {0, 0, 0}, 50},
+      {false, 41, {0, 1}, 47}, {false, 33, {0}, 50},
+      {false, 51, {}, 50}, {false, 51, {0, 29, 0}, 50},
+      {false, 51, {0, 29, 0, 0}, 50}, {false, 51, {0, 29, 0, 2, 7}, 50},
+      {false, 51, {0, 23, 0, 1, 7}, 47}, {false, 51, {0, 29, 0, 1, 7}, 47},
+      {true, 51, {}, 50}, {true, 51, {0}, 50}, {true, 51, {0, 23, 0}, 50},
+      {true, 51, {0, 0}, 47}, {true, 44, {}, 50}, {true, 44, {0}, 50},
+      {true, 44, {0, 0}, 50}, {true, 44, {0, 2, 7}, 50}};
+  for (const auto& test : cases) {
+    ClientOptions options;
+    if (test.type == 41 || test.type == 33) {
+      ExternalPSK psk;
+      psk.identity = Bytes{1}; psk.secret = Bytes(32, 7); psk.hostname = "example.test";
+      psk.combined = test.type == 33;
+      options.external_psks = {psk};
+    }
+    Client client("example.test", {}, true, options);
+    Check(client.Start(), "Hello syntax fixture starts with actual offers");
+    client.TakeOutput();
+    auto retry = CookieRetry();
+    Bytes body(retry.begin() + 4, retry.begin() + 42), extensions;
+    Extension(&extensions, 43, Bytes{4, 0});
+    if (!test.retry) {
+      std::fill(body.begin() + 2, body.begin() + 34, 0x12);
+      if (test.type != 51) {
+        Secret key, private_key;
+        X25519_keypair(key.data(), private_key.data());
+        Bytes share{0, 29}; Append(&share, Vector16(key));
+        Extension(&extensions, 51, share);
+      }
+      if (test.type == 33) Extension(&extensions, 41, Bytes{0, 0});
+    } else if (test.type != 44) {
+      Extension(&extensions, 44, Bytes{0, 1, 7});
+    }
+    Extension(&extensions, test.type, test.value);
+    Append(&body, Vector16(extensions));
+    Check(!ReceivePlaintextHandshake(client, Frame(2, body)), "invalid Hello structure rejected");
+    CheckAlert(client, test.alert, false);
+  }
 }
 
 Bytes HelloPsk(ByteSpan hello) {
@@ -863,6 +964,37 @@ void KeyUpdates() {
     Check(client.Receive(Protect(update), &application), "peer key update accepted");
     Check(client.RequestKeyUpdate(true, &record), "either peer update clears request latch");
   }
+  {
+    Client client("example.test", {}, true);
+    ProtocolRegressionPeer::Prepare(client);
+    RecordCipher peer_sender(ProtocolRegressionPeer::ReceivingSecret());
+    Bytes record, application;
+    Check(peer_sender.Seal(Frame(24, Bytes{1}), 22, &record) &&
+              client.Receive(record, &application), "peer requests update before read half-close");
+    const auto next_receiving = SuiteLabel(0x1301,
+        ProtocolRegressionPeer::ReceivingSecret(), "traffic upd", {}, 32);
+    RecordCipher next_peer_sender(next_receiving);
+    Check(next_peer_sender.Seal(Bytes{1, 0}, 21, &record) &&
+              client.Receive(record, &application) && application.empty() &&
+              ProtocolRegressionPeer::UpdateResponsePending(client),
+          "peer close_notify preserves the outstanding writing-side update response");
+    Check(client.Send(Bytes{7, 8}, &record), "application write remains legal after read half-close");
+    Check(record.size() >= 5, "half-close update response is framed");
+    const size_t first_length = 5 + (size_t{record[3]} << 8) + record[4];
+    RecordCipher peer_receiver(ProtocolRegressionPeer::SendingSecret());
+    uint8_t type = 0;
+    Check(first_length < record.size() &&
+              peer_receiver.Open(ByteSpan(record).first(first_length), &type, &application) &&
+              type == 22 && application == Frame(24, Bytes{0}),
+          "required KeyUpdate response precedes application data in the old writing epoch");
+    const auto next_sending = SuiteLabel(0x1301,
+        ProtocolRegressionPeer::SendingSecret(), "traffic upd", {}, 32);
+    RecordCipher next_peer_receiver(next_sending);
+    Check(next_peer_receiver.Open(ByteSpan(record).subspan(first_length), &type, &application) &&
+              type == 23 && application == Bytes({7, 8}) &&
+              !ProtocolRegressionPeer::UpdateResponsePending(client),
+          "post-half-close application data uses the new epoch and clears its response obligation");
+  }
   constexpr uint64_t kLastEpoch = (uint64_t{1} << 48) - 1;
   Client client("example.test", {}, true);
   ProtocolRegressionPeer::Prepare(client);
@@ -887,6 +1019,27 @@ Bytes CertificateRequest() {
   Bytes body{1, 7};
   Append(&body, Vector16(extensions));
   return Frame(13, body);
+}
+
+void CertificateResponseOffers() {
+  for (uint16_t code : {0xfafa, 5, 18, 34, 52, 59, 15, 43, 0xff02}) {
+    Client client("example.test", {}, true);
+    Check(client.Start(), "CertificateEntry offer fixture starts");
+    ProtocolRegressionPeer::Prepare(client);
+    ProtocolRegressionPeer::AwaitInitialCertificateRequest(client);
+    Bytes extensions;
+    Extension(&extensions, code, {});
+    Bytes entry{0, 0, 1, 0};  // Rejected metadata precedes any DER trust decision.
+    Append(&entry, Vector16(extensions));
+    Bytes body{0, 0, 0, static_cast<uint8_t>(entry.size())};
+    Append(&body, entry);
+    auto certificate = Frame(11, body);
+    certificate.push_back(22);
+    Bytes application;
+    Check(!client.Receive(Protect(certificate), &application) && application.empty(),
+          "CertificateEntry response cannot invent an offer");
+    CheckAlert(client, code == 15 || code == 43 || code == 0xff02 ? 47 : 110);
+  }
 }
 
 void CertificateRequestValidation() {
@@ -1150,6 +1303,66 @@ void RetrospectiveLimits() {
   }
 }
 
+void FixedExtensionFields() {
+  struct Case { uint16_t code; Bytes value; uint8_t alert; };
+  const Case cases[] = {
+    {0, {}, 0}, {0, {0}, 50},
+    {1, {1}, 0}, {1, {}, 50}, {1, {1, 0}, 50}, {1, {5}, 47},
+    {15, {1}, 0}, {15, {}, 50}, {15, {1, 0}, 50}, {15, {0}, 47},
+    {19, {2}, 0}, {19, {}, 50}, {19, {2, 0}, 50}, {19, {3}, 47},
+    {20, {0}, 0}, {20, {}, 50}, {20, {0, 0}, 50}, {20, {3}, 47},
+    {28, {0, 64}, 0}, {28, {}, 50}, {28, {0}, 50}, {28, {0, 64, 0}, 50},
+    {28, {0, 63}, 47}, {28, {0x40, 2}, 47},
+    {42, {}, 0}, {42, {0}, 50},
+    {58, {0}, 0}, {58, {255}, 0}, {58, {}, 50}, {58, {1, 0}, 50},
+  };
+  for (const auto& item : cases) {
+    ClientOptions options;
+    options.no_alpn_http11 = true;
+    if (item.code == 1) options.max_fragment_length = 1;
+    if (item.code == 15) options.heartbeat_mode = 1;
+    if (item.code == 20) options.server_certificate_types = {0, 2};
+    if (item.code == 28) options.record_size_limit = 16385;
+    if (item.code == 58) options.ticket_request = TicketRequest{};
+    if (item.code == 42) {
+      ExternalPSK psk;
+      psk.identity = Bytes{0x50};
+      psk.secret = Bytes(32, 0x70);
+      psk.hostname = "example.test";
+      psk.max_early_data = 1024;
+      options.external_psks.push_back(psk);
+    }
+    Client client("example.test", {}, true, options);
+    if (item.code == 19) {
+      ClientCredential credential;
+      credential.certificate_type = 2;
+      credential.private_key.fill(0x37);
+      Secret public_key;
+      X25519_public_from_private(public_key.data(), credential.private_key.data());
+      Bytes spki{0x30, 0x2a, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x6e, 0x03, 0x21, 0};
+      Append(&spki, public_key);
+      credential.certificates.emplace_back(spki.begin(), spki.end());
+      Check(client.SetClientCredential(credential), "fixed-field fixture has a valid raw client key");
+    }
+    Check(client.Start(nullptr, {}, item.code == 42), "fixed-field fixture constructs actual CH offer");
+    const auto output = client.TakeOutput();
+    const auto hello = JoinPlaintextRecords(ByteSpan(output).subspan(kPreface.size()));
+    Check(HelloExtensions(hello).count(item.code), "tested EE extension was actually offered");
+    ProtocolRegressionPeer::Prepare(client, true);
+    if (item.code == 42) ProtocolRegressionPeer::SelectFirstExternalPsk(client);
+    Bytes extensions;
+    Extension(&extensions, item.code, item.value);
+    Bytes frame = Frame(8, Vector16(extensions));
+    frame.push_back(22);
+    Bytes application;
+    Check(client.Receive(Protect(frame), &application) == (item.alert == 0),
+          "fixed-width syntax is distinct from an invalid scalar value");
+    Check(application.empty(), "EE processing never releases application bytes");
+    if (item.alert) CheckAlert(client, item.alert);
+    else Check(client.TakeFatalAlert().empty(), "valid fixed-width control has no fatal alert");
+  }
+}
+
 void HeartbeatLimits() {
   const std::pair<uint16_t, uint16_t> limits[] = {{64, 16385}, {16385, 64}};
   for (const auto [local, peer] : limits) {
@@ -1186,6 +1399,8 @@ void RunProtocolRegressionTests() {
   RecordFramingAlerts();
   UnexpectedMessageAlerts();
   VersionAlerts();
+  HelloResponseOffers();
+  HelloResponseSyntax();
   RetryGroups();
   RetryCookieBounds();
   RetryTicketAges();
@@ -1195,10 +1410,12 @@ void RunProtocolRegressionTests() {
   HalfCloseKeepsOppositeDirection();
   ClosedWriterControlMessages();
   ClosedWriterFailures();
+  CertificateResponseOffers();
   CertificateRequestValidation();
   KeyUpdates();
   PostHandshakeAuthentication();
   RetrospectiveLimits();
+  FixedExtensionFields();
   HeartbeatLimits();
   std::cout << "Protocol alert, key-update, PHA, record-limit and heartbeat regressions passed\n";
 }

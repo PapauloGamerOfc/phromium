@@ -206,11 +206,36 @@ bool ParseCertificate(ByteSpan body, AuthenticatorIdentity* identity) {
   return true;
 }
 bool CertificateOffers(const AuthenticatorIdentity& identity, const Extensions& offers) {
-  for (size_t i = 0; i < identity.extensions.size(); ++i)
-    for (const auto& [kind, value] : identity.extensions[i])
+  for (size_t i = 0; i < identity.extensions.size(); ++i) {
+    for (const auto& [kind, value] : identity.extensions[i]) {
       if (!offers.count(kind) || (kind != 5 && kind != 18 && kind != 34 && kind != 52 && kind != 59) ||
           (kind == 34 && i != 0))
         return false;
+      // Evidence policy may ignore an unknown SCT, but cannot decide whether
+      // its enclosing protocol vectors are well-formed. Keep these checks in
+      // the application authenticator: rejection must not emit a TLS alert.
+      Reader reader{value};
+      ByteSpan payload;
+      if (kind == 5) {
+        ByteSpan type;
+        if (!reader.Take(1, &type) || type[0] != 1 ||
+            !reader.Vector(3, &payload) || payload.empty() || !reader.input.empty())
+          return false;
+      } else if (kind == 18 || kind == 52) {
+        // RFC9162 section 6.5 permits empty extension_data, not an encoded
+        // empty TransItemList. Each TransItem contains a two-byte type.
+        if (kind == 52 && value.empty()) continue;
+        if (!reader.Vector(2, &payload) || payload.empty() || !reader.input.empty())
+          return false;
+        reader.input = payload;
+        while (!reader.input.empty()) {
+          ByteSpan sct;
+          if (!reader.Vector(2, &sct) || sct.size() < (kind == 52 ? 2u : 1u))
+            return false;
+        }
+      }
+    }
+  }
   return true;
 }
 struct Erase {

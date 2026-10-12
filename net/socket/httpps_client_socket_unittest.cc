@@ -337,6 +337,8 @@ class Peer : public SocketDataProvider {
   std::optional<Bytes> pin_response;
   Bytes initial_cr_extra;
   Bytes encrypted_extensions_extra;
+  Bytes hello_response_extra;
+  bool hello_retry = false;
   uint8_t last_client_alert = 0;
   std::optional<httpps::SessionTicket> resume_ticket;
   IoMode mode = ASYNC;
@@ -415,6 +417,12 @@ class Peer : public SocketDataProvider {
   void ConsumeRecord(ByteSpan record) {
     Bytes plaintext;
     uint8_t type = 0;
+    if (record[0] == 21) {
+      ASSERT_EQ(record.size(), 7u);
+      EXPECT_EQ(record[5], 2);
+      last_client_alert = record[6];
+      return;
+    }
     // This peer's resumed Connect returns after CH, before any server flight
     // read. Rejected early bytes may arrive only before the client reads SH.
     const bool early_epoch =
@@ -555,6 +563,15 @@ class Peer : public SocketDataProvider {
     if (resumed) {
       extensions_body.insert(extensions_body.end(), {0, 41, 0, 2, 0, 0});
     }
+    if (hello_retry) {
+      const Bytes random{0xcf,0x21,0xad,0x74,0xe5,0x9a,0x61,0x11,
+          0xbe,0x1d,0x8c,0x02,0x1e,0x65,0xb8,0x91,
+          0xc2,0xa2,0x11,0x16,0x7a,0xbb,0x8c,0x5e,
+          0x07,0x9e,0x09,0xe2,0xc8,0xa8,0x33,0x9c};
+      std::copy(random.begin(), random.end(), body.begin() + 2);
+      extensions_body = {0, 43, 0, 2, 4, 0, 0, 44, 0, 3, 0, 1, 7};
+    }
+    Append(extensions_body, hello_response_extra);
     U16(body, extensions_body.size());
     Append(body, extensions_body);
     Bytes server_hello = Frame(2, body);
@@ -571,6 +588,8 @@ class Peer : public SocketDataProvider {
     Bytes wire{22, 3, 3, 0, static_cast<uint8_t>(server_hello.size())};
     Append(wire, server_hello);
     server_bytes_.append(wire.begin(), wire.end());
+    if (hello_retry)
+      return;  // This fixture exercises rejection before a second ClientHello.
 
     Bytes extensions = {0, 19, 0,   0,   0,   0,   0,   16,  0,   11, 0,
                         9, 8,  'h', 't', 't', 'p', '/', '1', '.', '1'};
@@ -1326,11 +1345,30 @@ TEST_F(HttppsClientSocketTest, PartialAsyncHandshakeAndApplication) {
   EXPECT_EQ(0, read.GetResult(result));
 }
 
+TEST_F(HttppsClientSocketTest, HelloResponseAlertsDistinguishOfferAndContext) {
+  peer_.write_chunk = 65536;
+  for (bool retry : {false, true}) {
+    peer_.hello_retry = retry;
+    for (uint16_t type : {0xfafa, 15, 41, 33, 0xff02}) {
+      SCOPED_TRACE(testing::Message() << "retry=" << retry << " type=" << type);
+      peer_.hello_response_extra.clear();
+      U16(peer_.hello_response_extra, type);
+      U16(peer_.hello_response_extra, 0);
+      auto socket = Make();
+      TestCompletionCallback connected;
+      EXPECT_EQ(ERR_SSL_PROTOCOL_ERROR, connected.GetResult(socket->Connect(connected.callback())));
+      EXPECT_EQ(peer_.client_hellos, 1);
+      EXPECT_EQ(peer_.client_finished, 0);
+      EXPECT_EQ(peer_.last_client_alert, type == 0xfafa || (!retry && (type == 41 || type == 33)) ? 110 : 47);
+    }
+  }
+}
+
 TEST_F(HttppsClientSocketTest, EncryptedExtensionAlertsDistinguishMissingOffer) {
   struct Case { uint16_t type; Bytes value; bool offered; uint8_t alert; };
   const Case cases[] = {{0xfafa, {}, false, 110}, {15, {1}, false, 110},
                         {28, {0, 64}, false, 110}, {15, {0}, true, 47},
-                        {15, {}, true, 47}, {15, {1, 1}, true, 47}};
+                        {15, {}, true, 50}, {15, {1, 1}, true, 50}};
   peer_.write_chunk = 65536;
   for (const auto& test : cases) {
     SCOPED_TRACE(test.type);
@@ -1361,6 +1399,19 @@ TEST_F(HttppsClientSocketTest, MisplacedEncryptedExtensionsKeepIllegalParameter)
     EXPECT_EQ(ERR_SSL_PROTOCOL_ERROR, connected.GetResult(socket->Connect(connected.callback())));
     EXPECT_EQ(peer_.client_finished, 0);
     EXPECT_EQ(peer_.last_client_alert, 47);
+  }
+}
+
+TEST_F(HttppsClientSocketTest, CertificateExtensionAlertsDistinguishOfferAndContext) {
+  peer_.write_chunk = 65536;
+  for (uint16_t type : {0xfafa, 5, 18, 34, 52, 59, 15, 43, 0xff02}) {
+    SCOPED_TRACE(type);
+    peer_.leaf_extensions = {{type, {}}};
+    auto socket = Make();
+    TestCompletionCallback connected;
+    EXPECT_EQ(ERR_SSL_PROTOCOL_ERROR, connected.GetResult(socket->Connect(connected.callback())));
+    EXPECT_EQ(peer_.client_finished, 0);
+    EXPECT_EQ(peer_.last_client_alert, type == 15 || type == 43 || type == 0xff02 ? 47 : 110);
   }
 }
 
@@ -2141,7 +2192,9 @@ TEST_F(HttppsClientSocketTest, FreshAndCachedEvidenceReachCurrentBrowserPolicy) 
 }
 
 TEST_F(HttppsClientSocketTest, MalformedOrUnsolicitedEvidenceCannotReachVerifier) {
-  for (const Bytes& status : {Bytes{1, 0, 0, 0}, Bytes{1, 0, 0, 2, 1}, Bytes{2, 0, 0, 1, 1}}) {
+  peer_.write_chunk = 65536;
+  for (const Bytes& status : {Bytes{}, Bytes{1}, Bytes{1, 0, 0, 0},
+                             Bytes{1, 0, 0, 2, 1}, Bytes{2, 0, 0, 1, 1}}) {
     peer_.leaf_extensions[5] = status;
     ParamRecordingMockCertVerifier verifier;
     auto socket = Make(false, &verifier);
@@ -2149,13 +2202,26 @@ TEST_F(HttppsClientSocketTest, MalformedOrUnsolicitedEvidenceCannotReachVerifier
     EXPECT_LT(connect.GetResult(socket->Connect(connect.callback())), 0);
     EXPECT_TRUE(verifier.GetVerifyParams().empty());
     EXPECT_EQ(0, peer_.client_finished);
+    EXPECT_EQ(status.empty() || status[0] == 1 ? 50 : 47, peer_.last_client_alert);
   }
-  peer_.leaf_extensions[5] = Bytes{1, 0, 0, 1, 1};
+  for (const Bytes& list : {Bytes{}, Bytes{0}, Bytes{0, 0}, Bytes{0, 1, 0},
+                           Bytes{0, 2, 0, 0}, Bytes{0, 3, 0, 2, 1}}) {
+    peer_.leaf_extensions = {{18, list}};
+    ParamRecordingMockCertVerifier verifier;
+    auto socket = Make(false, &verifier);
+    TestCompletionCallback connect;
+    EXPECT_LT(connect.GetResult(socket->Connect(connect.callback())), 0);
+    EXPECT_TRUE(verifier.GetVerifyParams().empty());
+    EXPECT_EQ(0, peer_.client_finished);
+    EXPECT_EQ(50, peer_.last_client_alert);
+  }
+  peer_.leaf_extensions = {{5, Bytes{1, 0, 0, 1, 1}}};
   auto socket = Make();  // Standalone offline policy does not advertise status.
   TestCompletionCallback connect;
   EXPECT_LT(connect.GetResult(socket->Connect(connect.callback())), 0);
   EXPECT_FALSE(peer_.requested_ocsp);
   EXPECT_EQ(0, peer_.client_finished);
+  EXPECT_EQ(110, peer_.last_client_alert);
 }
 
 TEST_F(HttppsClientSocketTest, MustStapleUsesCurrentBrowserPolicyForFreshAndCachedEvidence) {

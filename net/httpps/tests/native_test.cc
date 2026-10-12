@@ -258,6 +258,47 @@ void AuthenticatorTest(SocketHandle socket, net::httpps::Client& client,
   response = receive();
   Require(!client.ValidateServerAuthenticator(response, validate, &authenticated, request) && !authenticated, "EA tampered proof rejected");
   Require(!client.RequestServerAuthenticator(Bytes{4}, {}, &request), "EA failed proof consumes context");
+  // Proofs are genuine in every case. Optional evidence policy may ignore an
+  // unknown SCT, but must never receive a malformed TLS evidence envelope.
+  for (bool spontaneous : {false, true}) {
+    for (size_t index = 0; index < (spontaneous ? 19u : 27u); ++index) {
+      const bool valid = index < 4 || index == 19 || index == 20;
+      const uint16_t kind = index >= 19 ? 52 : index == 3 || index >= 12 ? 5 : 18;
+      const Bytes context_bytes{0x40, static_cast<uint8_t>(spontaneous), static_cast<uint8_t>(index)};
+      request.clear();
+      if (!spontaneous) {
+        Require(client.RequestServerAuthenticator(context_bytes, {{kind, {}}}, &request),
+                "EA evidence request has an actual offer and independent context");
+        send_frame(request);
+      }
+      response = receive();
+      size_t policy_calls = 0;
+      auto optional_evidence = [&](const net::httpps::AuthenticatorIdentity& identity,
+                                  const std::map<uint16_t, Bytes>& offers, net::httpps::Secret* public_key) {
+        ++policy_calls;
+        return offers.count(kind) && identity.extensions.front().count(kind) &&
+            net::httpps::VerifyLabChain(identity.certificates, anchors, "localhost", public_key);
+      };
+      const bool accepted = client.ValidateServerAuthenticator(response, optional_evidence, &authenticated, request);
+      if (accepted != valid || authenticated != valid || policy_calls != (valid ? 1u : 0u))
+        std::cerr << "EA evidence case " << index << " spontaneous=" << spontaneous
+                  << " accepted=" << accepted << " authenticated=" << authenticated
+                  << " policy_calls=" << policy_calls << '\n';
+      Require(accepted == valid &&
+                  authenticated == valid && policy_calls == (valid ? 1u : 0u),
+              "EA nested evidence framing is validated before optional PKIX/evidence policy");
+      Require(!client.ValidateServerAuthenticator(response, optional_evidence, &authenticated, request) &&
+                  !authenticated && policy_calls == (valid ? 1u : 0u),
+              "EA evidence failure and success both consume the response context");
+      Require(!client.CancelAuthenticator(request) && client.established() && !client.closed() &&
+                  client.TakeFatalAlert().empty() && client.TakeOutput().empty(),
+              "EA syntax rejection emits no TLS alert and leaves the connection usable");
+      Bytes current_binding;
+      Require(client.ChannelBinding(&current_binding) && current_binding == binding,
+              "EA syntax rejection preserves the original channel binding");
+      send_frame(Bytes{'N', 'E', 'X', 'T'});
+    }
+  }
   Require(client.RequestKeyUpdate(true, &response), "EA key update");
   Send(socket, response);
   Bytes after;
@@ -285,7 +326,8 @@ int Get(const char* host,
         bool ocsp_request_recheck_test = false,
         ChainRejection reject_long_chain = ChainRejection::kNone,
         uint8_t expected_handshake_alert = 0,
-        bool client_ocsp_authenticator_test = false) {
+        bool client_ocsp_authenticator_test = false,
+        bool plaintext_handshake_alert = false) {
 #if defined(_WIN32)
   WSADATA data;
   Require(WSAStartup(MAKEWORD(2, 2), &data) == 0, "winsock init");
@@ -358,15 +400,21 @@ int Get(const char* host,
       auto alert = client.TakeFatalAlert();
       if (reject_long_chain != ChainRejection::kNone || expected_handshake_alert) {
         Require(!client.established() && client.error() == net::httpps::Client::Error::kProtocol &&
-                    unused.empty() && client.TakeOutput().empty() && alert_secret.size() == 32,
-                "expected rejection occurs in the authenticated certificate parser");
-        net::httpps::RecordCipher alert_reader(alert_secret);
-        OPENSSL_cleanse(alert_secret.data(), alert_secret.size());
-        uint8_t type = 0;
-        Bytes content;
+                    unused.empty() && client.TakeOutput().empty(),
+                "expected rejection does not establish a channel or expose data");
         const uint8_t expected = expected_handshake_alert ? expected_handshake_alert : 50;
-        Require(alert_reader.Open(alert, &type, &content) && type == 21 && content == Bytes({2, expected}),
-                "certificate parser generates the exact authenticated fatal alert");
+        if (plaintext_handshake_alert) {
+          Require(alert_secret.empty() && alert == Bytes({21, 3, 3, 0, 2, 2, expected}),
+                  "Hello parser generates the exact plaintext fatal alert");
+        } else {
+          Require(alert_secret.size() == 32, "authenticated alert has handshake keys");
+          net::httpps::RecordCipher alert_reader(alert_secret);
+          OPENSSL_cleanse(alert_secret.data(), alert_secret.size());
+          uint8_t type = 0;
+          Bytes content;
+          Require(alert_reader.Open(alert, &type, &content) && type == 21 && content == Bytes({2, expected}),
+                  "certificate parser generates the exact authenticated fatal alert");
+        }
         if (reject_long_chain == ChainRejection::kReset) {
           // This fixed peer sends one CV and one Finished record after the
           // Certificate. Drain both before an abortive close so the server is
@@ -398,7 +446,8 @@ int Get(const char* host,
         close(stream);
 #endif
         if (expected_handshake_alert)
-          std::cout << "certificate parser: authenticated fatal alert " << unsigned{expected} << " generated\n";
+          std::cout << (plaintext_handshake_alert ? "Hello parser: plaintext fatal alert " :
+                        "certificate parser: authenticated fatal alert ") << unsigned{expected} << " generated\n";
         else
           std::cout << "oversized chain: authenticated fatal decode_error generated\n";
         return 0;
@@ -1077,6 +1126,7 @@ int main(int argc, char** argv) {
     net::httpps::ClientOptions options;
     options.spontaneous_authenticators = true;
     options.request_ocsp = true;
+    options.request_scts = true;
     options.cipher_suites = {static_cast<uint16_t>(ParseUnsigned(argv[5], 16))};
     return Get(argv[2], argv[3], argv[4], false, false, true,
                std::string_view(argv[6]) == "-" ? nullptr : argv[6],
@@ -1175,6 +1225,7 @@ int main(int argc, char** argv) {
     options.cipher_suites = {0xc0b1}; options.groups = {24};
     options.spontaneous_authenticators = true;
     options.request_ocsp = true;
+    options.request_scts = true;
     return Get(argv[2], argv[3], argv[4], false, false, true,
         std::string_view(argv[7]) == "-" ? nullptr : argv[7],
         std::string_view(argv[8]) == "-" ? nullptr : argv[8], options, nullptr, false, true);
@@ -1354,15 +1405,80 @@ int main(int argc, char** argv) {
                nullptr, false, false, false, nullptr, false, false, ChainRejection::kNone,
                static_cast<uint8_t>(expected));
   }
+  if ((argc == 10 || argc == 11) && std::string_view(argv[1]) == "--certificate-alert") {
+    net::httpps::ClientOptions options;
+    const auto compression = ParseUnsigned(argv[6]);
+    Require(compression <= 3, "explicit certificate compression algorithm");
+    if (compression)
+      options.certificate_compression = {static_cast<uint16_t>(compression)};
+    if (ParseUnsigned(argv[7]))
+      options.cached_certificates = {{0, {ReadFile(argv[5])}}};
+    options.request_ocsp = std::string_view(argv[8]) == "ocsp";
+    options.request_scts = std::string_view(argv[8]) == "sct";
+    if (std::string_view(argv[8]) == "ct") {
+      Require(argc == 11, "CT envelope fixture requires an explicit trusted log");
+      auto policy = std::make_shared<net::httpps::CTv2Policy>();
+      net::httpps::CTLog log;
+      log.id = {0x2b, 0x06, 0x01, 0x04, 0x01};
+      const auto key = ReadFile(argv[10]);
+      log.public_key_spki.assign(key.begin(), key.end());
+      policy->logs.push_back(std::move(log));
+      options.ct_v2_policy = std::move(policy);
+    }
+    const auto expected = ParseUnsigned(argv[9]);
+    Require(expected == 0 || expected == 47 || expected == 50 || expected == 110,
+            "explicit CertificateEntry rejection alert or positive control");
+    return Get(argv[2], argv[3], argv[4], false, false, true, nullptr, nullptr,
+               options, nullptr, false, false, false, nullptr, false, false,
+               ChainRejection::kNone, static_cast<uint8_t>(expected));
+  }
   if (argc == 7 && std::string_view(argv[1]) == "--reject-ee-alert") {
     net::httpps::ClientOptions options;
     if (std::string_view(argv[5]) == "heartbeat") options.heartbeat_mode = 1;
+    else if (std::string_view(argv[5]) == "rsl") options.record_size_limit = 16385;
+    else if (std::string_view(argv[5]) == "mfl") options.max_fragment_length = 1;
+    else if (std::string_view(argv[5]) == "ticket") options.ticket_request = net::httpps::TicketRequest{};
+    else if (std::string_view(argv[5]) == "server-type") options.server_certificate_types = {0, 2};
     const unsigned expected = ParseUnsigned(argv[6]);
-    Require(expected == 47 || expected == 50 || expected == 110,
-            "explicit encrypted-extension rejection alert");
+    Require(expected == 0 || expected == 47 || expected == 50 || expected == 110,
+            "explicit encrypted-extension rejection alert or positive control");
     return Get(argv[2], argv[3], argv[4], false, false, true, nullptr, nullptr, options,
                nullptr, false, false, false, nullptr, false, false, ChainRejection::kNone,
                static_cast<uint8_t>(expected));
+  }
+  if ((argc == 7 || argc == 9) && std::string_view(argv[1]) == "--hello-structure-alert") {
+    net::httpps::ClientOptions options;
+    const std::string_view mode = argv[5];
+    if (mode == "psk" || mode == "combined") {
+      net::httpps::ExternalPSK psk;
+      psk.identity = Bytes{1}; psk.secret = Bytes(32, 7); psk.hostname = argv[2];
+      psk.combined = mode == "combined";
+      options.external_psks = {psk};
+    } else if (mode == "pwd") {
+      Require(argc == 9, "PWD alert fixture requires an explicit provider/helper");
+      options.native_provider = net::httpps::NativeProvider::Load(argv[7]);
+      Require(options.native_provider != nullptr, "explicit PWD alert provider");
+      auto credential = std::make_shared<net::httpps::PasswordCredential>();
+      credential->service = argv[2]; credential->helper_path = argv[8];
+      credential->username = "alice"; credential->password = "correct horse";
+      options.password = credential;
+      options.cipher_suites = {0xc0b0}; options.groups = {23};
+    } else {
+      Require(mode == "none", "explicit Hello fixture mode");
+    }
+    const auto expected = ParseUnsigned(argv[6]);
+    Require(expected == 0 || expected == 47 || expected == 50, "explicit Hello syntax alert");
+    return Get(argv[2], argv[3], argv[4], false, false, true, nullptr, nullptr, options,
+               nullptr, false, false, false, nullptr, false, false, ChainRejection::kNone,
+               static_cast<uint8_t>(expected), false, true);
+  }
+  if (argc == 6 && std::string_view(argv[1]) == "--reject-hello-alert") {
+    const unsigned expected = ParseUnsigned(argv[5]);
+    Require(expected == 47 || expected == 50 || expected == 110,
+            "explicit Hello rejection alert");
+    return Get(argv[2], argv[3], argv[4], false, false, true, nullptr, nullptr, {},
+               nullptr, false, false, false, nullptr, false, false, ChainRejection::kNone,
+               static_cast<uint8_t>(expected), false, true);
   }
   if (argc == 5 && (std::string_view(argv[1]) == "--reject-long-chain" ||
                    std::string_view(argv[1]) == "--reject-long-chain-reset")) {
