@@ -8,7 +8,7 @@ disables the sandbox, or bypasses a browser certificate error through CDP.
 
 Prerequisites: Python 3.11+, the reference server's `requirements-dev.txt`
 (including the `h2` fixture dependency), and a clean checkout of
-`tls20-server` at `44b582941199e402b89a373e8bed7c2318415371`. The revision is
+`tls20-server` at `83801ced17752ba886f59701e56f9de89dd2abe8`. The revision is
 checked before importing its protocol implementation. No dependencies are
 downloaded by the script.
 
@@ -22,6 +22,26 @@ results do not validate a subsequent optional-profile expansion.
 Use the server and browser from the same migration; the old numbered prototype
 is not wire-compatible with the current spec.
 
+## Requested authenticator OCSP semantics: 2026-10-12
+
+Both requested authenticator directions use CertificateRequest extension
+semantics: `status_request` must be empty. Malformed nonempty requests are
+rejected before consuming their context. Unsolicited server authenticators
+still inherit the full ClientHello OCSP request. Public API and real-wire tests
+exercise valid empty requests, malformed requests, context reuse after rejected
+input, authenticated refusals and spontaneous identities under certificate and
+password authentication.
+
+The production Windows browser and test binaries were incrementally rebuilt.
+Local validation passed six portable CTest targets, 22 interoperability
+invocations, 19 optional-provider commands, 15,803 selected integrated network
+tests with retries disabled, 30 service tests, eight component tests, 38
+real-browser checks and 34 provisioned-profile cases under each of the default
+and explicitly enabled network-sandbox policies. The 15 harness tests and nine
+branding tests passed. Reports are under `out/httpps-native/request-conformance-*`
+and `out/Phromium/request-conformance-*`. This is local Windows evidence, not a
+claim that the entire Chromium test suite or remote Linux/macOS CI ran locally.
+
 ## Certificate budgets, requests and retry alerts: 2026-10-11
 
 Wire parsing, local client credentials, cached material and both certificate
@@ -32,8 +52,9 @@ byte, identity, role and trust checks remain independent and mandatory.
 CertificateRequest validates known extension syntax even when no client
 credential is configured: authority vectors must be nonempty and contain valid
 DER Names, and the OCSP-request extension must be empty in this direction.
-The same checks apply to post-handshake and client-authenticator requests;
-server-authenticator requests retain the full ClientHello OCSP structure.
+The same checks apply to post-handshake and both requested authenticator
+directions. Only spontaneous server authenticators retain the full ClientHello
+OCSP structure (corrected on 2026-10-12).
 A repeated HelloRetryRequest returns `unexpected_message`, including with
 unknown or changed suite/group fields, while invalid first selections remain
 `illegal_parameter` failures.

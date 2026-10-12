@@ -16,7 +16,7 @@ async def main(args):
     from cryptography.hazmat.primitives.asymmetric import ed25519
     from tls20_server.handshake import server_handshake
     from tls20_server.lab import generate_lab_credentials
-    from tls20_server.application_auth import AuthorizedIdentity
+    from tls20_server.application_auth import AuthorizedIdentity, parse_request
     from tests.test_client_auth import client_credentials
 
     credentials, ca = generate_lab_credentials("localhost")
@@ -70,12 +70,22 @@ async def main(args):
                             def validate(identity, request):
                                 assert identity.chain == tuple(credential.chain_der)
                                 assert request.role == "client"
+                                assert dict(request.extensions)[5] == b""
                                 return AuthorizedIdentity(credential.private_key.public_key(), "authorized-loopback-client")
                             from tls20_server import messages as m
                             for index, schemes in enumerate(((0x0a0a,), (0xaaaa,), (0xfe00,), (0x0a0a, 0xfe01))):
                                 request = manager.request(context=b"client-first" + bytes((index,)), extra_extensions=(
                                     (34, m._vec(b"".join(value.to_bytes(2, "big") for value in schemes), 2)),
-                                    (0xff04, m._vec(b"\x08\x07", 2))))
+                                    (0xff04, m._vec(b"\x08\x07", 2)), (5, b"")))
+                                if index == 0:
+                                    parsed = parse_request(request)
+                                    for invalid in (b"\x01\0\0\0\0", b"\x01", b"\xff"):
+                                        # These malformed requests reuse the valid pending context.
+                                        # The native API must reject them before consuming it,
+                                        # whether returning a credential or an authenticated refusal.
+                                        await send(m.frame(13, m._vec(parsed.context, 1) + m._vec(b"".join(
+                                            m.extension(kind, invalid if kind == 5 else value)
+                                            for kind, value in parsed.extensions), 2)))
                                 await send(request)
                                 response = await receive()
                                 assert response[0] == (11 if selected else 20)
@@ -84,11 +94,13 @@ async def main(args):
                             assert await receive() == channel.channel_binding()
                             for schemes in ((0x0a0a,), (0xaaaa,), (0xfe01,), (0x0a0a, 0xfe00)):
                                 request = await receive()
-                                from tls20_server.application_auth import parse_request
-                                assert m._u16_list(dict(parse_request(request).extensions)[34]) == schemes
+                                offers = dict(parse_request(request).extensions)
+                                assert m._u16_list(offers[34]) == schemes
+                                assert offers[5] == b""
                                 await send(manager.authenticate(credentials, request=request))
                             request = await receive()
                             await send(manager.authenticate(request=request))
+                            assert dict(channel.peer_capabilities)[5] == b"\x01\0\0\0\0"
                             await send(manager.authenticate(credentials, context=b"spontaneous-loopback"))
                             request = await receive()
                             tampered = bytearray(manager.authenticate(credentials, request=request))
@@ -127,7 +139,7 @@ async def main(args):
                 finally:
                     server.close()
                     await server.wait_closed()
-    print(f"{2 if password_policy else 6} native application-authenticator cases: client/server MAC, GREASE/unknown delegation direct fallback and refusals, spontaneous identity, consumed contexts, tampered Finished and channel binding passed; PAKE={password_policy is not None}")
+    print(f"{2 if password_policy else 6} native application-authenticator cases: client/server MAC, empty requested OCSP with malformed nonempty requests rejected, GREASE/unknown delegation direct fallback and refusals, spontaneous ClientHello OCSP identity, consumed contexts, tampered Finished and channel binding passed; PAKE={password_policy is not None}")
 
 
 if __name__ == "__main__":

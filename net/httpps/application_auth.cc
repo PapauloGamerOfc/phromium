@@ -152,10 +152,9 @@ bool ParseRequest(ByteSpan wire, Request* request) {
       return false;
   if (!request->server && request->extensions.count(0))
     return false;
-  // A client authenticator request inherits CR's empty OCSP request. A server
-  // authenticator request instead uses the full ClientHello OCSP structure.
-  if (!request->server && request->extensions.count(5) &&
-      !request->extensions.at(5).empty())
+  // Both requested directions inherit CR's empty OCSP request. Only a
+  // spontaneous server authenticator inherits the ClientHello request.
+  if (request->extensions.count(5) && !request->extensions.at(5).empty())
     return false;
   std::vector<Bytes> authorities;
   if (request->extensions.count(47) &&

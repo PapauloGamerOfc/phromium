@@ -171,6 +171,13 @@ void AuthenticatorTest(SocketHandle socket, net::httpps::Client& client,
     return;
   }
   for (size_t i = 0; i < 4; ++i) {
+    if (i == 0) {
+      for (size_t invalid = 0; invalid < 3; ++invalid) {
+        request = receive();
+        Require(!client.AuthenticateClient(request, credential ? &*credential : nullptr, &response),
+                "EA client request rejects nonempty OCSP before claiming its context");
+      }
+    }
     request = receive();
     Require(client.AuthenticateClient(request, credential ? &*credential : nullptr, &response),
             "EA direct client identity/refusal accepts unsupported delegation offers");
@@ -183,11 +190,13 @@ void AuthenticatorTest(SocketHandle socket, net::httpps::Client& client,
   Bytes binding;
   Require(client.ChannelBinding(&binding) && binding.size() == 32, "named channel binding");
   send_frame(binding);
+  Bytes expected_ocsp_request;
   auto validate = [&](const net::httpps::AuthenticatorIdentity& identity,
                       const std::map<uint16_t, Bytes>& offers, net::httpps::Secret* public_key) {
     // This loopback fixture explicitly authorizes localhost under its lab CA;
     // production callers must additionally check their application policy.
-    return offers.count(50) && identity.extensions.size() == identity.certificates.size() &&
+    return offers.count(50) && offers.count(5) && offers.at(5) == expected_ocsp_request &&
+        identity.extensions.size() == identity.certificates.size() &&
         net::httpps::VerifyLabChain(identity.certificates, anchors, "localhost", public_key);
   };
   bool authenticated = false;
@@ -199,13 +208,18 @@ void AuthenticatorTest(SocketHandle socket, net::httpps::Client& client,
     Require(!client.RequestServerAuthenticator(Bytes{6}, malformed, &request),
             "EA malformed delegation vector still rejected");
   }
+  for (const Bytes& invalid : {Bytes{1, 0, 0, 0, 0}, Bytes{1}, Bytes{0xff}}) {
+    Require(!client.RequestServerAuthenticator(Bytes{10}, {{5, invalid}}, &request),
+            "EA server request rejects nonempty OCSP before claiming its context");
+  }
   uint8_t context = 10;
   for (const Bytes& schemes : {Bytes{0, 2, 0x0a, 0x0a}, Bytes{0, 2, 0xaa, 0xaa},
                               Bytes{0, 2, 0xfe, 1}, Bytes{0, 4, 0x0a, 0x0a, 0xfe, 0}}) {
     auto offers = unknown_delegation;
     offers[34] = schemes;
+    offers[5] = {};
     Require(client.RequestServerAuthenticator(Bytes{context++}, offers, &request),
-            "EA server request accepts unsupported delegation offers");
+            "EA server request accepts empty OCSP and unsupported delegation offers");
     send_frame(request);
     response = receive();
     Require(client.ValidateServerAuthenticator(response, validate, &authenticated, request) && authenticated,
@@ -220,9 +234,12 @@ void AuthenticatorTest(SocketHandle socket, net::httpps::Client& client,
   Require(client.RequestServerAuthenticator(Bytes{3}, {}, &request) && client.CancelAuthenticator(request), "EA cancellation consumes secret");
   Require(!client.RequestServerAuthenticator(Bytes{3}, {}, &request), "EA cancellation does not reopen context");
   response = receive();
-  Require(client.ValidateServerAuthenticator(response, validate, &authenticated) && authenticated, "spontaneous server EA retained scalar");
+  expected_ocsp_request = Bytes{1, 0, 0, 0, 0};
+  Require(client.ValidateServerAuthenticator(response, validate, &authenticated) && authenticated,
+          "spontaneous server EA retains scalar and full ClientHello OCSP request");
   Require(!client.ValidateServerAuthenticator(response, validate, &authenticated), "spontaneous EA replay rejected");
-  Require(client.RequestServerAuthenticator(Bytes{4}, {}, &request), "EA invalid response request");
+  expected_ocsp_request.clear();
+  Require(client.RequestServerAuthenticator(Bytes{4}, {{5, {}}}, &request), "EA invalid response request");
   send_frame(request);
   response = receive();
   Require(!client.ValidateServerAuthenticator(response, validate, &authenticated, request) && !authenticated, "EA tampered proof rejected");
@@ -964,6 +981,7 @@ int main(int argc, char** argv) {
   if (argc == 8 && std::string_view(argv[1]) == "--get-authenticator") {
     net::httpps::ClientOptions options;
     options.spontaneous_authenticators = true;
+    options.request_ocsp = true;
     options.cipher_suites = {static_cast<uint16_t>(ParseUnsigned(argv[5], 16))};
     return Get(argv[2], argv[3], argv[4], false, false, true,
                std::string_view(argv[6]) == "-" ? nullptr : argv[6],
@@ -1061,6 +1079,7 @@ int main(int argc, char** argv) {
     options.password = credential;
     options.cipher_suites = {0xc0b1}; options.groups = {24};
     options.spontaneous_authenticators = true;
+    options.request_ocsp = true;
     return Get(argv[2], argv[3], argv[4], false, false, true,
         std::string_view(argv[7]) == "-" ? nullptr : argv[7],
         std::string_view(argv[8]) == "-" ? nullptr : argv[8], options, nullptr, false, true);
