@@ -65,6 +65,21 @@ void TlsFeaturesTests() {
   const auto extra = Certificate(Bytes{0x30, 7, 2, 1, 5, 2, 2, 0x12, 0x34});
   const auto unknown = Certificate(Bytes{0x30, 4, 2, 2, 0x12, 0x34});
   const auto scts = Certificate(Bytes{0x30, 3, 2, 1, 18});
+  const auto heartbeat = Certificate(Bytes{0x30, 3, 2, 1, 15});
+  Check(net::httpps::CertificateFeaturesNegotiated(heartbeat, {15}, {15}), "required negotiated feature");
+  Check(!net::httpps::CertificateFeaturesNegotiated(heartbeat, {15}, {43, 51}), "offered required feature absent");
+  Check(net::httpps::CertificateFeaturesNegotiated(heartbeat, {43, 51}, {43, 51}), "unoffered feature ignored");
+  Check(net::httpps::CertificateFeaturesNegotiated(unknown, {0x1234}, {0x1234}), "generic required feature fulfilled");
+  Check(!net::httpps::CertificateFeaturesNegotiated(unknown, {0x1234}, {}), "generic offered feature cannot be ignored");
+  Check(!net::httpps::CertificateFeaturesAllowEarlyData(heartbeat, {15}), "fresh negotiation precedes application bytes");
+  Check(net::httpps::CertificateFeaturesAllowEarlyData(heartbeat, {43}), "unoffered feature does not disable early data");
+  Check(net::httpps::CertificateFeaturesAllowEarlyData(unknown, {43}), "unknown unoffered feature does not disable early data");
+  Check(net::httpps::CertificateFeaturesAllowEarlyData(ocsp, {5}), "cached evidence may authorize early data after revalidation");
+  for (uint8_t feature : {25, 27})
+    Check(net::httpps::CertificateFeaturesAllowEarlyData(Certificate(Bytes{0x30, 3, 2, 1, feature}), {feature}),
+          "omitted certificate-flight mechanism is redundant on resumption");
+  Check(net::httpps::CertificateFeaturesAllowEarlyData(Certificate(Bytes{0x30, 5, 2, 3, 0, 0xff, 2}), {0xff02}),
+        "original certificate MAC is authenticated by resumption PSK");
   Check(net::httpps::CertificateRequiresFeature(scts, 18) == true, "SCT must staple");
   Check(net::httpps::CertificateRequiresBrowserEvidence(scts, true, true) == true,
         "offered SCTs require independent browser evidence");

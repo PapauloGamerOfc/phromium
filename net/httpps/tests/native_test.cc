@@ -272,7 +272,8 @@ int Get(const char* host,
         const net::httpps::ClientCredential* selected_credential = nullptr,
         bool bootstrap_inventory_test = false,
         bool ocsp_request_recheck_test = false,
-        ChainRejection reject_long_chain = ChainRejection::kNone) {
+        ChainRejection reject_long_chain = ChainRejection::kNone,
+        uint8_t expected_handshake_alert = 0) {
 #if defined(_WIN32)
   WSADATA data;
   Require(WSAStartup(MAKEWORD(2, 2), &data) == 0, "winsock init");
@@ -338,21 +339,22 @@ int Get(const char* host,
   }
   while (!client.established()) {
     Bytes unused;
-    auto alert_secret = reject_long_chain != ChainRejection::kNone
+    auto alert_secret = reject_long_chain != ChainRejection::kNone || expected_handshake_alert
         ? HandshakeSendingSecretForTest(client) : Bytes{};
     const bool accepted = client.Receive(Record(stream), &unused);
     if (!accepted) {
       auto alert = client.TakeFatalAlert();
-      if (reject_long_chain != ChainRejection::kNone) {
+      if (reject_long_chain != ChainRejection::kNone || expected_handshake_alert) {
         Require(!client.established() && client.error() == net::httpps::Client::Error::kProtocol &&
                     unused.empty() && client.TakeOutput().empty() && alert_secret.size() == 32,
-                "oversized chain fails in the authenticated certificate parser");
+                "expected rejection occurs in the authenticated certificate parser");
         net::httpps::RecordCipher alert_reader(alert_secret);
         OPENSSL_cleanse(alert_secret.data(), alert_secret.size());
         uint8_t type = 0;
         Bytes content;
-        Require(alert_reader.Open(alert, &type, &content) && type == 21 && content == Bytes({2, 50}),
-                "oversized chain generates authenticated fatal decode_error");
+        const uint8_t expected = expected_handshake_alert ? expected_handshake_alert : 50;
+        Require(alert_reader.Open(alert, &type, &content) && type == 21 && content == Bytes({2, expected}),
+                "certificate parser generates the exact authenticated fatal alert");
         if (reject_long_chain == ChainRejection::kReset) {
           // This fixed peer sends one CV and one Finished record after the
           // Certificate. Drain both before an abortive close so the server is
@@ -365,6 +367,17 @@ int Get(const char* host,
                   "force a reset without delivering the locally checked alert");
         } else {
           Send(stream, alert);
+          if (expected_handshake_alert) {
+            // Preserve peer receipt independently of unread CV/Finished bytes:
+            // send FIN, then discard its remaining flight until it closes.
+#if defined(_WIN32)
+            Require(shutdown(stream, SD_SEND) == 0, "finish expected alert write");
+#else
+            Require(shutdown(stream, SHUT_WR) == 0, "finish expected alert write");
+#endif
+            char discarded[4096];
+            while (recv(stream, discarded, sizeof(discarded), 0) > 0) {}
+          }
         }
 #if defined(_WIN32)
         closesocket(stream);
@@ -372,7 +385,10 @@ int Get(const char* host,
 #else
         close(stream);
 #endif
-        std::cout << "oversized chain: authenticated fatal decode_error generated\n";
+        if (expected_handshake_alert)
+          std::cout << "certificate parser: authenticated fatal alert " << unsigned{expected} << " generated\n";
+        else
+          std::cout << "oversized chain: authenticated fatal decode_error generated\n";
         return 0;
       }
       if (!alert.empty())
@@ -400,7 +416,7 @@ int Get(const char* host,
       Require(client.OutputFlushed(), "CF flush");
     }
   }
-  Require(reject_long_chain == ChainRejection::kNone,
+  Require(reject_long_chain == ChainRejection::kNone && !expected_handshake_alert,
           "oversized chain must never establish a connection");
   Bytes output;
   if (bootstrap_inventory_test) {
@@ -1290,6 +1306,15 @@ int main(int argc, char** argv) {
     return Get(argv[2], argv[3], argv[4], false,
                std::string_view(argv[1]) == "--get-unauthenticated-resume", true,
                nullptr, nullptr, options);
+  }
+  if (argc == 7 && std::string_view(argv[1]) == "--reject-compression-alert") {
+    net::httpps::ClientOptions options;
+    options.certificate_compression = {static_cast<uint16_t>(ParseUnsigned(argv[5]))};
+    const unsigned expected = ParseUnsigned(argv[6]);
+    Require(expected == 42 || expected == 47, "explicit compression rejection alert");
+    return Get(argv[2], argv[3], argv[4], false, false, true, nullptr, nullptr, options,
+               nullptr, false, false, false, nullptr, false, false, ChainRejection::kNone,
+               static_cast<uint8_t>(expected));
   }
   if (argc == 5 && (std::string_view(argv[1]) == "--reject-long-chain" ||
                    std::string_view(argv[1]) == "--reject-long-chain-reset")) {

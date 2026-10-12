@@ -384,13 +384,14 @@ std::optional<DNSSECService> DNSSECProvider::Validate(
 bool DANEPolicy::IsValid() const {
   std::vector<RR> parsed;
   return provider && port && application_policy_context.size() <= 4096 &&
-      (!(pkix_validator || dane_path_validator) || !application_policy_context.empty()) &&
+      (!(pkix_validator || dane_path_validator || dane_verified_path_validator) || !application_policy_context.empty()) &&
       ParseRecords(trust_anchors, &parsed, true);
 }
 DNSBytes DANEPolicy::Context() const {
   if (!IsValid()) return {};
   DNSBytes context{'D','A','N','E',0}; Put16(context, port);
   context.push_back(allow_authenticated_denial); context.push_back(!!pkix_validator); context.push_back(!!dane_path_validator);
+  context.push_back(!!dane_verified_path_validator);
   Put16(context, static_cast<uint16_t>(trust_anchors.size()));
   context.insert(context.end(), trust_anchors.begin(), trust_anchors.end());
   context.insert(context.end(), application_policy_context.begin(), application_policy_context.end());
@@ -421,13 +422,13 @@ std::optional<DANEAuthorization> DANEPolicy::Verify(
   const uint16_t lifetime = U16(evidence, 0);
   if (result->authenticated_denial) {
     if (!allow_authenticated_denial) return fail("DANE policy requires a positive TLSA authorization");
-    return DANEAuthorization{-1, result->expires_unix_seconds, lifetime};
+    return DANEAuthorization{-1, result->expires_unix_seconds, lifetime, {}};
   }
   std::optional<std::vector<DNSBytes>> pkix_path;
   bool checked_pkix = false;
   for (const auto& record : result->records) {
     if (record.usage == 3 && Matches(record, material.front(), type == 2))
-      return DANEAuthorization{3, result->expires_unix_seconds, lifetime};
+      return DANEAuthorization{3, result->expires_unix_seconds, lifetime, {}};
     if (type == 2) continue;
     if ((record.usage == 0 || record.usage == 1) && pkix_validator) {
       if (!checked_pkix) { pkix_path = pkix_validator(material); checked_pkix = true; }
@@ -435,14 +436,21 @@ std::optional<DANEAuthorization> DANEPolicy::Verify(
         const size_t start = record.usage == 1 ? 0 : 1;
         const size_t end = record.usage == 1 ? 1 : pkix_path->size();
         for (size_t i = start; i < end; ++i) if (Matches(record, (*pkix_path)[i], false))
-          return DANEAuthorization{record.usage, result->expires_unix_seconds, lifetime};
+          return DANEAuthorization{record.usage, result->expires_unix_seconds, lifetime, *pkix_path};
       }
-    } else if (record.usage == 2 && dane_path_validator) {
+    } else if (record.usage == 2 && (dane_path_validator || dane_verified_path_validator)) {
       std::vector<DNSBytes> candidates(material.begin() + 1, material.end());
       if (record.selector == 0 && record.matching == 0) candidates.push_back(record.association);
-      for (const auto& candidate : candidates)
-        if (Matches(record, candidate, false) && dane_path_validator(material, candidate))
-          return DANEAuthorization{2, result->expires_unix_seconds, lifetime};
+      for (const auto& candidate : candidates) {
+        if (!Matches(record, candidate, false)) continue;
+        if (dane_verified_path_validator) {
+          auto path = dane_verified_path_validator(material, candidate);
+          if (path && !path->empty() && path->front() == material.front())
+            return DANEAuthorization{2, result->expires_unix_seconds, lifetime, std::move(*path)};
+        } else if (dane_path_validator(material, candidate)) {
+          return DANEAuthorization{2, result->expires_unix_seconds, lifetime, {}};
+        }
+      }
     }
   }
   return fail("authenticated TLSA records do not authorize this credential");

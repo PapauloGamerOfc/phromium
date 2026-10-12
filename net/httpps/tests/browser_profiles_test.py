@@ -186,7 +186,7 @@ def dane_path_fixture(host, missing_features):
     return Credentials(material, leaf_key), material[-1]
 
 
-def dane_fixture(credentials, host, port, wrong_association, *, usage=3, root=None):
+def dane_fixture(credentials, host, port, wrong_association, *, usage=3, root=None, full_anchor=False):
     import dns.dnssec
     import dns.name
     import dns.rrset
@@ -200,7 +200,8 @@ def dane_fixture(credentials, host, port, wrong_association, *, usage=3, root=No
                   else credentials.private_key.public_key())
     spki = public_key.public_bytes(serialization.Encoding.DER, serialization.PublicFormat.SubjectPublicKeyInfo)
     digest = hashlib.sha256(spki).digest() if not wrong_association else bytes(32)
-    tlsa = dns.rrset.from_text(f"_{port}._tcp.{host}.", 300, "IN", "TLSA", f"{usage} 1 1 " + digest.hex())
+    association = f"{usage} 0 0 " + root.hex() if full_anchor else f"{usage} 1 1 " + digest.hex()
+    tlsa = dns.rrset.from_text(f"_{port}._tcp.{host}.", 300, "IN", "TLSA", association)
     now = int(time.time())
     def wire(*records):
         output = io.BytesIO()

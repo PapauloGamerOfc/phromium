@@ -56,6 +56,8 @@ struct HTTPPS_DNS_EXPORT DANEAuthorization {
   int usage = -1;
   int64_t expires_unix_seconds = 0;
   uint16_t support_lifetime_hours = 0;
+  // Only an independently validated PKIX or DANE-TA path, never wire material.
+  std::vector<DNSBytes> validated_path;
 };
 struct HTTPPS_DNS_EXPORT DANEPolicy {
   std::shared_ptr<DNSSECProvider> provider;
@@ -71,6 +73,11 @@ struct HTTPPS_DNS_EXPORT DANEPolicy {
       const std::vector<DNSBytes>&, const DNSBytes&)>;
   PKIXValidator pkix_validator;
   DANEPathValidator dane_path_validator;
+  // Path-preserving variant for consumers which also validate OCSP/CT evidence.
+  // A legacy boolean callback still authorizes DANE, but supplies no issuer.
+  using DANEVerifiedPathValidator = std::function<std::optional<std::vector<DNSBytes>>(
+      const std::vector<DNSBytes>&, const DNSBytes&)>;
+  DANEVerifiedPathValidator dane_verified_path_validator;
   // Caller-supplied stable identity for callbacks/trust configuration. Change
   // it on any policy change; never derive it from server-controlled bytes.
   DNSBytes application_policy_context;

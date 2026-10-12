@@ -8,7 +8,7 @@ disables the sandbox, or bypasses a browser certificate error through CDP.
 
 Prerequisites: Python 3.11+, the reference server's `requirements-dev.txt`
 (including the `h2` fixture dependency), and a clean checkout of
-`tls20-server` at `0b5b005aaea65535cd75f27f2afb7f93f1abb7bc`. The revision is
+`tls20-server` at `11cdcb36efb86f4cf8e3208c40106437ec2bd893`. The revision is
 checked before importing its protocol implementation. No dependencies are
 downloaded by the script.
 
@@ -21,6 +21,29 @@ provenance check, never certificate validation. Historical clean-revision
 results do not validate a subsequent optional-profile expansion.
 Use the server and browser from the same migration; the old numbered prototype
 is not wire-compatible with the current spec.
+
+## Negotiated features and private/DANE evidence regressions
+
+`browser_evidence_test.py` uses the actual browser with temporary profiles and
+loopback peers. It covers offered/selected/omitted TLS Features, fresh and
+resumed connections, compression, private-CA and DANE-TA CT v2, and OCSP
+signature, responder authorization, CertID, freshness, status and nonce checks.
+An omitted DANE trust anchor is recovered from the validated TLSA path; it is
+not added to ordinary PKIX roots. Required SCT v1 still follows the browser's
+existing CT/log policy and cannot be satisfied by parsing a blob.
+
+```sh
+python net/httpps/tests/browser_evidence_test.py --browser out/Default/chrome.exe --server-source ../tls20-server --manifest ../tls20-server/build/repro-providers/providers.json
+python net/httpps/tests/browser_evidence_test.py --browser out/Default/chrome.exe --server-source ../tls20-server --manifest ../tls20-server/build/repro-providers/providers.json --enable-network-sandbox
+```
+
+Like the profile harness, this stages only public test libraries into an owned
+temporary directory on Windows. It does not modify OS trust, existing browser
+profiles or production services. `compression_alert_interop_test.py` separately
+checks encrypted native-client alerts against a wire peer for all three codecs:
+invalid payload/length yields `bad_certificate` (42), while malformed envelopes
+and unoffered algorithms keep their distinct errors. Positive controls require
+an established connection and exchanged application data.
 
 ## Requested authenticator OCSP semantics: 2026-10-12
 

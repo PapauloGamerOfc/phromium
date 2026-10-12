@@ -470,6 +470,38 @@ the distinction between engine, async-adapter and real-browser coverage.
 
 ### Local validation status
 
+The negotiated-feature/evidence follow-up binds TLS Feature requirements to
+actual offers and authenticated negotiation, including session resumption.
+Connection-dependent requirements cannot authorize 0-RTT based on an earlier
+connection. Certificate-only operations omitted by PSK resumption are redundant,
+not missing server selections. Private-CA and DANE trust-anchor verification
+preserves the independently validated path for OCSP and CT v2 checks, including
+an issuer omitted from the wire chain. This does not turn a DANE anchor into a
+PKIX root or bypass the browser's separate SCT v1 log policy.
+
+Certificate decompression failures and declared-length mismatches now send
+`bad_certificate` (42); framing, negotiation and resource limits retain their
+own checks. The real-browser evidence harness and encrypted-alert interop
+regressions are documented in
+[`browser_e2e_README.md`](../net/httpps/tests/browser_e2e_README.md).
+
+This follow-up rebuilt the Windows browser and test executables. Local checks
+passed 15,804 selected network tests (retries disabled), 30 service and eight
+component tests, six CTest suites, 24 portable interop invocations, and 19
+provider commands. Real-browser checks passed 38 end-to-end assertions, 40
+profile cases per sandbox mode and 38 new evidence cases per sandbox mode.
+Fifteen harness self-tests, nine branding checks, and the matching server's
+697-test native suite (two POSIX-only skips on Windows) also passed. Logs use
+`five-fixes-*` and `evidence-final-*` under the local build outputs.
+
+The first broad network run exposed an obsolete mock-only OCSP test, not a
+reason to accept invalid staples: it had treated the bytes `ocs` as valid when
+a mock said GOOD. The updated tests separately cover the public verifier's
+policy and real private-path rejection, while signed positive fixtures run in
+the actual browser. The entire selected network suite was rebuilt and rerun.
+These are local Windows results, not a claim that every upstream Chromium
+suite or the next remote Linux/macOS workflow has run.
+
 The 2026-10-12 Zstandard/DANE follow-up accepts bounded RFC8478 multi-frame and
 skippable-frame certificate streams. The built-in DANE PKIX and trust-anchor
 callbacks additionally check TLS Feature inheritance on the native verifier's

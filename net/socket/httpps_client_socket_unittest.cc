@@ -2116,9 +2116,11 @@ TEST_F(HttppsClientSocketTest, MalformedOrUnsolicitedEvidenceCannotReachVerifier
   EXPECT_EQ(0, peer_.client_finished);
 }
 
-TEST_F(HttppsClientSocketTest, MustStapleCannotBeBypassedByPrivateAnchorOrCachedBytes) {
+TEST_F(HttppsClientSocketTest, MustStapleUsesCurrentBrowserPolicyForFreshAndCachedEvidence) {
   peer_.CertificateFeatures(Bytes{0x30, 3, 2, 1, 5});
   peer_.leaf_extensions[5] = Bytes{1, 0, 0, 3, 'o', 'c', 's'};
+  // The browser verifier mock is the trust oracle for this routing test, not
+  // a cryptographic OCSP fixture. No private anchor may bypass that oracle.
   for (bool good : {false, true}) {
     for (bool resumed : {false, true}) {
       SCOPED_TRACE(good);
@@ -2132,19 +2134,61 @@ TEST_F(HttppsClientSocketTest, MustStapleCannotBeBypassedByPrivateAnchorOrCached
         verified.ocsp_result.revocation_status = bssl::OCSPRevocationStatus::GOOD;
       }
       verifier.AddResultForCert(verified.verified_cert, verified, OK);
-      auto socket = Make(true, &verifier, peer_.resume_ticket, resumed);
+      auto socket = Make(false, &verifier, peer_.resume_ticket, resumed);
       TestCompletionCallback connect, confirm;
       int result = connect.GetResult(socket->Connect(connect.callback()));
       if (good) {
         EXPECT_EQ(OK, result);
         EXPECT_EQ(OK, confirm.GetResult(socket->ConfirmHandshake(confirm.callback())));
         EXPECT_EQ(1, peer_.client_finished);
+        SSLInfo info;
+        ASSERT_TRUE(socket->GetSSLInfo(&info));
+        EXPECT_EQ(resumed ? SSLInfo::HANDSHAKE_RESUME : SSLInfo::HANDSHAKE_FULL,
+                  info.handshake_type);
       } else {
         EXPECT_EQ(ERR_SSL_SERVER_CERT_BAD_FORMAT, result);
         EXPECT_EQ(0, peer_.client_finished);
         EXPECT_TRUE(peer_.received_early.empty());
       }
       EXPECT_FALSE(verifier.GetVerifyParams().empty());
+      for (const auto& params : verifier.GetVerifyParams())
+        EXPECT_EQ("ocs", params.ocsp_response());
+    }
+  }
+}
+
+TEST_F(HttppsClientSocketTest, MustStapleCannotBeBypassedByPrivateAnchorOrCachedBytes) {
+  peer_.CertificateFeatures(Bytes{0x30, 3, 2, 1, 5});
+  peer_.leaf_extensions[5] = Bytes{1, 0, 0, 3, 'o', 'c', 's'};
+  // A real private path uses cryptographic evidence verification. The unrelated
+  // browser mock cannot turn malformed OCSP bytes into an authenticated staple,
+  // even when it claims GOOD. Real signed positives are covered by the browser
+  // evidence interop tests, including private/DANE paths and resumption.
+  for (bool mock_good : {false, true}) {
+    for (bool resumed : {false, true}) {
+      SCOPED_TRACE(mock_good);
+      SCOPED_TRACE(resumed);
+      peer_.resume_ticket = resumed ? std::optional(peer_.Ticket()) : std::nullopt;
+      ParamRecordingMockCertVerifier verifier;
+      CertVerifyResult verified;
+      verified.verified_cert = peer_.certificate();
+      if (mock_good) {
+        verified.ocsp_result.response_status = bssl::OCSPVerifyResult::PROVIDED;
+        verified.ocsp_result.revocation_status = bssl::OCSPRevocationStatus::GOOD;
+      }
+      verifier.AddResultForCert(verified.verified_cert, verified, OK);
+      auto socket = Make(true, &verifier, peer_.resume_ticket, resumed);
+      TestCompletionCallback connect, confirm;
+      EXPECT_EQ(ERR_SSL_SERVER_CERT_BAD_FORMAT,
+                connect.GetResult(socket->Connect(connect.callback())));
+      EXPECT_EQ(ERR_SSL_SERVER_CERT_BAD_FORMAT,
+                confirm.GetResult(socket->ConfirmHandshake(confirm.callback())));
+      EXPECT_EQ(0, peer_.client_finished);
+      EXPECT_EQ(0, peer_.end_of_early_data);
+      EXPECT_TRUE(peer_.received_early.empty());
+      EXPECT_TRUE(peer_.received_application.empty());
+      EXPECT_FALSE(socket->IsConnected());
+      EXPECT_TRUE(verifier.GetVerifyParams().empty());
     }
   }
 }

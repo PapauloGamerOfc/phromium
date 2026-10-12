@@ -15,11 +15,13 @@
 #include "net/base/net_errors.h"
 #include "net/cert/x509_certificate.h"
 #include "net/cert/x509_util.h"
+#include "net/cert/internal/revocation_checker.h"
 #include "net/httpps/dnssec.h"
 #include "net/httpps/certificate_features.h"
 #include "net/ssl/ssl_connection_status_flags.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
 #include "third_party/boringssl/src/include/openssl/mem.h"
+#include "third_party/boringssl/src/include/openssl/pki/ocsp.h"
 
 namespace net {
 namespace {
@@ -87,6 +89,44 @@ bool RequiredEvidenceVerified(const std::vector<std::string>& certificates,
           return value.sct && value.status == ct::SCT_STATUS_OK &&
                  value.sct->origin == ct::SignedCertificateTimestamp::SCT_FROM_TLS_EXTENSION;
         })));
+}
+
+bool RequiresBrowserSCTPolicy(const std::vector<std::string>& certificates,
+                             const httpps::ClientOptions& options) {
+  if (certificates.empty()) return true;
+  const auto required = httpps::CertificateRequiresFeature(certificates.front(), 18);
+  return !required || (*required && options.request_scts);
+}
+
+bool VerifyPrivateEvidence(const std::vector<std::string>& certificates,
+    const std::vector<std::map<uint16_t, httpps::Bytes>>& extensions,
+    const std::vector<std::string>& path, const httpps::ClientOptions& options) {
+  if (path.empty() || certificates.empty() || path.front() != certificates.front() ||
+      extensions.size() > certificates.size()) return false;
+  const auto required = httpps::CertificateRequiresOCSP(certificates.front());
+  if (!required || (*required && options.request_ocsp && LeafEvidence(extensions, 5).empty()))
+    return false;
+  for (size_t index = 0; index < extensions.size(); ++index) {
+    const auto found = extensions[index].find(5);
+    if (found == extensions[index].end()) continue;
+    // Metadata remains bound to its wire certificate; path building may have
+    // omitted or reordered other entries. Never guess an unvalidated issuer.
+    const auto cert = std::find(path.begin(), path.end(), certificates[index]);
+    const auto value = base::span(found->second);
+    if (cert == path.end() || std::next(cert) == path.end() || value.size() < 5 || value[0] != 1 ||
+        ((size_t(value[1]) << 16) | (size_t(value[2]) << 8) | value[3]) != value.size() - 4)
+      return false;
+    const auto response = value.subspan(4u);
+    if (!httpps::OCSPRequestMatchesResponse(options, response)) return false;
+    bssl::OCSPVerifyResult::ResponseStatus details;
+    const auto status = bssl::CheckOCSP(
+        std::string_view(reinterpret_cast<const char*>(response.data()), response.size()),
+        *cert, *std::next(cert), base::Time::Now().ToTimeT(),
+        (index ? kMaxRevocationIntermediateUpdateAge : kMaxRevocationLeafUpdateAge).InSeconds(), &details);
+    if (details != bssl::OCSPVerifyResult::PROVIDED || status != bssl::OCSPRevocationStatus::GOOD)
+      return false;
+  }
+  return true;
 }
 
 std::string VerifiedIssuer(const CertVerifyResult& result) {
@@ -185,27 +225,25 @@ int HttppsClientSocket::VerifySessionCertificate() {
     session_verified_ = true;
     return BeginHandshake();
   }
-  httpps::Secret unused;
   const auto required_evidence = session_->certificates.empty() ? std::nullopt
       : httpps::CertificateRequiresBrowserEvidence(session_->certificates.front(),
                                                    options_.request_ocsp, options_.request_scts);
-  session_validated_path_ = httpps::ValidatedPrivatePath(session_->certificates,
+  const auto pkix_path = httpps::ValidatedPrivatePath(session_->certificates,
       trust_anchors_, destination_.host(), !session_->delegation.empty(), options_.native_provider.get());
   const auto dane = httpps::VerifyDNSSECPolicy(options_.dane_policy.get(), destination_.host(),
       session_->certificates, session_->server_certificate_type, session_->certificate_extensions,
-      session_validated_path_);
+      pkix_path, nullptr, &session_validated_path_);
+  if (!dane) session_validated_path_.clear();
   if (options_.dane_policy && dane && *dane >= 0 && !options_.ct_v2_policy &&
-      required_evidence && !*required_evidence) {
+      required_evidence && !*required_evidence && session_validated_path_.empty()) {
     session_verified_ = true;
     return BeginHandshake();
   }
-  if (required_evidence && !*required_evidence && !trust_anchors_.empty() &&
-      httpps::VerifyLabChain(session_->certificates, trust_anchors_,
-                             destination_.host(), &unused, !session_->delegation.empty(), options_.native_provider.get())) {
-    session_validated_issuer_ = httpps::ValidatedPrivateIssuer(session_->certificates,
-        trust_anchors_, destination_.host(), !session_->delegation.empty(), options_.native_provider.get());
+  if (!session_validated_path_.empty() && !RequiresBrowserSCTPolicy(session_->certificates, options_)) {
+    session_validated_issuer_ = session_validated_path_.size() > 1 ? session_validated_path_[1] : std::string{};
     if (!dane || !httpps::CertificateTLSFeaturesAllowed(session_validated_path_) ||
         !httpps::CertificateAlgorithmsAllowed(session_validated_path_, options_.certificate_signature_algorithms) ||
+        !VerifyPrivateEvidence(session_->certificates, session_->certificate_extensions, session_validated_path_, options_) ||
         !httpps::VerifyCertificateTransparency(options_.ct_v2_policy.get(), session_->certificates,
           session_->certificate_extensions, session_validated_issuer_)) {
       session_.reset();
@@ -462,6 +500,18 @@ int HttppsClientSocket::HandshakeLoop(int result) {
 
 int HttppsClientSocket::VerifyCertificate() {
   CHECK(cert_verifier_);
+  const auto& path = client_->validated_certificate_path();
+  if (!path.empty() && !RequiresBrowserSCTPolicy(client_->certificates(), options_)) {
+    // Trust was independently established by an explicit private CA or DANE-TA.
+    // Check evidence against that actual path, not the browser's unrelated root
+    // store. CheckOCSP verifies signature, responder authorization, CertID and
+    // current status/time; request constraints (including nonce) are separate.
+    const bool trusted = VerifyPrivateEvidence(client_->certificates(), client_->certificate_extensions(), path, options_);
+    if (!client_->CompleteCertificateVerification(trusted,
+            path.size() > 1 ? path[1] : std::string_view{}, path))
+      return Abort(ProtocolError());
+    return OK;
+  }
   std::vector<std::string_view> certificates;
   for (const auto& der : client_->certificates()) {
     certificates.push_back(der);

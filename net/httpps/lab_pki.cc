@@ -314,6 +314,29 @@ std::optional<bool> CertificateRequiresOCSP(std::string_view der) {
   return CertificateRequiresFeature(der, 5);
 }
 
+bool CertificateFeaturesNegotiated(std::string_view der,
+                                  const std::set<uint16_t>& offered,
+                                  const std::set<uint16_t>& satisfied) {
+  const auto features = CertificateTLSFeatures(der);
+  if (!features) return false;
+  for (uint16_t feature : *features)
+    if (offered.contains(feature) && !satisfied.contains(feature)) return false;
+  return true;
+}
+
+bool CertificateFeaturesAllowEarlyData(std::string_view der,
+                                      const std::set<uint16_t>& offered) {
+  const auto features = CertificateTLSFeatures(der);
+  if (!features) return false;
+  // Cached evidence is revalidated before CH; certificate-flight mechanisms
+  // are redundant in authenticated PSK resumption. Other offered requirements
+  // depend on this connection's negotiation and cannot authorize pre-EE data.
+  return std::all_of(features->begin(), features->end(), [&](uint16_t feature) {
+    return !offered.contains(feature) || feature == 5 || feature == 18 ||
+           feature == 25 || feature == 27 || feature == 52 || feature == 0xff02;
+  });
+}
+
 bool CertificateTLSFeaturesAllowed(
     const std::vector<std::string>& validated_path) {
   if (validated_path.empty() || validated_path.size() > kMaxCertificates + 1)

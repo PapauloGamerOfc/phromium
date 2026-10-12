@@ -277,13 +277,17 @@ bool ParseCertificates(ByteSpan body, std::vector<std::string>* certificates,
   return !certificates->empty();
 }
 
-bool DecompressCertificate(ByteSpan body, Bytes* decompressed) {
+bool DecompressCertificate(ByteSpan body, Bytes* decompressed, uint8_t* alert) {
+  *alert = 47;
   if (body.size() < 9 || Read24(body.subspan(5u, 3u)) != body.size() - 8)
     return false;
   const size_t size = Read24(body.subspan(2u, 3u));
   // This is the existing engine handshake memory budget, not a wire limit.
   if (!size || size > 1048572)
     return false;
+  // RFC8879 requires bad_certificate for failed decompression or a declared
+  // output-length mismatch, distinct from the envelope/offer checks above.
+  *alert = 42;
   auto input = body.subspan(8u);
   decompressed->resize(size);
   switch (Read16(body.first(2u))) {
@@ -312,6 +316,7 @@ bool DecompressCertificate(ByteSpan body, Bytes* decompressed) {
       // enforces the declared output bound even across multiple frames.
       return ZSTD_decompress(decompressed->data(), size, input.data(), input.size()) == size;
     default:
+      *alert = 47;
       return false;
   }
 }
@@ -451,7 +456,9 @@ std::vector<std::string> ValidatedPrivatePath(const std::vector<std::string>& ch
 std::optional<int> VerifyDNSSECPolicy(const DANEPolicy* policy, std::string_view hostname,
     const std::vector<std::string>& chain, uint8_t certificate_type,
     const std::vector<std::map<uint16_t, Bytes>>& extensions,
-    const std::vector<std::string>& validated_path, int64_t* expires_unix_seconds) {
+    const std::vector<std::string>& validated_path, int64_t* expires_unix_seconds,
+    std::vector<std::string>* authenticated_path) {
+  if (authenticated_path) *authenticated_path = validated_path;
   if (!policy)
     return -1;
   if (!policy->IsValid() || extensions.empty())
@@ -485,6 +492,11 @@ std::optional<int> VerifyDNSSECPolicy(const DANEPolicy* policy, std::string_view
   const auto result = effective.Verify(hostname, material, certificate_type, evidence->second, now);
   if (result && expires_unix_seconds)
     *expires_unix_seconds = result->expires_unix_seconds;
+  if (result && authenticated_path && !result->validated_path.empty()) {
+    authenticated_path->clear();
+    for (const auto& value : result->validated_path)
+      authenticated_path->emplace_back(value.begin(), value.end());
+  }
   return result ? std::optional<int>(result->usage) : std::nullopt;
 }
 
@@ -1756,7 +1768,8 @@ bool Client::Start(const SessionTicket* ticket, ByteSpan early_data,
         !CertificateAlgorithmsAllowed(private_path.empty() ? ticket->certificates : private_path,
                                        options_.certificate_signature_algorithms)) return Fail(Error::kCertificate);
     const auto dane = VerifyDNSSECPolicy(options_.dane_policy.get(), hostname_, ticket->certificates,
-        ticket->server_certificate_type, ticket->certificate_extensions, private_path);
+        ticket->server_certificate_type, ticket->certificate_extensions, private_path, nullptr,
+        &validated_certificate_path_);
     const bool dane_trusted = options_.dane_policy && dane && *dane >= 0;
     if (options_.dane_policy && !use_external_verifier_ && (!dane || (*dane < 0 && private_path.empty())))
       return Fail(Error::kCertificate);
@@ -1771,8 +1784,8 @@ bool Client::Start(const SessionTicket* ticket, ByteSpan early_data,
       return Fail(Error::kCertificate);
     if (certificate && !raw && !its && !use_external_verifier_ &&
         !VerifyCertificateTransparency(options_.ct_v2_policy.get(), ticket->certificates,
-            ticket->certificate_extensions, ValidatedPrivateIssuer(ticket->certificates, anchors_,
-                hostname_, !ticket->delegation.empty(), options_.native_provider.get())))
+            ticket->certificate_extensions,
+            validated_certificate_path_.size() > 1 ? validated_certificate_path_[1] : std::string_view{}))
       return Fail(Error::kCertificate);
     offered_ticket_ = *ticket;
     dane_expires_unix_seconds_ = ticket->dane_expires_unix_seconds;
@@ -2003,6 +2016,17 @@ bool Client::Start(const SessionTicket* ticket, ByteSpan early_data,
     Extension(&extensions, 21, Bytes(options_.client_hello_padding));
   }
   if (!offered_psks_.empty()) {
+    if (early_offered_ && ticket && ticket->server_certificate_type == 0 &&
+        !ticket->certificates.empty()) {
+      Bytes encoded;
+      Vector16(&encoded, extensions);
+      std::map<uint16_t, Bytes> offers;
+      if (!Extensions(encoded, &offers)) return Fail();
+      std::set<uint16_t> offered{41, 42};
+      for (const auto& [type, unused] : offers) offered.insert(type);
+      early_offered_ = CertificateFeaturesAllowEarlyData(ticket->certificates.front(), offered);
+      if (!early_data.empty() && !early_offered_) return Fail();
+    }
     if (early_offered_)
       Extension(&extensions, 42, {});
     if (!AddPskExtension(&extensions))
@@ -2011,6 +2035,13 @@ bool Client::Start(const SessionTicket* ticket, ByteSpan early_data,
   if (extensions.size() > 65535)
     return Fail();
   Vector16(&body, extensions);
+  {
+    Bytes encoded;
+    Vector16(&encoded, extensions);
+    std::map<uint16_t, Bytes> offers;
+    if (!Extensions(encoded, &offers)) return Fail();
+    for (const auto& [type, unused] : offers) offered_features_.insert(type);
+  }
   if (options_.spontaneous_authenticators) {
     Bytes encoded;
     Vector16(&encoded, extensions);
@@ -2285,6 +2316,11 @@ bool Client::RetryHello(ByteSpan frame, ByteSpan cookie, uint16_t group) {
   }
   if (offered_psks_.empty() && !cookie.empty())
     Extension(&extensions, 44, cookie);
+  offered_features_.erase(42);  // CH2 never offers early_data.
+  if (!cookie.empty()) {
+    offered_features_.insert(44);
+    negotiated_features_.insert(44);
+  }
   // A valid HRR cookie can still make CH2's extension vector unencodable.
   // Do not truncate its uint16 length or emit a malformed ClientHello.
   if (extensions.size() > 65535)
@@ -2345,7 +2381,9 @@ bool Client::CompleteCertificateVerification(bool trusted, std::string_view vali
     return Fail(Error::kCertificate);
   }
   const auto dane = VerifyDNSSECPolicy(options_.dane_policy.get(), hostname_, certificates_,
-      server_certificate_type_, certificate_extensions_, validated_path,
+      server_certificate_type_, certificate_extensions_,
+      validated_certificate_path_.empty() ? validated_path :
+          ValidatedPrivatePath(certificates_, anchors_, hostname_, delegated(), options_.native_provider.get()),
       resumed_ ? nullptr : &dane_expires_unix_seconds_);
   if (!dane)
     return Fail(Error::kCertificate);
@@ -2542,6 +2580,8 @@ bool Client::AcceptFrame(ByteSpan frame) {
       if (!AppendTranscript(frame)) {
         return Fail();
       }
+      for (const auto& [type, unused] : extensions) negotiated_features_.insert(type);
+      if (psk_selected_) negotiated_features_.insert(45);
       if (options_.pinning)
         pinning_transcript_ = transcript_;
       Bytes zeros(SuiteHashLength(suite_));
@@ -2677,6 +2717,7 @@ bool Client::AcceptFrame(ByteSpan frame) {
           std::find(options_.server_certificate_types.begin(), options_.server_certificate_types.end(),
                     server_certificate_type_) == options_.server_certificate_types.end())
         return Fail();
+      for (const auto& [type, unused] : extensions) negotiated_features_.insert(type);
       if (options_.bootstrap && psk_selected_ && !resumed_) {
         offered_psks_[selected_psk_].alpn = alpn_;
         external_psk_binding_ = PskBinding(offered_psks_[selected_psk_]);
@@ -2722,18 +2763,20 @@ bool Client::AcceptFrame(ByteSpan frame) {
             !*required_evidence && VerifyLabChain(certificates_, anchors_, hostname_, &unused, delegated(), options_.native_provider.get()));
         const auto private_path = ValidatedPrivatePath(certificates_, anchors_, hostname_, delegated(), options_.native_provider.get());
         const auto dane = VerifyDNSSECPolicy(options_.dane_policy.get(), hostname_, certificates_,
-            server_certificate_type_, certificate_extensions_, private_path);
+            server_certificate_type_, certificate_extensions_, private_path, nullptr,
+            &validated_certificate_path_);
         if (options_.dane_policy) {
           if (dane && *dane >= 0 && !*required_evidence)
             trusted = true;
           else if (!dane || *dane < 0)
             trusted = trusted && dane.has_value();
         }
-        if (options_.ct_v2_policy && private_path.empty())
+        if (!dane) validated_certificate_path_.clear();
+        if (options_.ct_v2_policy && validated_certificate_path_.empty())
           trusted = false;
         if (trusted && options_.ct_v2_policy &&
             !VerifyCertificateTransparency(options_.ct_v2_policy.get(), certificates_, certificate_extensions_,
-                ValidatedPrivateIssuer(certificates_, anchors_, hostname_, delegated(), options_.native_provider.get())))
+                validated_certificate_path_.size() > 1 ? validated_certificate_path_[1] : std::string_view{}))
           return Fail(Error::kCertificate);
         if (!trusted && !use_external_verifier_)
           return Fail(Error::kCertificate);
@@ -2745,6 +2788,7 @@ bool Client::AcceptFrame(ByteSpan frame) {
       return true;
     }
     case State::kCertificate: {
+      const bool compressed_certificate = frame[0] == 25;
       if (frame[0] == 13 || frame[0] == 252) {
         if (client_auth_requested_)
           return Fail(Error::kProtocol, 10);
@@ -2754,8 +2798,11 @@ bool Client::AcceptFrame(ByteSpan frame) {
       if (frame[0] == 25) {
         if (body.size() < 2 || std::find(options_.certificate_compression.begin(),
               options_.certificate_compression.end(), Read16(body.first(2u))) ==
-              options_.certificate_compression.end() || !DecompressCertificate(body, &decompressed))
+              options_.certificate_compression.end())
           return Fail();
+        uint8_t compression_alert;
+        if (!DecompressCertificate(body, &decompressed, &compression_alert))
+          return Fail(Error::kProtocol, compression_alert);
         body = decompressed;
       } else if (frame[0] != (cached_certificate_selected_ ? 253 : 11)) {
         return Fail(Error::kProtocol, 10);
@@ -2867,7 +2914,8 @@ bool Client::AcceptFrame(ByteSpan frame) {
           !CertificateAlgorithmsAllowed(private_path.empty() ? certificates_ : private_path,
                                          options_.certificate_signature_algorithms)) return Fail(Error::kCertificate);
       const auto dane = VerifyDNSSECPolicy(options_.dane_policy.get(), hostname_, certificates_,
-          server_certificate_type_, certificate_extensions_, private_path, &dane_expires_unix_seconds_);
+          server_certificate_type_, certificate_extensions_, private_path, &dane_expires_unix_seconds_,
+          &validated_certificate_path_);
       if (options_.dane_policy) {
         if (dane && *dane >= 0 && !*required_evidence) {
           private_trusted = true;
@@ -2878,7 +2926,14 @@ bool Client::AcceptFrame(ByteSpan frame) {
           private_trusted = private_trusted && dane.has_value();
         }
       }
-      if (options_.ct_v2_policy && private_path.empty())
+      if (!dane) validated_certificate_path_.clear();
+      if (!validated_certificate_path_.empty() &&
+          !CertificateAlgorithmsAllowed(validated_certificate_path_, options_.certificate_signature_algorithms))
+        return Fail(Error::kCertificate);
+      if (options_.ct_v2_policy && validated_certificate_path_.empty())
+        private_trusted = false;
+      if (use_external_verifier_ && std::any_of(certificate_extensions_.begin(), certificate_extensions_.end(),
+          [](const auto& metadata) { return metadata.contains(5); }))
         private_trusted = false;
       if (delegated() && !ValidateDelegation(certificates_.front(), server_delegation_, true,
                                             options_.grant_signature_algorithms, &S_, options_.native_provider.get()))
@@ -2891,12 +2946,13 @@ bool Client::AcceptFrame(ByteSpan frame) {
       if (!AppendTranscript(frame)) {
         return Fail();
       }
+      if (compressed_certificate) negotiated_features_.insert(27);
       if (!private_trusted) {
         state_ = State::kVerifyingCertificate;
         return true;
       }
       if (!VerifyCertificateTransparency(options_.ct_v2_policy.get(), certificates_, certificate_extensions_,
-              ValidatedPrivateIssuer(certificates_, anchors_, hostname_, delegated(), options_.native_provider.get())))
+              validated_certificate_path_.size() > 1 ? validated_certificate_path_[1] : std::string_view{}))
         return Fail(Error::kCertificate);
       return PrepareServerProof();
     }
@@ -2911,6 +2967,7 @@ bool Client::AcceptFrame(ByteSpan frame) {
         return Fail(Error::kProtocol, 51);
       }
       OPENSSL_cleanse(expected_proof_.data(), expected_proof_.size());
+      negotiated_features_.insert(0xff02);
       state_ = State::kFinished;
       return true;
     case State::kFinished: {
@@ -2926,6 +2983,23 @@ bool Client::AcceptFrame(ByteSpan frame) {
       OPENSSL_cleanse(expected.data(), expected.size());
       if (!ok || !AppendTranscript(frame)) {
         return Fail(Error::kProtocol, 51);
+      }
+      if (server_certificate_type_ == 0 && !certificates_.empty() &&
+          authentication_ != Authentication::kProvisioning && authentication_ != Authentication::kUnauthenticated) {
+        auto satisfied = negotiated_features_;
+        // With no new credential flight, its compression/cache/MAC mechanisms
+        // are redundant on PSK resumption (RFC7633), not an obligation to send
+        // a forbidden Certificate/CertificateVerify flight. Cached evidence
+        // and actual connection controls still retain their independent checks.
+        if (resumed_) satisfied.insert({25, 27, 0xff02});
+        // These unilateral offers are fulfilled by credential validation, not
+        // an invented EE echo. Evidence has already passed its trust policy.
+        satisfied.insert(50);
+        if (delegated()) satisfied.insert(0xff04);
+        if (!certificate_extensions_.empty())
+          for (const auto& [type, unused] : certificate_extensions_.front()) satisfied.insert(type);
+        if (!CertificateFeaturesNegotiated(certificates_.front(), offered_features_, satisfied))
+          return Fail(Error::kCertificate);
       }
       if (options_.pinning) {
         Bytes spki{0x30, 0x2a, 0x30, 5, 6, 3, 0x2b, 0x65, 0x6e, 3, 0x21, 0};

@@ -274,7 +274,8 @@ HTTPPS_EXPORT std::optional<int> VerifyDNSSECPolicy(
     const std::vector<std::string>& chain, uint8_t certificate_type,
     const std::vector<std::map<uint16_t, Bytes>>& extensions,
     const std::vector<std::string>& validated_path = {},
-    int64_t* expires_unix_seconds = nullptr);
+    int64_t* expires_unix_seconds = nullptr,
+    std::vector<std::string>* authenticated_path = nullptr);
 // Must validate the independent X.509 path, current request algorithms,
 // evidence, expected identity AND application authorization. Returning a key
 // alone is not completed authentication: the MAC/Finished are checked next.
@@ -456,6 +457,9 @@ class HTTPPS_EXPORT Client {
   bool diagnostic_failed() const { return diagnostic_failed_; }
 #endif
   const std::vector<std::string>& certificates() const { return certificates_; }
+  const std::vector<std::string>& validated_certificate_path() const {
+    return validated_certificate_path_;
+  }
   const std::vector<std::map<uint16_t, Bytes>>& certificate_extensions() const {
     return certificate_extensions_;
   }
@@ -513,6 +517,7 @@ class HTTPPS_EXPORT Client {
   std::string hostname_;
   std::vector<std::string> anchors_;
   std::vector<std::string> certificates_;
+  std::vector<std::string> validated_certificate_path_;
   std::vector<std::map<uint16_t, Bytes>> certificate_extensions_;
   int64_t dane_expires_unix_seconds_ = 0;
   int64_t its_expires_unix_milliseconds_ = 0;
@@ -547,6 +552,7 @@ class HTTPPS_EXPORT Client {
   Bytes ec_private_;
   Bytes kem_seed_;
   Bytes client_hello_, hello_prefix_;
+  std::set<uint16_t> offered_features_, negotiated_features_;
   bool retried_ = false;
   uint16_t traffic_group_ = 0x001d;
   Bytes master_, c_app_, s_app_, exporter_, resumption_;
