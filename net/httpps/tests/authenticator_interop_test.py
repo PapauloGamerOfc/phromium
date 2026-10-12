@@ -141,13 +141,18 @@ async def main(args):
                                 result = await manager.validate(response, validate, request=request)
                                 assert result.authenticated == selected
                             assert await receive() == channel.channel_binding()
-                            for schemes in ((0x0a0a,), (0xaaaa,), (0xfe01,), (0x0a0a, 0xfe00)):
+                            names = (b"localhost", b"LoCaLhOsT", b"xn--bcher-kva.example", b"another.example")
+                            for schemes, name in zip(((0x0a0a,), (0xaaaa,), (0xfe01,), (0x0a0a, 0xfe00)), names):
                                 request = await receive()
                                 offers = dict(parse_request(request).extensions)
                                 assert m._u16_list(offers[34]) == schemes
                                 assert offers[5] == b""
+                                # Validate syntax without normalizing transcript bytes or
+                                # imposing a new identity policy on this permissive fixture.
+                                assert offers[0] == m._vec(b"\0" + m._vec(name, 2), 2)
                                 await send(manager.authenticate(credentials, request=request))
                             request = await receive()
+                            assert 0 not in dict(parse_request(request).extensions)
                             await send(manager.authenticate(request=request))
                             assert dict(channel.peer_capabilities)[5] == b"\x01\0\0\0\0"
                             await send(manager.authenticate(credentials, context=b"spontaneous-loopback"))
@@ -242,7 +247,7 @@ async def main(args):
                     if handlers: await asyncio.wait_for(asyncio.gather(*tuple(handlers), return_exceptions=True), 4)
                     await server.wait_closed()
     if password_policy: provider.close()
-    print(f"{2 if password_policy else 6} native application-authenticator cases: client/server MAC, 36 malformed requests with credential/refusal controls, recognized/unknown OID filters, request/response evidence framing, 46 genuine-proof envelope checks per connection, GREASE/unknown delegation fallback, refusals, spontaneous identities, consumed contexts, continued application traffic and channel binding passed; PAKE={password_policy is not None}")
+    print(f"{2 if password_policy else 6} native application-authenticator cases: client/server MAC, 36 malformed requests with credential/refusal controls, recognized/unknown OID filters, malformed SNI rejected before context use, optional/case-preserving SNI preferences, request/response evidence framing, 46 genuine-proof envelope checks per connection, GREASE/unknown delegation fallback, refusals, spontaneous identities, consumed contexts, continued application traffic and channel binding passed; PAKE={password_policy is not None}")
 
 
 if __name__ == "__main__":

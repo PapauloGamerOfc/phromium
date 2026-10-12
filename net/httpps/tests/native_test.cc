@@ -242,6 +242,17 @@ void AuthenticatorTest(SocketHandle socket, net::httpps::Client& client,
     Require(!client.RequestServerAuthenticator(Bytes{10}, {{47, invalid}}, &request),
             "EA server request rejects malformed authority names before claiming its context");
   }
+  for (const Bytes& invalid : {Bytes{}, Bytes{0, 0}, Bytes{0, 1, 0},
+                              Bytes{0, 5, 0, 0, 1, 'a', 'X'},
+                              Bytes{0, 8, 0, 0, 1, 'a', 0, 0, 1, 'b'},
+                              Bytes{0, 4, 1, 0, 1, 'a'}}) {
+    Require(!client.RequestServerAuthenticator(Bytes{10}, {{0, invalid}}, &request),
+            "EA server request rejects malformed SNI before claiming its context");
+    Require(client.established() && client.TakeFatalAlert().empty() && client.TakeOutput().empty(),
+            "EA SNI syntax rejection does not close or write to the TLS connection");
+  }
+  const std::vector<std::string_view> requested_names{
+      "localhost", "LoCaLhOsT", "xn--bcher-kva.example", "another.example"};
   uint8_t context = 10;
   for (const Bytes& schemes : {Bytes{0, 2, 0x0a, 0x0a}, Bytes{0, 2, 0xaa, 0xaa},
                               Bytes{0, 2, 0xfe, 1}, Bytes{0, 4, 0x0a, 0x0a, 0xfe, 0}}) {
@@ -250,8 +261,12 @@ void AuthenticatorTest(SocketHandle socket, net::httpps::Client& client,
     offers[5] = {};
     // Well-formed unknown OIDs and their opaque values are still ignorable.
     offers[48] = Bytes{0, 9, 5, 6, 3, 0x2a, 3, 4, 0, 1, 0xff};
+    const auto name = requested_names[context - 10];
+    offers[0] = Bytes{0, static_cast<uint8_t>(name.size() + 3), 0, 0,
+                      static_cast<uint8_t>(name.size())};
+    offers[0].insert(offers[0].end(), name.begin(), name.end());
     Require(client.RequestServerAuthenticator(Bytes{context++}, offers, &request),
-            "EA server request accepts empty OCSP and unsupported delegation offers");
+            "EA server request accepts SNI preferences, empty OCSP and unsupported delegation offers");
     send_frame(request);
     response = receive();
     Require(client.ValidateServerAuthenticator(response, validate, &authenticated, request) && authenticated,

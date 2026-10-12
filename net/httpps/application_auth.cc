@@ -96,6 +96,25 @@ bool Algorithms(ByteSpan encoded, std::vector<uint16_t>* out) {
     out->push_back((uint16_t{list[i]} << 8) | list[i + 1]);
   return true;
 }
+bool ServerName(ByteSpan encoded) {
+  Reader reader{encoded};
+  ByteSpan list, type, name;
+  if (!reader.Vector(2, &list) || !reader.input.empty())
+    return false;
+  reader.input = list;
+  // This parser supports only RFC 6066 host_name, whose type cannot repeat.
+  // Consume the complete list instead of ignoring malformed name vectors
+  // simply because identity selection is an optional application preference.
+  if (!reader.Take(1, &type) || type[0] != 0 || !reader.Vector(2, &name) ||
+      !reader.input.empty())
+    return false;
+  std::string canonical(name.begin(), name.end());
+  for (char& c : canonical)
+    if (c >= 'A' && c <= 'Z') c += 'a' - 'A';
+  // Validate case-insensitively without modifying the request transcript or
+  // requiring this requested identity to match the original TLS hostname.
+  return ValidServerName(canonical);
+}
 bool Offers(const Extensions& extensions) {
   auto path = extensions.find(50);
   if (path == extensions.end() || extensions.count(13))
@@ -151,6 +170,8 @@ bool ParseRequest(ByteSpan wire, Request* request) {
             : RequestExtensionContext::kClientAuthenticator))
       return false;
   if (!request->server && request->extensions.count(0))
+    return false;
+  if (request->extensions.count(0) && !ServerName(request->extensions.at(0)))
     return false;
   // Both requested directions inherit CR's empty OCSP request. Only a
   // spontaneous server authenticator inherits the ClientHello request.

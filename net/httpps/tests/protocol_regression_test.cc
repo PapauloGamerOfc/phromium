@@ -1362,6 +1362,83 @@ void OidFilterRequestValidation() {
   }
 }
 
+void AuthenticatorServerNameValidation() {
+  auto entry = [](std::string_view name, uint8_t type = 0) {
+    Bytes value{type};
+    Append(&value, Vector16(StringBytes(name)));
+    return value;
+  };
+  auto server_name = [&](std::string_view name) { return Vector16(entry(name)); };
+  Bytes duplicate = entry("first.example");
+  Append(&duplicate, entry("second.example"));
+  Bytes mixed = entry("first.example");
+  Append(&mixed, entry("opaque", 1));
+  Bytes trailing = server_name("localhost");
+  trailing.push_back(0);
+  Bytes truncated = server_name("localhost");
+  truncated.pop_back();
+  std::vector<Bytes> invalid{
+      {}, {0}, {0, 0}, {0, 1, 0}, {0, 2, 0, 0}, {0, 3, 0, 0, 0},
+      {0, 4, 0, 0, 2, 'a'}, {0, 5, 0, 0, 1, 'a', 'X'},
+      Vector16(entry("localhost", 1)), Vector16(entry("localhost", 255)),
+      Vector16(duplicate), Vector16(mixed), trailing, truncated};
+  for (std::string_view name : {"", ".", ".example", "example.", "a..example",
+                               "-a.example", "a-.example", "a_b.example", "a/b",
+                               "a b", "*.example", "127.0.0.1", "1234", "::1",
+                               "[::1]", "localhost:343"})
+    invalid.push_back(server_name(name));
+  invalid.push_back(server_name(std::string_view("a\0.example", 10)));
+  invalid.push_back(server_name("b\xc3\xbc" "cher.example"));
+  invalid.push_back(server_name(std::string(64, 'a') + ".example"));
+  invalid.push_back(server_name(std::string(63, 'a') + "." + std::string(63, 'b') +
+                                "." + std::string(63, 'c') + "." + std::string(62, 'd')));
+  for (const auto& value : invalid) {
+    Client client("original.example", {}, true);
+    Check(client.Start(), "EA server-name fixture starts");
+    ProtocolRegressionPeer::Prepare(client);
+    Bytes request, binding;
+    Check(!client.RequestServerAuthenticator(Bytes{7}, {{0, value}}, &request),
+          "EA rejects malformed server_name before claiming its context");
+    Check(request.empty() && client.established() && client.TakeOutput().empty() &&
+              client.TakeFatalAlert().empty() && client.ChannelBinding(&binding),
+          "EA syntax rejection is nonfatal and releases no request or TLS alert");
+    Check(client.RequestServerAuthenticator(Bytes{7}, {}, &request) &&
+              client.CancelAuthenticator(request),
+          "invalid SNI consumes no context and SNI remains optional");
+  }
+  const std::vector<std::string> valid{
+      "localhost", "LoCaLhOsT", "different.example", "XN--BCHER-KVA.Example",
+      "a-b.example", std::string(63, 'a') + ".example",
+      std::string(63, 'a') + "." + std::string(63, 'b') + "." +
+          std::string(63, 'c') + "." + std::string(61, 'd')};
+  for (const auto& name : valid) {
+    Client client("original.example", {}, true);
+    Check(client.Start(), "EA valid server-name fixture starts");
+    ProtocolRegressionPeer::Prepare(client);
+    const auto value = server_name(name);
+    Bytes request;
+    Check(client.RequestServerAuthenticator(Bytes{7}, {{0, value}}, &request),
+          "EA accepts case-insensitive DNS syntax without new identity policy");
+    Bytes encoded;
+    Extension(&encoded, 0, value);
+    Check(std::search(request.begin(), request.end(), encoded.begin(), encoded.end()) != request.end(),
+          "EA preserves original SNI bytes in its request transcript");
+    Check(client.CancelAuthenticator(request) && !client.CancelAuthenticator(request),
+          "valid SNI request context is consumed exactly once");
+
+    Bytes extensions;
+    Extension(&extensions, 0xff03, Bytes(32, 0x67));
+    Extension(&extensions, 50, Bytes{0, 2, 8, 7});
+    Extension(&extensions, 0, value);
+    Bytes body{1, 8};
+    Append(&body, Vector16(extensions));
+    Bytes response;
+    Check(!client.AuthenticateClient(Frame(13, body), nullptr, &response) &&
+              client.established() && client.TakeFatalAlert().empty(),
+          "SNI is not permitted in the opposite client-authenticator direction");
+  }
+}
+
 void ClosedWriterControlMessages() {
   ClientCredential credential;
   credential.certificate_type = 2;
@@ -1787,6 +1864,7 @@ void RunProtocolRegressionTests() {
   CertificateRequestValidation();
   DelegationRequestDuplicates();
   OidFilterRequestValidation();
+  AuthenticatorServerNameValidation();
   KeyUpdates();
   RequestedKeyUpdatePreservesResponse();
   PostHandshakeAuthentication();
