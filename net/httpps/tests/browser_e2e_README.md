@@ -8,7 +8,7 @@ disables the sandbox, or bypasses a browser certificate error through CDP.
 
 Prerequisites: Python 3.11+, the reference server's `requirements-dev.txt`
 (including the `h2` fixture dependency), and a clean checkout of
-`tls20-server` at `0159ad183f2679831ee20fde8b47e608dabd4de4`. The revision is
+`tls20-server` at `689febc38d2399e28ba2f84520393d35709d0384`. The revision is
 checked before importing its protocol implementation. No dependencies are
 downloaded by the script.
 
@@ -38,6 +38,12 @@ envelopes and wrong proof lengths (50), prohibited or wrong-direction algorithm
 codes (47), and incorrect MACs (51). The same cases run with native trust,
 external certificate verification and GREASE, without changing browser trust
 policy or relying on a successful reference-server encoder for invalid input.
+
+The DNS/IP interoperability control also checks the complete emitted SNI vector:
+one nonempty DNS host_name for a DNS reference, no SNI for IPv4/IPv6 references,
+and the same identity rules on full, resumed and early-data connections. This
+keeps the client compatible with strict SNI syntax and semantic validation in
+the pinned server, without weakening SAN verification.
 
 ## Initial request contexts and binder failure cleanup
 

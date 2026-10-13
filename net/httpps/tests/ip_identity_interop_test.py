@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""IP SAN authentication, omitted SNI and resumption in the actual native peer."""
+"""DNS/IP SAN authentication, exact SNI and resumption in the actual native peer."""
 import argparse
 import asyncio
 from pathlib import Path
@@ -34,12 +34,14 @@ async def main(args):
     with tempfile.TemporaryDirectory(prefix="httpps-ip-") as directory:
         directory = Path(directory)
         root_path, leaf_path = directory / "root.der", directory / "leaf.der"
-        for service in ("127.0.0.1", "::1"):
+        for service in ("127.0.0.1", "::1", "localhost"):
+            is_ip = service != "localhost"
             credentials, root = generate_lab_credentials(service)
             root_path.write_bytes(root.public_bytes(serialization.Encoding.DER))
             leaf_path.write_bytes(credentials.chain_der[0])
             await run("--verify", service, root_path, leaf_path)
-            await run("--verify", "127.0.0.2" if service == "127.0.0.1" else "::2",
+            wrong_service = {"127.0.0.1": "127.0.0.2", "::1": "::2", "localhost": "other.example"}[service]
+            await run("--verify", wrong_service,
                       root_path, leaf_path, success=False)
             seen, errors, tasks, offers = [], [], set(), []
             store = TicketStore()
@@ -47,7 +49,16 @@ async def main(args):
             def inspect(data, **options):
                 hello = original(data, **options)
                 offers.append(hello)
-                assert not hello.name and 0 not in hello.extensions, "IP must not be an SNI DNS name"
+                if is_ip:
+                    assert not hello.name and 0 not in hello.extensions, "IP must not be an SNI DNS name"
+                else:
+                    hostname = service.encode("ascii")
+                    entry = b"\x00" + len(hostname).to_bytes(2, "big") + hostname
+                    # Match the whole vector, not just the decoded first name:
+                    # every full/resumed/early CH needs exactly one nonempty
+                    # host_name entry and no trailing or duplicate names.
+                    assert hello.name == service
+                    assert dict(hello.extension_values).get(0) == len(entry).to_bytes(2, "big") + entry
                 return hello
 
             async def peer(reader, writer):
@@ -90,6 +101,9 @@ async def main(args):
                 server.close()
                 await server.wait_closed()
 
+            if not is_ip:
+                continue
+
             # A DNSName containing an IP-looking string cannot authorize an IP
             # reference, even when issuer and all other key usages are valid.
             ca_key, key = ed25519.Ed25519PrivateKey.generate(), x25519.X25519PrivateKey.generate()
@@ -99,7 +113,7 @@ async def main(args):
             root_path.write_bytes(der(root))
             leaf_path.write_bytes(der(leaf))
             await run("--verify", service, root_path, leaf_path, success=False)
-        print("6 native IP connections and 6 SAN checks passed: IPv4/IPv6, no SNI, full/resume/early, no DNS-text fallback")
+        print("9 native DNS/IP connections and 8 SAN checks passed: exact DNS SNI, IPv4/IPv6 without SNI, full/resume/early, no DNS-text fallback")
 
 
 if __name__ == "__main__":
