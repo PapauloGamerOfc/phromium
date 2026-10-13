@@ -35,6 +35,20 @@ std::array<Allocation, 16384> allocations;
 bool observing = false;
 size_t exposed = 0;
 size_t fail_cpp_allocation_size = 0;
+// Binder failures need a separate C++-allocation observer: the temporary
+// early/binder/Finished keys belong to vectors, not OpenSSL's allocator.
+std::array<Allocation, 2048> cpp_allocations;
+std::array<std::array<uint8_t, 32>, 3> binder_patterns;
+bool observing_binder = false;
+size_t binder_exposed = 0;
+size_t provider_calls = 0;
+size_t fail_provider_call = 0;
+
+bool RejectProviderAllocation() {
+  if (!observing_binder) return false;
+  ++provider_calls;
+  return fail_provider_call && provider_calls == fail_provider_call;
+}
 
 void Check(bool success, const char* message) {
   if (!success) {
@@ -64,6 +78,7 @@ void Observe(const Allocation& entry) {
 }
 
 void* Allocate(size_t size, const char*, int) {
+  if (RejectProviderAllocation()) return nullptr;
   auto* pointer = std::calloc(size ? size : 1, 1);
   if (!pointer)
     return nullptr;
@@ -97,6 +112,27 @@ void* Reallocate(void* pointer, size_t size, const char* file, int line) {
   std::memcpy(replacement, pointer, std::min(old_size, size));
   Release(pointer, file, line);
   return replacement;
+}
+
+void ReleaseCpp(void* pointer) {
+  if (observing_binder && pointer) {
+    for (auto& entry : cpp_allocations) {
+      if (entry.pointer != pointer) continue;
+      const auto* bytes = static_cast<const uint8_t*>(pointer);
+      for (const auto& pattern : binder_patterns) {
+        if (entry.size < pattern.size()) continue;
+        for (size_t offset = 0; offset <= entry.size - pattern.size(); ++offset) {
+          if (!std::memcmp(bytes + offset, pattern.data(), pattern.size())) {
+            ++binder_exposed;
+            break;
+          }
+        }
+      }
+      entry = {};
+      break;
+    }
+  }
+  std::free(pointer);  // The observer above reads only still-live allocations.
 }
 
 #if defined(_WIN32)
@@ -147,15 +183,118 @@ void* operator new(size_t size) {
     fail_cpp_allocation_size = 0;
     throw std::bad_alloc();
   }
-  if (void* pointer = std::malloc(size ? size : 1))
+  if (void* pointer = std::calloc(size ? size : 1, 1)) {
+    if (observing_binder) {
+      bool registered = false;
+      for (auto& entry : cpp_allocations) {
+        if (!entry.pointer) {
+          entry = {pointer, size};
+          registered = true;
+          break;
+        }
+      }
+      Check(registered, "binder observer tracks all C++ allocations");
+    }
     return pointer;
+  }
   throw std::bad_alloc();
 }
-void operator delete(void* pointer) noexcept { std::free(pointer); }
-void operator delete(void* pointer, size_t) noexcept { std::free(pointer); }
+void operator delete(void* pointer) noexcept { ReleaseCpp(pointer); }
+void operator delete(void* pointer, size_t) noexcept { ReleaseCpp(pointer); }
+
+namespace net::httpps {
+class ProtocolRegressionPeer {
+ public:
+  static bool Bind(const std::shared_ptr<NativeProvider>& provider, int identity,
+                   bool retry, size_t failure, Bytes* result) {
+    ClientOptions options;
+    options.native_provider = provider;
+    Client client("example.test", {}, false, options);
+    ExternalPSK psk;
+    psk.cipher_suite = 0x00c6;
+    psk.secret = Bytes(kSecret.begin(), kSecret.end());
+    psk.identity = Bytes{1};
+    psk.imported = identity == 2;
+    client.offered_psks_.push_back(psk);
+    if (identity == 1) client.offered_ticket_.emplace();
+    Bytes hello(100, 0x13);
+    // The helper hashes the exact prefix and truncated CH bytes; full Hello
+    // syntax is independently covered by the wire/protocol regression tests.
+    const Bytes prefix = retry ? Bytes(72, 0x27) : Bytes{};
+    binder_exposed = provider_calls = 0;
+    fail_provider_call = failure;
+    cpp_allocations = {};
+    observing_binder = true;
+    const bool accepted = client.BindClientHello(&hello, prefix);
+    observing_binder = false;
+    fail_provider_call = 0;
+    cpp_allocations = {};
+    *result = std::move(hello);
+    return accepted;
+  }
+};
+}  // namespace net::httpps
+
+namespace {
+void BinderErasure(const std::shared_ptr<NativeProvider>& provider) {
+  using namespace net::httpps;
+  size_t cases = 0, rejections = 0;
+  for (int identity : {0, 1, 2}) {
+    const std::string_view label = identity == 0 ? "ext binder"
+        : identity == 1 ? "res binder" : "imp binder";
+    auto early = SuiteMac(0x00c6, Bytes(32), kSecret, provider.get());
+    auto binder = SuiteLabel(0x00c6, early, label,
+        SuiteHash(0x00c6, {}, provider.get()), 32, provider.get());
+    auto finished = SuiteLabel(0x00c6, binder, "finished", {}, 32, provider.get());
+    size_t index = 0;
+    for (auto* value : {&early, &binder, &finished}) {
+      Check(value->size() == 32, "binder erasure oracle derives exact keys");
+      std::copy(value->begin(), value->end(), binder_patterns[index++].begin());
+      OPENSSL_cleanse(value->data(), value->size());
+    }
+    for (bool erase : {false, true}) {
+      cpp_allocations = {};
+      binder_exposed = 0;
+      observing_binder = true;
+      void* probe = ::operator new(32);
+      std::memcpy(probe, binder_patterns[0].data(), 32);
+      if (erase) OPENSSL_cleanse(probe, 32);
+      ::operator delete(probe);
+      observing_binder = false;
+      Check(binder_exposed == (erase ? 0u : 1u),
+            "C++ observer detects live derived keys and accepts their wiped buffers");
+    }
+    for (bool retry : {false, true}) {
+      Bytes transcript(retry ? 72 : 0, 0x27);
+      transcript.insert(transcript.end(), 65, 0x13);
+      const auto proof = SuiteMac(0x00c6, binder_patterns[2],
+          SuiteHash(0x00c6, transcript, provider.get()), provider.get());
+      Check(proof.size() == 32, "independent binder MAC oracle");
+      Bytes expected(100, 0x13), actual;
+      std::copy(proof.begin(), proof.end(), expected.end() - 32);
+      Check(ProtocolRegressionPeer::Bind(provider, identity, retry, 0, &actual) &&
+                actual == expected && binder_exposed == 0,
+            "successful binders match the oracle and erase their temporary keys");
+      const size_t calls = provider_calls;
+      Check(calls > 0 && calls < 1024, "bounded native binder fault-injection schedule");
+      for (size_t failure = 1; failure <= calls; ++failure) {
+        Bytes actual;
+        const bool accepted = ProtocolRegressionPeer::Bind(provider, identity, retry, failure, &actual);
+        rejections += !accepted;
+        ++cases;
+        Check(binder_exposed == 0, "failed binder derivation erases all temporary keys before free");
+      }
+    }
+  }
+  OPENSSL_cleanse(binder_patterns.data(), sizeof(binder_patterns));
+  Check(rejections > 0, "provider failures exercise binder rejection, not only successful controls");
+  std::printf("Binder erasure: %zu injected allocations, %zu rejections, 6 successful controls passed\n",
+              cases, rejections);
+}
+}  // namespace
 
 int main(int argc, char** argv) {
-  Check(argc == 2 || argc == 3, "usage: provider_erasure_test absolute-provider [success|failure|exception]");
+  Check(argc == 2 || argc == 3, "usage: provider_erasure_test absolute-provider [success|failure|exception|binders]");
   const std::string path(argv[1]);
 #if defined(_WIN32)
   Check(path.starts_with("\\\\") || (path.size() >= 3 && path[1] == ':' &&
@@ -192,7 +331,7 @@ int main(int argc, char** argv) {
   observing = false;
 
   const std::string_view mode = argc == 3 ? argv[2] : "all";
-  Check(mode == "all" || mode == "success" || mode == "failure" || mode == "exception",
+  Check(mode == "all" || mode == "success" || mode == "failure" || mode == "exception" || mode == "binders",
         "known test mode");
   size_t cases = 0;
   if (mode == "all" || mode == "success") {
@@ -238,5 +377,6 @@ int main(int argc, char** argv) {
     ++cases;
   }
   std::printf("SM3 parameter erasure: %zu cases and 3 observer controls passed\n", cases);
+  if (mode == "all" || mode == "binders") BinderErasure(provider);
   return 0;
 }

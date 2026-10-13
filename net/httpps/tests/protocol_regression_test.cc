@@ -1427,6 +1427,54 @@ void CertificateResponseOffers() {
   }
 }
 
+void CertificateRequestContexts() {
+  // A well-framed wrong context is semantic (47), not a generic handshake
+  // failure. Initial CR uses empty context; offered PHA uses a nonempty one.
+  size_t cases = 0;
+  for (bool pha : {false, true}) {
+    for (bool cached : {false, true}) {
+      for (size_t length : {0u, 1u, 255u}) {
+        Bytes template_extensions;
+        Extension(&template_extensions, 50, Bytes{0, 2, 8, 7});
+        const auto request_template = Vector16(template_extensions);
+        ClientOptions options;
+        options.post_handshake_auth = true;
+        if (cached) options.cached_request_templates = {request_template};
+        Client client("example.test", {}, true, options);
+        Check(client.Start(), "request context fixture starts");
+        ProtocolRegressionPeer::Prepare(client);
+        if (!pha) ProtocolRegressionPeer::AwaitInitialCertificateRequest(client);
+        Bytes body{static_cast<uint8_t>(length)};
+        Append(&body, Bytes(length, 0x39));
+        if (cached) {
+          ProtocolRegressionPeer::SelectCachedRequest(client);
+          Append(&body, net::httpps::Hash(request_template));
+          Append(&body, Bytes(32, 0x67));
+        } else {
+          Extension(&template_extensions, 0xff03, Bytes(32, 0x67));
+          Append(&body, Vector16(template_extensions));
+        }
+        Bytes record, application;
+        RecordCipher sender(ProtocolRegressionPeer::ReceivingSecret());
+        Check(sender.Seal(Frame(cached ? 252 : 13, body), 22, &record),
+              "protect context-bound ordinary/cached request");
+        const bool valid = pha ? length != 0 : length == 0;
+        Check(client.Receive(record, &application) == valid && application.empty(),
+              "initial and post-handshake context semantics remain distinct");
+        if (!valid) {
+          CheckAlert(client, 47);
+          Check(ProtocolRegressionPeer::SecretsErased(client) && client.TakeOutput().empty(),
+                "wrong-context request erases secrets and cannot emit credentials");
+        } else if (pha) {
+          Check(!client.TakeOutput().empty(), "valid PHA context permits ordinary credential refusal");
+        }
+        ++cases;
+      }
+    }
+  }
+  Check(cases == 12, "complete ordinary/cached CertificateRequest context matrix");
+}
+
 void CertificateRequestValidation() {
   // Independently encoded DER Name (CN=A), not produced by the parser under test.
   const Bytes name{0x30, 0x0c, 0x31, 0x0a, 0x30, 0x08, 0x06, 0x03,
@@ -2200,6 +2248,7 @@ void RunProtocolRegressionTests() {
   ClosedWriterControlMessages();
   ClosedWriterFailures();
   CertificateResponseOffers();
+  CertificateRequestContexts();
   CertificateRequestValidation();
   DelegationRequestDuplicates();
   OidFilterRequestValidation();

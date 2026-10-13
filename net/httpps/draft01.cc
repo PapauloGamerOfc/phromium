@@ -2254,17 +2254,19 @@ bool Client::BindClientHello(Bytes* hello, ByteSpan prefix) const {
     const uint16_t suite = psk.cipher_suite;
     const size_t length = SuiteHashLength(suite);
     auto early = SuiteMac(suite, Bytes(length), psk.secret, options_.native_provider.get());
+    ScopedSecretCleanser cleanse_early(early);
     const std::string_view label = i == 0 && offered_ticket_ ? "res binder"
         : psk.imported ? "imp binder" : "ext binder";
     auto binder = SuiteLabel(suite, early, label, SuiteHash(suite, {}, options_.native_provider.get()), length, options_.native_provider.get());
+    ScopedSecretCleanser cleanse_binder(binder);
     auto finished = SuiteLabel(suite, binder, "finished", {}, length, options_.native_provider.get());
+    ScopedSecretCleanser cleanse_finished(finished);
     auto proof = SuiteMac(suite, finished, SuiteHash(suite, truncated, options_.native_provider.get()), options_.native_provider.get());
+    ScopedSecretCleanser cleanse_proof(proof);
     if (proof.size() != length)
       return false;
     std::copy(proof.begin(), proof.end(), hello->begin() + offset + 1);
     offset += length + 1;
-    for (auto* secret : {&early, &binder, &finished, &proof})
-      OPENSSL_cleanse(secret->data(), secret->size());
   }
   return true;
 }

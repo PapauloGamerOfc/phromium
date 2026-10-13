@@ -8,7 +8,7 @@ disables the sandbox, or bypasses a browser certificate error through CDP.
 
 Prerequisites: Python 3.11+, the reference server's `requirements-dev.txt`
 (including the `h2` fixture dependency), and a clean checkout of
-`tls20-server` at `df3041995b47140f3629656670953461bc7dc73d`. The revision is
+`tls20-server` at `c7d9a33b9a7aef98e63e05ffed33042cb816fdf6`. The revision is
 checked before importing its protocol implementation. No dependencies are
 downloaded by the script.
 
@@ -21,6 +21,20 @@ provenance check, never certificate validation. Historical clean-revision
 results do not validate a subsequent optional-profile expansion.
 Use the server and browser from the same migration; the old numbered prototype
 is not wire-compatible with the current spec.
+
+## Initial request contexts and binder failure cleanup
+
+An initial CertificateRequest, including its negotiated cached representation,
+requires an empty context. A nonempty, well-framed context is rejected with
+`illegal_parameter` (47) before any client credential or proof is released;
+post-handshake contexts remain governed by their separate rules.
+
+Temporary PSK binder keys use scoped cleansing on successful derivation and
+provider failures, including early returns. An isolated provider test observes
+live allocations immediately before release, with public fixture keys and
+controlled allocation failures. These hooks are not installed in the browser.
+The guards preserve the successful external, imported and resumption binder
+construction, including retry transcripts; they do not change wire encodings.
 
 ## Record authentication and key-share vector boundaries
 
