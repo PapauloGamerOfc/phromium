@@ -22,6 +22,7 @@ def main(args):
     from cryptography.x509.oid import NameOID
     from tls20_server.pki import _children, _element
     from tls20_server.credential_evidence import _ocsp_transparency
+    from tls20_server.errors import ProtocolError
     from tls20_server.transparency import (TrustedLog, _der, precertificate_tbs,
         validate_ct_v2_list, verify_inclusion, verify_consistency)
 
@@ -110,6 +111,27 @@ def main(args):
                 check(log, source, inclusion=True, prior=(1, timestamp, node))
                 check(log, source, prior=(2, timestamp, node), expected=1)
                 check(log, listed(proof, head[:-1] + bytes([head[-1]^1]), sct_item), inclusion=True, expected=1)
+
+                # Multiple signed times for the same root are not ordered by
+                # TransItemList. An older item must not replace a newer head
+                # and manufacture a rollback relative to retained trust.
+                newer_data = (timestamp + 2000).to_bytes(8, 'big') + head_data[8:]
+                newer = b'\x01\x04' + vec(log.log_id, 1) + newer_data + vec(sign(newer_data))
+                for prior in (None, (1, timestamp + 1000, node)):
+                    trusted = {log.log_id: prior} if prior else None
+                    for heads in ((head, newer), (newer, head), (newer,), (head,)):
+                        evidence = listed(proof, sct_item, *heads)
+                        expected = int(prior is not None and heads == (head,))
+                        try:
+                            result = validate_ct_v2_list(evidence, encoded(cert), encoded(root),
+                                {log.log_id: log}, now_ms=timestamp + 3000,
+                                require_inclusion=True, trusted_tree_heads=trusted)
+                        except ProtocolError:
+                            assert expected == 1
+                        else:
+                            assert expected == 0 and result[0].included
+                        check(log, evidence, inclusion=True, prior=prior,
+                              moment=timestamp + 3000, expected=expected)
 
             # The embedded certificate is reconstructed exactly, retaining its
             # original serial/time/extensions, then re-signed by the CA.

@@ -46,15 +46,16 @@
 namespace net::httpps {
 namespace {
 
-// Keep temporary key material covered on every return path. The vector itself
-// must outlive this guard; moving its storage transfers the cleanup obligation.
+// Keep temporary key material covered on every return path. The container must
+// outlive this guard; moving its storage transfers the cleanup obligation.
+template <typename Container>
 class ScopedSecretCleanser {
 #if !defined(PHROMIUM_HTTPPS_STANDALONE)
   STACK_ALLOCATED();
 #endif
 
  public:
-  explicit ScopedSecretCleanser(Bytes& secret) : secret_(secret) {}
+  explicit ScopedSecretCleanser(Container& secret) : secret_(secret) {}
   ~ScopedSecretCleanser() {
     OPENSSL_cleanse(secret_.data(), secret_.size());
   }
@@ -62,7 +63,7 @@ class ScopedSecretCleanser {
   ScopedSecretCleanser& operator=(const ScopedSecretCleanser&) = delete;
 
  private:
-  Bytes& secret_;
+  Container& secret_;
 };
 
 ByteSpan Octets(std::string_view value) {
@@ -1604,10 +1605,14 @@ bool Client::Start(const SessionTicket* ticket, ByteSpan early_data,
     if (prepared->prepare_text) {
       auto username = prepared->prepare_text(prepared->username);
       auto password = prepared->prepare_text(prepared->password);
-      if (!username || !password) return Fail(Error::kCertificate);
+      if (!password) return Fail(Error::kCertificate);
+      ScopedSecretCleanser cleanse_password(*password);
+      if (!username) return Fail(Error::kCertificate);
       prepared->username = std::move(*username);
       OPENSSL_cleanse(prepared->password.data(), prepared->password.size());
-      prepared->password = std::move(*password);
+      // Keep the temporary's size until the guard erases it. Moving a short
+      // string can leave password bytes in its now-size-zero inline storage.
+      prepared->password = *password;
     } else if (!ascii_opaque(prepared->username) || !ascii_opaque(prepared->password)) {
       return Fail(Error::kCertificate);
     }

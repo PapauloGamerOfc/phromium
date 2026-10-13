@@ -142,6 +142,50 @@ void ObserverSelfTest() {
   }
 }
 
+void PasswordPreparationErasure() {
+  // The normalizer's successful password result is itself a secret, even if
+  // normalization of the independent username failed. Exercise both inline-
+  // sized and heap-sized strings without inspecting stack storage after its
+  // lifetime. The observer examines only live allocations before release.
+  for (size_t length : {8u, 48u}) {
+    for (int rejection : {0, 1, 2, 3}) {
+      auto credential = std::make_shared<PasswordCredential>();
+      credential->service = "example.test";
+      credential->username = "user";
+      credential->password = "unprepared password";
+      size_t calls = 0;
+      credential->prepare_text = [length, rejection, &calls](std::string_view value)
+          -> std::optional<std::string> {
+        ++calls;
+        if (value == "user") {
+          if (rejection == 1) return std::nullopt;
+          return "user";
+        }
+        if (rejection == 2) return std::nullopt;
+        if (rejection == 3) return std::string{};
+        std::string normalized(length, 'P');  // Public synthetic test secret.
+        WatchPattern(StringBytes(normalized));
+        return normalized;
+      };
+      ClientOptions options;
+      options.password = credential;
+      Begin();
+      {
+        Client client("example.test", {}, true, options);
+        // Route 0 normalizes both values successfully, then fails the missing
+        // provider check. Routes 1/2/3 reject username/password/empty password.
+        // None may leak a normalized copy or emit an unauthenticated hello.
+        Check(!client.Start() && client.TakeOutput().empty(),
+              "invalid password configuration rejects before ClientHello");
+      }
+      const auto counts = End();
+      Check(calls == 2 && counts.frees && !counts.uncleansed,
+            "normalized passwords are wiped on username and later configuration failures");
+    }
+  }
+  std::cout << "8 password preparation erasure/rejection controls passed\n";
+}
+
 Bytes RetryRecord(uint16_t group) {
   Bytes body{3, 3,
       0xcf,0x21,0xad,0x74,0xe5,0x9a,0x61,0x11,
@@ -441,11 +485,16 @@ class ProtocolRegressionPeer {
 
 int main(int argc, char** argv) {
   ObserverSelfTest();
+  if (argc == 2 && std::string_view(argv[1]) == "--password-preparation") {
+    PasswordPreparationErasure();
+    return 0;
+  }
   if (argc == 4 && std::string_view(argv[1]) == "--gost") {
     GostExpansionErasure(argv[2], argv[3]);
     return 0;
   }
   Check(argc == 1, "unexpected erasure test arguments");
+  PasswordPreparationErasure();
   for (uint16_t suite : {0x1301, 0x1302, 0x1303}) {
     for (bool alias : {false, true})
       for (bool invalid : {false, true})
