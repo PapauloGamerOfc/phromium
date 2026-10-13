@@ -1112,10 +1112,19 @@ int main(int argc, char** argv) {
       Require(first != std::string_view::npos && second == first + 65 &&
                   entry.size() == second + 66 && entry.back() == '\n', "diagnostic complete exact entry");
       labels.emplace_back(entry.substr(0, first));
+      if (mode == "throw")
+        throw std::ios_base::failure("synthetic diagnostic sink unavailable");
       return mode != "failure";
     };
-    int result = Get(argv[2], argv[3], argv[4], false, true, true, nullptr, nullptr, options);
-    Require(labels.size() == (mode == "off" ? 0u : mode == "failure" ? 3u : mode == "exporters" ? 18u : 13u),
+    int result;
+    try {
+      result = Get(argv[2], argv[3], argv[4], false, true, true, nullptr, nullptr, options);
+    } catch (const std::ios_base::failure&) {
+      // Deliberately never print exception text or the entry it was given.
+      std::cerr << "diagnostic sink failure escaped into the handshake\n";
+      return 1;
+    }
+    Require(labels.size() == (mode == "off" ? 0u : mode == "failure" || mode == "throw" ? 3u : mode == "exporters" ? 18u : 13u),
             "diagnostic gates, derivation events and sink failure");
     if (mode == "exporters") {
       Require(std::count(labels.begin(), labels.end(), "TLS20_EXPORTER_SECRET") == 3 &&

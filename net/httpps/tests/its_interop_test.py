@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import sys
 from types import SimpleNamespace
+from unittest.mock import patch
 
 
 async def test_profile(args):
@@ -22,19 +23,36 @@ async def test_profile(args):
     from tls20_server.tickets import TicketStore
     from tls20_server.credential_profiles import CredentialPolicy
     from tls20_server.errors import ProtocolError
+    from tls20_server import messages as m
     directory, policy = load_live_fixture()
     private = X25519PrivateKey.from_private_bytes(bytes([9]) * 32)
     count = 0
-    for mode in ("valid", "client", "tamper", "revoked", "expired", "wrong-role", "wrong-service"):
+    for mode in ("valid", "client", "client-unknown-oid", "client-ku", "client-eku",
+                 "tamper", "revoked", "expired", "wrong-role", "wrong-service"):
         grant = (directory / "live-server.bin").read_bytes()
         if mode == "tamper":
             grant = grant[:-1] + bytes([grant[-1] ^ 1])
         credentials = Credentials([grant], private, credential_type=3, its_policy=policy)
         store, errors, seen, handlers = TicketStore(), [], [], set()
+        with_client = mode.startswith("client")
+        selected = mode not in ("client-ku", "client-eku")
+        filters = {"client-unknown-oid": (("1.2.3.4", b"\xff\x00\x80"),),
+                   "client-ku": (("2.5.29.15", b""),),
+                   "client-eku": (("2.5.29.37", b""),)}.get(mode, ())
+        certificates = []
+        parse_certificate = m.parse_certificate
+
+        def observe_certificate(body, **kwargs):
+            parsed = parse_certificate(body, **kwargs)
+            chain = parsed[0] if kwargs.get("details") else parsed
+            certificates.append((bool(kwargs.get("context", b"")), len(chain)))
+            return parsed
+
         options = {}
-        if mode == "client":
+        if with_client:
             options = dict(client_credential_policy=CredentialPolicy(peer_name="example.test",
-                its_policy=replace(policy, role="client")), require_client_auth=True, client_certificate_types=(3,))
+                its_policy=replace(policy, role="client")), require_client_auth=selected,
+                client_certificate_types=(3,), client_oid_filters=filters)
 
         async def peer(reader, writer):
             task = asyncio.current_task()
@@ -51,11 +69,12 @@ async def test_profile(args):
                     request = b"".join(early) or await channel.recv()
                     assert request.startswith(b"GET / HTTP/1.1\r\n")
                     seen.append((channel.resumed, channel.early_data_accepted))
-                    if mode == "client":
-                        assert channel.authenticated_client == ((directory / "live-client.bin").read_bytes(),)
-                        future = await channel.request_client_auth(required=True)
+                    if with_client:
+                        identity = ((directory / "live-client.bin").read_bytes(),) if selected else None
+                        assert channel.authenticated_client == identity
+                        future = await channel.request_client_auth(required=selected)
                         pump = asyncio.create_task(channel.recv())
-                        await asyncio.wait_for(asyncio.shield(future), 5)
+                        assert await asyncio.wait_for(asyncio.shield(future), 5) == identity
                     await channel.send(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nOK")
                     await channel.close()
                     if pump:
@@ -78,22 +97,27 @@ async def test_profile(args):
 
         server = await asyncio.start_server(peer, "127.0.0.1", 0)
         try:
-            process = await asyncio.create_subprocess_exec(str(args.native.resolve()), "--get-its", "example.test",
-                str(server.sockets[0].getsockname()[1]), str(directory / "live-root.coer"),
-                str(args.provider.resolve()), str(directory), mode,
-                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
-            try:
-                output, error = await asyncio.wait_for(process.communicate(), 25)
-            except BaseException:
-                if process.returncode is None:
-                    process.kill()
-                await process.wait()
-                raise
-            if handlers:
-                await asyncio.gather(*handlers)
-            if mode in ("valid", "client"):
+            with patch.object(m, "parse_certificate", observe_certificate):
+                process = await asyncio.create_subprocess_exec(str(args.native.resolve()), "--get-its", "example.test",
+                    str(server.sockets[0].getsockname()[1]), str(directory / "live-root.coer"),
+                    str(args.provider.resolve()), str(directory), "client" if with_client else mode,
+                    stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE)
+                try:
+                    output, error = await asyncio.wait_for(process.communicate(), 25)
+                except BaseException:
+                    if process.returncode is None:
+                        process.kill()
+                    await process.wait()
+                    raise
+                if handlers:
+                    await asyncio.gather(*handlers)
+            if mode == "valid" or with_client:
                 assert process.returncode == 0 and not errors, (mode, output, error, errors)
                 assert seen == [(False, False), (True, False), (True, True)], seen
+                if with_client:
+                    # Resumption omits the initial certificate flight; each
+                    # fresh PHA still applies its current recognized filters.
+                    assert certificates == [(False, int(selected))] + [(True, int(selected))] * 3, (mode, certificates)
                 count += 3
             else:
                 assert process.returncode != 0 and not seen, (mode, output, error, seen)
@@ -102,7 +126,7 @@ async def test_profile(args):
         finally:
             server.close()
             await server.wait_closed()
-    print(f"{count} native ITS connections passed: full/resume/early, both MAC roles/PHA, tamper, revocation, service/role and expiry")
+    print(f"{count} native ITS connections passed: full/resume/early, both MAC roles/PHA, KU/EKU refusal and unknown-OID verification, tamper, revocation, service/role and expiry")
 
 
 async def main(args):

@@ -306,6 +306,67 @@ void operator delete[](void* pointer, size_t) noexcept { Deallocate(pointer); }
 namespace net::httpps {
 class ProtocolRegressionPeer {
  public:
+  static void Diagnostics() {
+    for (size_t length : {32u, 48u, 64u}) {
+      for (bool exporter : {false, true}) {
+        for (int failure : {0, 1, 2}) {
+          Bytes secret(length, 0xb7);  // Public synthetic test secret.
+          const std::string pattern = "b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7b7";
+          size_t calls = 0;
+          ClientOptions options;
+          options.authorize_test_diagnostics = true;
+          options.authorize_exporter_diagnostics = exporter;
+          options.diagnostic_sink = [&](std::string_view entry) {
+            ++calls;
+            Register(const_cast<char*>(entry.data()), entry.size(), true);
+            Check(entry.ends_with('\n') && entry.find(pattern) != std::string_view::npos,
+                  "authorized diagnostic contains the original synthetic secret");
+            if (failure == 2)
+              throw std::ios_base::failure("synthetic diagnostic sink unavailable");
+            return failure == 0;
+          };
+          Client client("example.test", {}, true, options);
+          const auto label = exporter ? "TLS20_EXPORTER_SECRET" :
+              "TLS20_CLIENT_HANDSHAKE_TRAFFIC_SECRET";
+          Begin();
+          WatchPattern(StringBytes(pattern));
+          bool escaped = false;
+          try {
+            client.Diagnostic(label, secret, exporter);
+            client.Diagnostic(label, secret, exporter);
+          } catch (const std::ios_base::failure&) {
+            escaped = true;
+          }
+          const auto counts = End();
+          Check(!escaped && calls == (failure ? 1u : 2u) &&
+                    client.diagnostic_failed() == (failure != 0) &&
+                    client.state_ == Client::State::kNew &&
+                    client.error() == Client::Error::kNone &&
+                    client.TakeOutput().empty(),
+                "false and throwing sinks disable only diagnostics and report a local flag");
+          Check(counts.required_zero_frees == calls && !counts.uncleansed,
+                "diagnostic entries have no uncleansed reallocation or final release");
+        }
+      }
+    }
+    for (bool authorize : {false, true}) {
+      size_t calls = 0;
+      ClientOptions options;
+      options.authorize_test_diagnostics = authorize;
+      options.diagnostic_sink = [&](std::string_view) { ++calls; return true; };
+      Client client("example.test", {}, true, options);
+      const Bytes secret(32, 0xb7);
+      Begin();
+      client.Diagnostic("TLS20_EXPORTER_SECRET", secret, true);
+      if (!authorize)
+        client.Diagnostic("TLS20_CLIENT_HANDSHAKE_TRAFFIC_SECRET", secret);
+      const auto counts = End();
+      Check(!calls && !counts.frees && !client.diagnostic_failed(),
+            "disabled diagnostics and exporter category do not construct entries");
+    }
+    std::cout << "18 diagnostic erasure/failure cases and 2 authorization controls passed\n";
+  }
+
   static void RetrySecrets(uint16_t first, uint16_t next) {
     size_t old_allocations = 0;
     bool accepted, refreshed;
@@ -485,6 +546,10 @@ class ProtocolRegressionPeer {
 
 int main(int argc, char** argv) {
   ObserverSelfTest();
+  if (argc == 2 && std::string_view(argv[1]) == "--diagnostics") {
+    ProtocolRegressionPeer::Diagnostics();
+    return 0;
+  }
   if (argc == 2 && std::string_view(argv[1]) == "--password-preparation") {
     PasswordPreparationErasure();
     return 0;
@@ -494,6 +559,7 @@ int main(int argc, char** argv) {
     return 0;
   }
   Check(argc == 1, "unexpected erasure test arguments");
+  ProtocolRegressionPeer::Diagnostics();
   PasswordPreparationErasure();
   for (uint16_t suite : {0x1301, 0x1302, 0x1303}) {
     for (bool alias : {false, true})

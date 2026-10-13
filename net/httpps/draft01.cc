@@ -1119,21 +1119,37 @@ void Client::Diagnostic(std::string_view label, ByteSpan secret, bool exporter) 
   if (!options_.authorize_test_diagnostics || !options_.diagnostic_sink ||
       (exporter && !options_.authorize_exporter_diagnostics))
     return;
-  std::string entry(label);
-  constexpr char digits[] = "0123456789abcdef";
-  for (auto bytes : {ByteSpan(diagnostic_random_), secret}) {
-    entry.push_back(' ');
-    for (uint8_t value : bytes) {
-      entry.push_back(digits[value >> 4]);
-      entry.push_back(digits[value & 15]);
+  bool written = false;
+#if defined(__cpp_exceptions) || defined(_CPPUNWIND)
+  try {
+#endif
+    std::string entry;
+    ScopedSecretCleanser erase_entry(entry);
+    // Allocate the complete line before copying any secret. Incremental growth
+    // would otherwise release uncleansed partial hexadecimal copies.
+    entry.reserve(label.size() + 3 + 2 * (diagnostic_random_.size() + secret.size()));
+    entry.append(label);
+    constexpr char digits[] = "0123456789abcdef";
+    for (auto bytes : {ByteSpan(diagnostic_random_), secret}) {
+      entry.push_back(' ');
+      for (uint8_t value : bytes) {
+        entry.push_back(digits[value >> 4]);
+        entry.push_back(digits[value & 15]);
+      }
     }
+    entry.push_back('\n');
+    written = options_.diagnostic_sink(entry);
+#if defined(__cpp_exceptions) || defined(_CPPUNWIND)
+  } catch (...) {
+    // An authorized test sink may throw (for example, an ostream with exception
+    // masks). Its failure is local to diagnostics, never a handshake failure.
+    // Do not log the exception: a sink could include secret bytes in its text.
   }
-  entry.push_back('\n');
-  if (!options_.diagnostic_sink(entry)) {
+#endif
+  if (!written) {
     diagnostic_failed_ = true;
     options_.diagnostic_sink = {};
   }
-  OPENSSL_cleanse(entry.data(), entry.size());
 #else
   (void)label;
   (void)secret;
@@ -1342,6 +1358,20 @@ bool Client::AcceptCertificateRequest(ByteSpan frame, bool post_handshake) {
 bool Client::ClientCredentialMatchesRequest() const {
   if (!client_credential_ || client_credential_->certificate_type != client_certificate_type_)
     return false;
+  if (client_certificate_type_ != 0) {
+    // RFC 9846 section 4.3.5 requires every understood requested extension
+    // to be present. Raw keys and ITS credentials have no X.509 KU/EKU
+    // extensions; unknown OIDs remain ignorable for every credential type.
+    for (const auto& [encoded_oid, requested_values] : client_oid_filters_) {
+      const uint8_t* input = encoded_oid.data();
+      bssl::UniquePtr<ASN1_OBJECT> oid(d2i_ASN1_OBJECT(nullptr, &input, encoded_oid.size()));
+      if (!oid || input != ByteSpan(encoded_oid).subspan(encoded_oid.size()).data())
+        return false;
+      const int nid = OBJ_obj2nid(oid.get());
+      if (nid == NID_key_usage || nid == NID_ext_key_usage)
+        return false;
+    }
+  }
   if (client_certificate_type_ == 2)
     return true;
   if (client_certificate_type_ == 3) {

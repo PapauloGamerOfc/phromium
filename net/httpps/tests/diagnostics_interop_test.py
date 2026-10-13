@@ -17,7 +17,7 @@ async def main(args):
     from tls20_server.lab import generate_lab_credentials
     from tls20_server.tickets import TicketStore
     credentials, ca = generate_lab_credentials("localhost")
-    cases = [("--get-diagnostics", mode) for mode in ("off", "on", "exporters", "failure")]
+    cases = [("--get-diagnostics", mode) for mode in ("off", "on", "exporters", "failure", "throw")]
     cases += [("--get-grease", padding) for padding in ("0", "512", "20000")]
     with tempfile.TemporaryDirectory(prefix="httpps-diagnostics-") as directory:
         root = Path(directory) / "root.der"
@@ -65,7 +65,7 @@ async def main(args):
             finally:
                 server.close()
                 await server.wait_closed()
-    print("21 native connections: diagnostic opt-in/exporter separation/failure isolation, GREASE, padded and fragmented ClientHellos, PSK binders and 0-RTT passed")
+    print("24 native connections: diagnostic opt-in/exporter separation/false and throwing sink isolation, GREASE, padded and fragmented ClientHellos, PSK binders and 0-RTT passed")
 
 
 if __name__ == "__main__":

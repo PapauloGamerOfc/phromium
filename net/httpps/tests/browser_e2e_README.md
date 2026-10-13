@@ -8,7 +8,7 @@ disables the sandbox, or bypasses a browser certificate error through CDP.
 
 Prerequisites: Python 3.11+, the reference server's `requirements-dev.txt`
 (including the `h2` fixture dependency), and a clean checkout of
-`tls20-server` at `9ba789de5c1b81c61e9bfa1935b4f1f0b07fb967`. The revision is
+`tls20-server` at `35941c535d4bea5c3d35e037c5eff81dd24faeab`. The revision is
 checked before importing its protocol implementation. No dependencies are
 downloaded by the script.
 
@@ -46,6 +46,31 @@ results before consuming them; a failed derivation cannot become a successful
 MAC under an empty key or an empty transcript hash. Valid zero-length exporter
 outputs remain supported. Fault-injection tests run in an isolated native
 process, not in production browser code, and preserve successful output bytes.
+
+## Diagnostic sink failures and non-X.509 request filters
+
+The separate test-diagnostics build treats a sink returning false or throwing
+as a local logging failure: it disables that sink without aborting the channel
+or printing the exception. Diagnostic lines reserve their final capacity before
+copying secret bytes and cleanse owned storage before release on every exit.
+The native allocation observer checks traffic/exporter lines with 32-, 48- and
+64-byte fixture secrets, including failure paths and authorization gates.
+Interoperability controls exercise full, resumed and early-data connections.
+Production browser builds still compile this logging path out; these checks do
+not promise erasure of copies deliberately retained by a diagnostic consumer.
+
+Recognized KeyUsage/ExtendedKeyUsage OID filters also apply when choosing RPK
+or ITS client credentials: these formats do not contain the requested X.509
+extensions and cannot satisfy those filters. Unknown OIDs remain ignorable.
+The RPK wire matrix covers initial and post-handshake requests, optional and
+required authentication, and both SHA-256 and SHA-384 suites. Refusal sends an
+empty Certificate without a CertificateVerify; required authentication then
+fails rather than silently selecting an incompatible credential. X.509 retains
+its existing extension matcher and no trust policy is relaxed.
+The ITS provider matrix additionally checks KU/EKU refusal and unknown-OID
+acceptance in initial and repeated post-handshake requests across all five
+configured ITS profiles, with real credential/grant/MAC/Finished validation and
+resumption/early-data controls.
 
 ## CertificateVerify alert interoperability
 
