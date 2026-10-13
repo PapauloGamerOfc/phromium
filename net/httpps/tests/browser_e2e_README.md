@@ -22,6 +22,22 @@ results do not validate a subsequent optional-profile expansion.
 Use the server and browser from the same migration; the old numbered prototype
 is not wire-compatible with the current spec.
 
+## HTTPPS proxy-hop ALPN and independent trust
+
+The real-browser suite includes HTTPPS CONNECT proxies offering only HTTP/1.1
+or preferring HTTP/2. The browser offers HTTP/1.1 on the proxy hop because that
+path implements HTTP/1.1 CONNECT, while the independently authenticated origin
+inside the tunnel still negotiates HTTP/2 and reuses its connection. Ordinary
+HTTPS-proxy ALPN policy is unchanged. The old browser fails against the
+HTTP/2-preferring proxy before CONNECT; the corrected browser completes both
+routes without changing the peer's protocol selection policy.
+
+These cases run with default and explicitly enabled network-service sandbox
+policies. The proxy and origin use distinct temporary CAs: trusting only the
+origin must not authorize CONNECT, and trusting only the proxy must not
+authorize origin application data. Fixtures forward only to an explicit
+loopback allowlist. No certificate bypass or OS trust-store changes are used.
+
 ## Fail-closed provider derivation
 
 Crypto-provider failure is not an empty cryptographic input. Key-schedule,

@@ -208,11 +208,13 @@ async def debug_targets(port):
 
 class Browser:
     def __init__(self, executable, profile, root=None, profile_config=None,
-                 enable_network_sandbox=False, fixture_host=HOST):
+                 enable_network_sandbox=False, fixture_host=HOST,
+                 proxy=None, proxy_root=None):
         self.executable, self.profile, self.root = executable, profile, root
         self.profile_config = profile_config
         self.enable_network_sandbox = enable_network_sandbox
         self.fixture_host = fixture_host
+        self.proxy, self.proxy_root = proxy, proxy_root
         self.process = self.cdp = self.log = None
 
     async def __aenter__(self):
@@ -222,11 +224,14 @@ class Browser:
         arguments = [str(self.executable), "--headless=new", "--remote-debugging-port=0",
                      f"--user-data-dir={self.profile}", "--no-first-run", "--no-default-browser-check",
                      "--disable-background-networking", "--disable-component-update", "--disable-sync",
-                     "--disable-extensions", "--disable-domain-reliability", "--no-proxy-server",
+                     "--disable-extensions", "--disable-domain-reliability",
                      "--disable-features=OptimizationHints,MediaRouter,AutofillServerCommunication,Translate,EnablePortBoundCookies,EnableSchemeBoundCookies",
                      f"--host-resolver-rules=MAP {self.fixture_host} 127.0.0.1, MAP * ~NOTFOUND", "about:blank"]
+        arguments.append("--proxy-server=" + self.proxy if self.proxy else "--no-proxy-server")
         if self.root is not None:
             arguments.append("--httpps-trust-anchor=" + base64.b64encode(self.root).decode())
+        if self.proxy_root is not None:
+            arguments.append("--httpps-proxy-trust-anchor=" + base64.b64encode(self.proxy_root).decode())
         if self.profile_config is not None:
             arguments.append("--httpps-profile-file=" + str(self.profile_config.resolve()))
         if self.enable_network_sandbox:
@@ -321,6 +326,7 @@ class Fixtures:
         self.early_sessions = []
         self.h2_connections = 0
         self.h2_requests = []
+        self.proxy_negotiations, self.proxy_tunnels = [], []
         now = datetime.now(timezone.utc)
         issuer_key = ec.generate_private_key(ec.SECP256R1())
         issuer_name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Browser local test CA")])
@@ -359,6 +365,8 @@ class Fixtures:
                     key = x25519.X25519PrivateKey.generate()
                 self.credentials[kind] = Credentials([certificate.public_bytes(serialization.Encoding.DER)], key)
         self.credentials["untrusted"], _ = generate_lab_credentials(HOST)
+        self.proxy_credentials, proxy_root = generate_lab_credentials(HOST)
+        self.proxy_root = proxy_root.public_bytes(serialization.Encoding.DER)
 
     async def listen(self, callback, **options):
         def completed(task):
@@ -522,6 +530,82 @@ class Fixtures:
                     await close_writer(upstream)
                 await close_writer(writer)
         self.h2_port = await self.listen(h2_relay)
+        self.proxy_ports = {}
+        for kind, protocols in (("http11", (b"http/1.1",)),
+                                ("prefer-h2", (b"h2", b"http/1.1"))):
+            self.proxy_ports[kind] = await self.listen(
+                lambda r, w, kind=kind, protocols=protocols: self.httpps_proxy(r, w, kind, protocols))
+
+    async def httpps_proxy(self, reader, writer, kind, protocols):
+        """Loopback-only CONNECT peer with trust separate from the origin."""
+        from tls20_server.errors import ProtocolError
+        from tls20_server.handshake import server_handshake
+        channel, upstream = None, None
+        pumps = []
+        try:
+            async with asyncio.timeout(30):
+                channel = await server_handshake(reader, writer, self.proxy_credentials, HOST,
+                                                 application_protocols=protocols)
+                self.proxy_negotiations.append((kind, channel.protocol.decode()))
+                if channel.protocol == b"h2":
+                    # Regressed clients advertise h2, then abort before CONNECT.
+                    # Send a valid SETTINGS frame, not an HTTP/1.1 response, so
+                    # the negative control never relies on a malformed peer.
+                    from h2.config import H2Configuration
+                    from h2.connection import H2Connection
+                    connection = H2Connection(H2Configuration(client_side=False))
+                    connection.initiate_connection()
+                    await channel.send(connection.data_to_send())
+                    await channel.recv()
+                    return
+                request = bytearray()
+                while b"\r\n\r\n" not in request:
+                    data = await channel.recv()
+                    if data is None:
+                        return
+                    request.extend(data)
+                    if len(request) > 65536:
+                        raise AssertionError("Proxy CONNECT request too large")
+                header, trailing = bytes(request).split(b"\r\n\r\n", 1)
+                method, authority, version = header.split(b"\r\n", 1)[0].decode("ascii").split(" ")
+                allowed = {f"{HOST}:{self.port}": self.port,
+                           f"{HOST}:{self.h2_port}": self.h2_port}
+                if method != "CONNECT" or version != "HTTP/1.1" or authority not in allowed:
+                    # Background browser requests never leave the test host.
+                    await channel.send(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n")
+                    return
+                self.proxy_tunnels.append((kind, authority))
+                incoming, upstream = await asyncio.open_connection("127.0.0.1", allowed[authority])
+                await channel.send(b"HTTP/1.1 200 Connection Established\r\n\r\n")
+                if trailing:
+                    upstream.write(trailing)
+                    await upstream.drain()
+                async def to_origin():
+                    while (data := await channel.recv()) is not None:
+                        upstream.write(data)
+                        await upstream.drain()
+                async def to_browser():
+                    while data := await incoming.read(65536):
+                        await channel.send(data)
+                pumps = [asyncio.create_task(to_origin()), asyncio.create_task(to_browser())]
+                done, _ = await asyncio.wait(pumps, return_when=asyncio.FIRST_COMPLETED)
+                for task in done:
+                    task.result()
+        except (ProtocolError, ConnectionError, asyncio.IncompleteReadError, TimeoutError):
+            pass
+        except Exception as error:
+            self.errors.append(repr(error))
+        finally:
+            for task in pumps:
+                task.cancel()
+            await asyncio.gather(*pumps, return_exceptions=True)
+            if upstream:
+                await close_writer(upstream)
+            if channel:
+                with suppress(ProtocolError, ConnectionError):
+                    await channel.close()
+            else:
+                await close_writer(writer)
 
     async def h2_httpps(self, reader, writer):
         from h2.config import H2Configuration
@@ -733,6 +817,48 @@ async def run(args, report):
                 error = await cdp.navigate(f"https://{HOST}:{fixtures.h2_port}/", success=False)
                 check(error == "net::ERR_CERT_AUTHORITY_INVALID" and len(fixtures.h2_requests) == before,
                       "HTTPS cannot reuse the HTTPPS h2 pool at the same authority")
+
+            for explicit_sandbox in (False, True):
+                sandbox = "explicit" if explicit_sandbox else "default"
+                for kind, port in fixtures.proxy_ports.items():
+                    route = f"httpps://{HOST}:{port}"
+                    label = f"HTTPPS proxy {kind} ({sandbox} sandbox)"
+                    before = fixtures.h2_connections
+                    before_tunnels = len(fixtures.proxy_tunnels)
+                    before_negotiations = len(fixtures.proxy_negotiations)
+                    async with Browser(args.browser.resolve(), folder / f"proxy-{kind}-{sandbox}", fixtures.root,
+                                       proxy=route, proxy_root=fixtures.proxy_root,
+                                       enable_network_sandbox=explicit_sandbox) as cdp:
+                        await cdp.navigate(h2_origin + "/")
+                        responses = await cdp.evaluate(
+                            "Promise.all(Array.from({length:4}, (_,i) => fetch('/proxied/'+i).then(r=>r.json())))")
+                        check(len(responses) == 4 and all(item["scheme"] == "httpps" and
+                              item["path"] == "/proxied/" + str(i) for i, item in enumerate(responses)),
+                              label + " carries independently authenticated origin traffic")
+                        check(await cdp.evaluate("performance.getEntriesByType('navigation')[0].nextHopProtocol") == "h2"
+                              and fixtures.h2_connections == before + 1,
+                              label + " preserves origin h2 negotiation and connection reuse")
+                    negotiated = [protocol for source, protocol in fixtures.proxy_negotiations[before_negotiations:]
+                                  if source == kind]
+                    check((kind, f"{HOST}:{fixtures.h2_port}") in fixtures.proxy_tunnels[before_tunnels:] and
+                          negotiated and all(protocol == "http/1.1" for protocol in negotiated),
+                          label + " negotiates only implemented CONNECT/1.1")
+                route = f"httpps://{HOST}:{fixtures.proxy_ports['prefer-h2']}"
+                before = len(fixtures.proxy_tunnels)
+                async with Browser(args.browser.resolve(), folder / f"proxy-without-proxy-root-{sandbox}", fixtures.root,
+                                   proxy=route, enable_network_sandbox=explicit_sandbox) as cdp:
+                    error = await cdp.navigate(h2_origin + "/", success=False)
+                    check(error == "net::ERR_PROXY_CERTIFICATE_INVALID" and len(fixtures.proxy_tunnels) == before,
+                          f"Origin trust cannot authenticate the HTTPPS proxy ({sandbox} sandbox)")
+                before = len(fixtures.h2_requests)
+                async with Browser(args.browser.resolve(), folder / f"proxy-without-origin-root-{sandbox}",
+                                   proxy=route, proxy_root=fixtures.proxy_root,
+                                   enable_network_sandbox=explicit_sandbox) as cdp:
+                    error = await cdp.navigate(h2_origin + "/", success=False)
+                    check(error == "net::ERR_SSL_SERVER_CERT_BAD_FORMAT" and len(fixtures.h2_requests) == before,
+                          f"HTTPPS proxy trust cannot authenticate the tunneled origin ({sandbox} sandbox)")
+            report["proxy_negotiations"] = fixtures.proxy_negotiations
+            report["proxy_tunnels"] = fixtures.proxy_tunnels
 
             early_origin = f"httpps://{HOST}:{fixtures.early_port}"
             async with Browser(args.browser.resolve(), folder / "early-profile", fixtures.root) as cdp:

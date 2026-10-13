@@ -208,6 +208,27 @@ class CDPTest(unittest.IsolatedAsyncioTestCase):
             self.assertIsNone(browser.process)
             self.assertTrue(browser.log.closed)
 
+    async def test_proxy_route_and_roots_are_explicit_and_separate(self):
+        with tempfile.TemporaryDirectory(prefix="httpps-proxy-harness-") as temporary:
+            folder = Path(temporary)
+            for proxy in (None, "httpps://cookie.test:4343"):
+                with self.subTest(proxy=proxy):
+                    browser = Browser(folder / "fixture.exe", folder / "profile", b"origin-root",
+                                      proxy=proxy, proxy_root=b"proxy-root" if proxy else None)
+                    with patch("browser_e2e_test.OwnedProcess.start",
+                               new=AsyncMock(side_effect=FileNotFoundError("fixture"))) as spawn:
+                        with self.assertRaises(FileNotFoundError):
+                            await browser.__aenter__()
+                    arguments = spawn.call_args.args
+                    self.assertIn("--httpps-trust-anchor=" + base64.b64encode(b"origin-root").decode(), arguments)
+                    self.assertEqual("--no-proxy-server" in arguments, proxy is None)
+                    if proxy:
+                        self.assertIn("--proxy-server=" + proxy, arguments)
+                        self.assertIn("--httpps-proxy-trust-anchor=" + base64.b64encode(b"proxy-root").decode(), arguments)
+                    else:
+                        self.assertFalse(any(item.startswith("--httpps-proxy-trust-anchor=") for item in arguments))
+                    self.assertFalse(any(item.startswith("--ignore-certificate") for item in arguments))
+
     async def test_startup_retries_transient_active_port_file_lock(self):
         with tempfile.TemporaryDirectory(prefix="httpps-startup-file-lock-") as temporary:
             folder = Path(temporary)

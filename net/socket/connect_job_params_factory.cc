@@ -59,7 +59,11 @@ void ConfigureHttpps(SSLConfig& ssl_config) {
   std::erase_if(ssl_config.alpn_protos, [](NextProto proto) {
     return proto != NextProto::kProtoHTTP11 && proto != NextProto::kProtoHTTP2;
   });
-  if (ssl_config.alpn_protos.empty()) {
+  if (ssl_config.session_usage == SessionUsage::kProxy ||
+      ssl_config.alpn_protos.empty()) {
+    // The HTTPPS proxy path implements HTTP/1.1 CONNECT, not HTTP/2 proxy
+    // streams. Never offer h2 on this hop and then reject its valid selection.
+    // Origin HTTPPS and ordinary HTTPS-proxy ALPN remain independent.
     ssl_config.alpn_protos = {NextProto::kProtoHTTP11};
   }
   ssl_config.application_settings.clear();
