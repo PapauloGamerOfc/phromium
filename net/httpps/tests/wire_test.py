@@ -48,6 +48,13 @@ async def main(args):
                33, 41, 42, 43, 44, 45, 49, 51, 55, 56, 58, 59, 0xff02)]
     expected_alerts = {"wrong-version": 70, "wrong-selected-version": 47,
                        "hrr-wrong-legacy-version": 70, "hrr-old-version": 47}
+    # Algorithm selection is semantic (47), nested framing or a proof with the
+    # wrong negotiated hash length is syntax (50), and a bad MAC is crypto (51).
+    proof_alerts = {"cv-opposite-role": 47, "cv-unknown-algorithm": 47,
+                    "cv-short-proof": 50, "cv-other-hash-proof": 50,
+                    "cv-empty-proof": 50, "cv-declared-short": 50,
+                    "cv-truncated-algorithm": 50, "bad-proof": 51}
+    cases += [case for case in proof_alerts if case not in cases]
     with tempfile.TemporaryDirectory(prefix="httpps-wire-") as temporary:
         root = Path(temporary) / "root.der"
         root.write_bytes(ca.public_bytes(serialization.Encoding.DER))
@@ -180,6 +187,23 @@ async def main(args):
                         if kind == "bad-proof":
                             proof = bytes([proof[0] ^ 1]) + proof[1:]
                         cv = m.certificate_verify(proof)
+                        if kind.startswith("cv-"):
+                            body = cv[4:]
+                            if kind == "cv-opposite-role":
+                                body = b"\xfe\x01" + body[2:]
+                            elif kind == "cv-unknown-algorithm":
+                                body = b"\x08\x07" + body[2:]
+                            elif kind == "cv-declared-short":
+                                body = body[:2] + b"\x00\x1f" + proof
+                            elif kind == "cv-truncated-algorithm":
+                                body = b"\xfe"
+                            else:
+                                changed = (proof[:-1] if kind == "cv-short-proof" else
+                                           proof + bytes(16) if kind == "cv-other-hash-proof" else b"")
+                                body = body[:2] + len(changed).to_bytes(2, "big") + changed
+                            # Deliberately bypass the server's now-strict frame
+                            # builder: the client must diagnose these wire bytes.
+                            cv = b"\x0f" + len(body).to_bytes(3, "big") + body
                         transcript += cv
                         sf_value = c.finished(shs, transcript)
                         if kind == "bad-finished":
@@ -194,7 +218,13 @@ async def main(args):
                             flight += b"\x00"
                         if kind == "duplicate-extensions":
                             flight = ee + flight
-                        if kind == "early-application":
+                        if kind in proof_alerts:
+                            # Finish external certificate validation in its own
+                            # record, then reject CV with no later unread flight
+                            # that could turn close into a reset hiding the alert.
+                            writer.write(sender.seal(ee + cr + cert, 22))
+                            writer.write(sender.seal(cv, 22))
+                        elif kind == "early-application":
                             writer.write(sender.seal(b"not authenticated", 23))
                         elif kind == "fragmented":
                             for byte in flight:
@@ -207,6 +237,11 @@ async def main(args):
                                 writer.write(sender.seal(b"\x01\x5a", 21))
                             writer.write(sender.seal(flight, 22))
                         await writer.drain()
+                        if kind in proof_alerts:
+                            alert, content_type = await wire.read_record(receiver)
+                            assert content_type == 21 and alert == bytes((2, proof_alerts[kind])), (kind, content_type, alert)
+                            observed_alerts.append(alert[1])
+                            return
                         if kind in ("client-auth-decline", "client-auth-unknown"):
                             declined = await wire.receive_frame(11, receiver)
                             assert declined == m.frame(11, bytes(4))
@@ -264,6 +299,8 @@ async def main(args):
                 assert not handler_errors, (kind, handler_errors)
                 if kind in expected_alerts:
                     assert observed_alerts == [expected_alerts[kind]], (kind, observed_alerts)
+                if kind in proof_alerts:
+                    assert observed_alerts == [proof_alerts[kind]], (kind, observed_alerts)
                 if kind == "hrr-repeated":
                     assert observed_alerts == [10], (kind, observed_alerts)
                 if kind in positives:
