@@ -15,6 +15,9 @@
 
 #include "third_party/boringssl/src/include/openssl/mem.h"
 #include "third_party/boringssl/src/include/openssl/curve25519.h"
+#include "third_party/boringssl/src/include/openssl/ec.h"
+#include "third_party/boringssl/src/include/openssl/evp.h"
+#include "third_party/boringssl/src/include/openssl/x509.h"
 
 #if defined(_WIN32)
 #ifndef NOMINMAX
@@ -48,6 +51,12 @@ bool injecting_provider = false;
 size_t binder_exposed = 0;
 size_t provider_calls = 0;
 size_t fail_provider_call = 0;
+bool observing_username = false;
+size_t username_cpp_calls = 0, fail_username_call = 0;
+size_t username_width = 0, username_key_size = 0;
+std::array<Allocation, 2> username_secrets;
+size_t username_tracked = 0, username_released = 0;
+size_t username_dirty = 0, username_exposed = 0;
 
 bool RejectProviderAllocation() {
   if (!observing_binder && !injecting_provider) return false;
@@ -120,11 +129,11 @@ void* Reallocate(void* pointer, size_t size, const char* file, int line) {
 }
 
 void ReleaseCpp(void* pointer) {
-  if (observing_binder && pointer) {
+  if ((observing_binder || observing_username) && pointer) {
     for (auto& entry : cpp_allocations) {
       if (entry.pointer != pointer) continue;
       const auto* bytes = static_cast<const uint8_t*>(pointer);
-      for (const auto& pattern : binder_patterns) {
+      if (observing_binder) for (const auto& pattern : binder_patterns) {
         if (entry.size < pattern.size()) continue;
         for (size_t offset = 0; offset <= entry.size - pattern.size(); ++offset) {
           if (!std::memcmp(bytes + offset, pattern.data(), pattern.size())) {
@@ -132,6 +141,20 @@ void ReleaseCpp(void* pointer) {
             break;
           }
         }
+      }
+      if (observing_username) {
+        for (auto& secret : username_secrets) if (secret.pointer == pointer) {
+          ++username_released;
+          username_dirty += std::any_of(bytes, bytes + secret.size,
+              [](uint8_t byte) { return byte != 0; });
+          secret = {};
+        }
+        if (entry.size >= kSecret.size())
+          for (size_t offset = 0; offset <= entry.size - kSecret.size(); ++offset)
+            if (!std::memcmp(bytes + offset, kSecret.data(), kSecret.size())) {
+              ++username_exposed;
+              break;
+            }
       }
       entry = {};
       break;
@@ -210,12 +233,14 @@ template <class F> bool Fault(size_t allocation, F&& operation) {
 // Force an exception specifically at Sm3Expand's output allocation, after the
 // provider parameter copy exists. OpenSSL uses the independent hooks above.
 void* operator new(size_t size) {
+  if (observing_username && ++username_cpp_calls == fail_username_call)
+    throw std::bad_alloc();
   if (size && size == fail_cpp_allocation_size) {
     fail_cpp_allocation_size = 0;
     throw std::bad_alloc();
   }
   if (void* pointer = std::calloc(size ? size : 1, 1)) {
-    if (observing_binder) {
+    if (observing_binder || observing_username) {
       bool registered = false;
       for (auto& entry : cpp_allocations) {
         if (!entry.pointer) {
@@ -225,6 +250,14 @@ void* operator new(size_t size) {
         }
       }
       Check(registered, "binder observer tracks all C++ allocations");
+      // ProtectUsername's first two vector allocations hold DH and HKDF,
+      // respectively. Observe their actual contents immediately before free,
+      // not merely the number of explicit cleanse calls.
+      if (observing_username && username_cpp_calls <= 2) {
+        const size_t expected = username_cpp_calls == 1 ? username_width : username_key_size;
+        Check(size == expected, "username observer identifies DH/HKDF allocations");
+        username_secrets[username_tracked++] = {pointer, size};
+      }
     }
     return pointer;
   }
@@ -578,10 +611,111 @@ void FailClosed(const std::shared_ptr<NativeProvider>& provider) {
     }) && !next->Commit(), "truncated pin proof cannot become valid after a provider failure");
   }
 }
+
+void UsernameErasure(const std::shared_ptr<NativeProvider>& provider) {
+  auto start = [](size_t width, size_t key_size, size_t fail_cpp = 0) {
+    Check(std::none_of(cpp_allocations.begin(), cpp_allocations.end(),
+        [](const auto& entry) { return entry.pointer != nullptr; }),
+        "username observer begins with no outstanding test allocations");
+    username_width = width;
+    username_key_size = key_size;
+    username_cpp_calls = username_tracked = username_released = 0;
+    username_dirty = username_exposed = 0;
+    username_secrets = {};
+    fail_username_call = fail_cpp;
+    observing_username = true;
+  };
+  // Positive/negative controls use this same pre-deallocation observer.
+  for (bool wipe : {false, true}) {
+    start(32, 32);
+    auto* probe = ::operator new(kSecret.size());
+    std::memcpy(probe, kSecret.data(), kSecret.size());
+    if (wipe) OPENSSL_cleanse(probe, kSecret.size());
+    ::operator delete(probe);
+    observing_username = false;
+    Check(username_tracked == 1 && username_released == 1 &&
+          username_dirty == (wipe ? 0u : 1u) && username_exposed == (wipe ? 0u : 1u),
+          "username observer distinguishes live secrets from erased buffers");
+  }
+  size_t cases = 0, provider_failures = 0;
+  for (int nid : {NID_X9_62_prime256v1, NID_secp384r1, NID_secp521r1}) {
+    const size_t width = nid == NID_X9_62_prime256v1 ? 32 : nid == NID_secp384r1 ? 48 : 66;
+    const size_t key_size = width == 66 ? 64 : width;
+    bssl::UniquePtr<EC_KEY> key(EC_KEY_new_by_curve_name(nid));
+    bssl::UniquePtr<EVP_PKEY> wrapper(EVP_PKEY_new());
+    Check(key && wrapper && EC_KEY_generate_key(key.get()) &&
+          EVP_PKEY_set1_EC_KEY(wrapper.get(), key.get()), "username ECDH fixture");
+    const int der_size = i2d_PUBKEY(wrapper.get(), nullptr);
+    Check(der_size > 0, "username public-key encoding size");
+    Bytes spki(static_cast<size_t>(der_size));
+    auto* cursor = spki.data();
+    Check(i2d_PUBKEY(wrapper.get(), &cursor) == der_size, "username public-key encoding");
+    // Long identity avoids growth; short identity explicitly exercises padding.
+    // Both include a synthetic pattern to observe plaintext copies before free.
+    for (size_t length : {160u, 32u}) {
+      Bytes username(length, 0x5a);
+      std::copy(kSecret.begin(), kSecret.end(), username.begin());
+      struct Result { bool ok; bool threw; size_t cpp_calls; size_t provider_calls; };
+      auto attempt = [&](size_t fail_cpp, size_t fail_provider) {
+        bool ok = false, threw = false;
+        start(width, key_size, fail_cpp);
+        {
+          Bytes output;
+          try {
+            ok = Fault(fail_provider, [&] { return provider->ProtectUsername(spki, username, &output); });
+          } catch (const std::bad_alloc&) {
+            threw = true;
+            injecting_provider = false;
+            fail_provider_call = 0;
+          }
+          Check(!ok || output.size() == width + 16 + std::max<size_t>(128, length),
+                "username protection preserves its wire envelope");
+        }  // Observe output deallocation too, while all allocations are live.
+        observing_username = false;
+        Check(username_tracked == username_released && username_dirty == 0,
+              "username DH/HKDF buffers are erased on every exit");
+        Check(username_exposed == 0, "username padding and failure paths erase plaintext copies");
+        Check(username.size() == length && std::equal(kSecret.begin(), kSecret.end(), username.begin()),
+              "borrowed caller identity remains unchanged");
+        ++cases;
+        return Result{ok, threw, username_cpp_calls, provider_calls};
+      };
+      const auto success = attempt(0, 0);
+      Check(success.ok && !success.threw && username_tracked == 2,
+            "real DH/HKDF and SIV success control");
+      // Dynamic allocation positions, not platform-specific allocator sizes or
+      // OpenSSL allocation numbers. This includes output allocation after HKDF.
+      for (size_t failure = 1; failure <= success.cpp_calls; ++failure) {
+        const auto result = attempt(failure, 0);
+        Check(!result.ok && result.threw, "each C++ allocation failure is exercised");
+      }
+      for (size_t failure = 1; failure <= success.provider_calls; ++failure) {
+        const auto result = attempt(0, failure);
+        Check(!result.threw, "provider failure stays on the boolean error path");
+        provider_failures += !result.ok;
+      }
+      // The bound must reject before creating any DH/HKDF material.
+      Bytes oversized(256 - width - 16, 0x5a);
+      start(width, key_size);
+      {
+        Bytes output;
+        Check(!provider->ProtectUsername(spki, oversized, &output) && output.empty(),
+              "unencodable protected identity is rejected before cryptography");
+      }
+      observing_username = false;
+      Check(username_tracked == 0 && username_cpp_calls == 0,
+            "oversized protected identity never allocates secrets");
+      ++cases;
+    }
+  }
+  Check(provider_failures > 0, "SIV provider failures were actually exercised");
+  std::printf("Username protection erasure: %zu cases, %zu provider failures, 2 observer controls passed\n",
+              cases, provider_failures);
+}
 }  // namespace
 
 int main(int argc, char** argv) {
-  Check(argc == 2 || argc == 3, "usage: provider_erasure_test absolute-provider [success|failure|exception|binders|chains]");
+  Check(argc == 2 || argc == 3, "usage: provider_erasure_test absolute-provider [success|failure|exception|binders|chains|username]");
   const std::string path(argv[1]);
 #if defined(_WIN32)
   Check(path.starts_with("\\\\") || (path.size() >= 3 && path[1] == ':' &&
@@ -618,7 +752,7 @@ int main(int argc, char** argv) {
   observing = false;
 
   const std::string_view mode = argc == 3 ? argv[2] : "all";
-  Check(mode == "all" || mode == "success" || mode == "failure" || mode == "exception" || mode == "binders" || mode == "chains",
+  Check(mode == "all" || mode == "success" || mode == "failure" || mode == "exception" || mode == "binders" || mode == "chains" || mode == "username",
         "known test mode");
   size_t cases = 0;
   if (mode == "all" || mode == "success") {
@@ -666,5 +800,6 @@ int main(int argc, char** argv) {
   std::printf("SM3 parameter erasure: %zu cases and 3 observer controls passed\n", cases);
   if (mode == "all" || mode == "binders") BinderErasure(provider);
   if (mode == "all" || mode == "chains") FailClosed(provider);
+  if (mode == "all" || mode == "username") UsernameErasure(provider);
   return 0;
 }

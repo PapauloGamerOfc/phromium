@@ -528,18 +528,34 @@ bool NativeProvider::ProtectUsername(ByteSpan spki, ByteSpan username, Bytes* ou
   const size_t key_size = width == 32 ? 32 : width == 48 ? 48 : 64;
   if (!width || width + 16 + std::max<size_t>(128, username.size()) > 255) return false;
   bssl::UniquePtr<EC_KEY> ephemeral(EC_KEY_new_by_curve_name(nid));
-  Bytes secret(width), derived(key_size), encoded(width + 1), plaintext(username.begin(), username.end());
-  plaintext.resize(std::max<size_t>(128, plaintext.size()), 0);
-  auto wipe = [&]() {
-    for (auto* bytes : {&secret, &derived, &plaintext}) OPENSSL_cleanse(bytes->data(), bytes->size());
-  };
+  // Install cleanup before any secret-bearing allocation. In standalone builds
+  // an allocation can throw after DH/HKDF or while publishing the ciphertext.
+  struct UsernameSecrets {
+    Bytes secret;
+    Bytes derived;
+    Bytes plaintext;
+    ~UsernameSecrets() {
+      for (auto* bytes : {&secret, &derived, &plaintext})
+        OPENSSL_cleanse(bytes->data(), bytes->size());
+    }
+  } sensitive;
+  auto& secret = sensitive.secret;
+  auto& derived = sensitive.derived;
+  auto& plaintext = sensitive.plaintext;
+  secret.resize(width);
+  derived.resize(key_size);
+  // Allocate the final padded size before copying the username so growth never
+  // releases an uncleaned plaintext allocation.
+  plaintext.resize(std::max<size_t>(128, username.size()), 0);
+  std::copy(username.begin(), username.end(), plaintext.begin());
+  Bytes encoded(width + 1);
   if (!ephemeral || !EC_KEY_generate_key(ephemeral.get()) ||
       ECDH_compute_key(secret.data(), secret.size(), EC_KEY_get0_public_key(peer), ephemeral.get(), nullptr) != static_cast<int>(width) ||
       EC_POINT_point2oct(group, EC_KEY_get0_public_key(ephemeral.get()), POINT_CONVERSION_COMPRESSED,
           encoded.data(), encoded.size(), nullptr) != encoded.size() ||
       !HKDF(derived.data(), derived.size(), width == 32 ? EVP_sha256() : width == 48 ? EVP_sha384() : EVP_sha512(),
           secret.data(), secret.size(), nullptr, 0, nullptr, 0)) {
-    wipe(); return false;
+    return false;
   }
   auto& api = *impl_;
   Handle cipher(api.EVP_CIPHER_fetch(api.context, key_size == 32 ? "AES-128-SIV" : key_size == 48 ? "AES-192-SIV" : "AES-256-SIV",
@@ -558,7 +574,6 @@ bool NativeProvider::ProtectUsername(ByteSpan spki, ByteSpan username, Bytes* ou
     output->insert(output->end(), tag.begin(), tag.end());
     output->insert(output->end(), encrypted.begin(), encrypted.begin() + count + tail);
   } else api.ERR_clear_error();
-  wipe();
   return ok;
 }
 
