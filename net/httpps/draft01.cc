@@ -829,10 +829,14 @@ bool RecordCipher::needs_update() const {
 bool RecordCipher::Account(size_t length, bool sending) {
   // RFC 9846 section 5.5 and RFC 9147 appendix B's CCM analysis. A receiver
   // does not impose the sender's conservative usage policy on a peer.
+  // Seal checks its plaintext bounds, and Open bounds the ciphertext before
+  // accounting. Do not infer an inner-plaintext bound here from a fixed tag
+  // size: short-tag suites can authenticate a larger (invalid) inner record.
+  // Open must authenticate it before reporting record_overflow.
   const uint64_t limit = suite_ == 0x1303 || IntegrityTagLength(suite_) ? std::numeric_limits<uint64_t>::max()
       : suite_ == 0x1304 || suite_ == 0x1305 || suite_ == 0x00c7 || suite_ == 0xc0b2 || suite_ == 0xc0b3 ? uint64_t{1} << 23 : 23726566;
   if (failed_ || sequence_ == std::numeric_limits<uint64_t>::max() ||
-      (GostTagLength(suite_) ? sequence_ > GostSequenceLimit(suite_) : (sending && sequence_ >= limit)) || length > kMaxRecordContent + 239) {
+      (GostTagLength(suite_) ? sequence_ > GostSequenceLimit(suite_) : (sending && sequence_ >= limit))) {
     failed_ = true;
     return false;
   }

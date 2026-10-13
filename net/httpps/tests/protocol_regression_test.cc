@@ -80,6 +80,9 @@ class ProtocolRegressionPeer {
   static void Sequence(RecordCipher& cipher, uint64_t sequence) {
     cipher.sequence_ = sequence;
   }
+  static std::pair<uint64_t, uint64_t> Accounting(const RecordCipher& cipher) {
+    return {cipher.sequence_, cipher.content_bytes_};
+  }
   static void AgeTicket(Client& client, int64_t milliseconds) {
     client.offered_ticket_->received_milliseconds -= milliseconds;
   }
@@ -209,19 +212,31 @@ Bytes Vector16(ByteSpan content) {
 
 // Encrypt independently of RecordCipher::Seal, which intentionally refuses
 // invalid inner types and empty handshake payloads before creating ciphertext.
-Bytes Protect(ByteSpan plaintext, uint64_t sequence = 0) {
-  const auto secret = ProtocolRegressionPeer::ReceivingSecret();
-  const auto key = SuiteLabel(0x1301, secret, "key", {}, 16);
-  auto nonce = SuiteLabel(0x1301, secret, "iv", {}, 12);
+Bytes Protect(ByteSpan plaintext, uint64_t sequence = 0,
+              uint16_t suite = 0x1301) {
+  const EVP_AEAD* aead = nullptr;
+  switch (suite) {
+    case 0x1301: aead = EVP_aead_aes_128_gcm(); break;
+    case 0x1302: aead = EVP_aead_aes_256_gcm(); break;
+    case 0x1303: aead = EVP_aead_chacha20_poly1305(); break;
+    case 0x1304: aead = EVP_aead_aes_128_ccm_tls(); break;
+    case 0x1305: aead = EVP_aead_aes_128_ccm_8_tls(); break;
+  }
+  Check(aead != nullptr, "independent test AEAD selection");
+  const Bytes secret(SuiteHashLength(suite), 0x73);
+  const auto key = SuiteLabel(suite, secret, "key", {},
+                             EVP_AEAD_key_length(aead));
+  auto nonce = SuiteLabel(suite, secret, "iv", {}, 12);
+  const size_t tag = suite == 0x1305 ? 8 : 16;
   for (size_t i = 0; i < 8; ++i)
     nonce[nonce.size() - 1 - i] ^= static_cast<uint8_t>(sequence >> (8 * i));
   Bytes record{23, 3, 3};
-  U16(&record, plaintext.size() + 16);
-  record.resize(5 + plaintext.size() + 16);
+  U16(&record, plaintext.size() + tag);
+  record.resize(5 + plaintext.size() + tag);
   bssl::ScopedEVP_AEAD_CTX context;
   size_t written = 0;
-  Check(EVP_AEAD_CTX_init(context.get(), EVP_aead_aes_128_gcm(), key.data(),
-                          key.size(), 16, nullptr) &&
+  Check(EVP_AEAD_CTX_init(context.get(), aead, key.data(),
+                          key.size(), tag, nullptr) &&
             EVP_AEAD_CTX_seal(context.get(), record.data() + 5, &written,
                               record.size() - 5, nonce.data(), nonce.size(),
                               plaintext.data(), plaintext.size(), record.data(),
@@ -317,6 +332,103 @@ void RecordFramingAlerts() {
           "plaintext record framing is rejected without unsafe fragment access");
     CheckAlert(client, alert, false);
   }
+}
+
+void RecordAeadSizeBoundaries() {
+  size_t cases = 0;
+  for (uint16_t suite : {0x1301, 0x1302, 0x1303, 0x1304, 0x1305}) {
+    const Bytes secret(SuiteHashLength(suite), 0x73);
+    // CCM8 has eight more possible inner bytes than the 16-byte-tag suites
+    // inside the same 16640-byte ciphertext ceiling. Only authenticated
+    // plaintext can diagnose an inner/content overflow; corrupt tags stay 20.
+    for (size_t inner : {16385, 16386, 16624, 16625, 16632, 16633}) {
+      for (bool padded : {false, true}) {
+        Bytes plaintext(inner, padded ? 0 : 0x78);
+        plaintext[padded ? 1 : inner - 1] = 23;
+        for (bool corrupt : {false, true}) {
+          auto record = Protect(plaintext, 0, suite);
+          if (corrupt) record.back() ^= 1;
+          RecordCipher receiver(secret, suite);
+          Bytes content;
+          uint8_t type = 0;
+          const bool outer_overflow = record.size() > kMaxRecord;
+          const bool accepted = inner == 16385 && !corrupt;
+          Check(receiver.Open(record, &type, &content) == accepted,
+                "AEAD size boundaries never release oversized or unauthenticated data");
+          ++cases;
+          if (accepted) {
+            Check(type == 23 && content == Bytes(padded ? 1 : inner - 1,
+                                                 padded ? 0 : 0x78),
+                  "maximum valid inner size retains content and strips padding");
+          } else {
+            const uint8_t expected = outer_overflow || !corrupt ? 22 : 20;
+            if (receiver.alert() != expected)
+              std::cerr << "suite=" << std::hex << suite << std::dec
+                        << " inner=" << inner << " padded=" << padded
+                        << " corrupt=" << corrupt << " alert="
+                        << unsigned(receiver.alert()) << " expected="
+                        << unsigned(expected) << '\n';
+            Check(content.empty() && type == 0 && receiver.alert() == expected,
+                  "AEAD authentication precedes inner overflow classification");
+            Check(!receiver.Open(Protect(Bytes{7, 23}, 1, suite), &type, &content) &&
+                      content.empty() && receiver.alert() == expected,
+                  "record size/tag failures are terminal and preserve their alert");
+          }
+          Check(ProtocolRegressionPeer::Accounting(receiver) ==
+                    std::make_pair(outer_overflow ? uint64_t{0} : uint64_t{1},
+                                   outer_overflow ? uint64_t{0} : uint64_t{inner - 1}),
+                "bounded records consume one sequence number and account protected content");
+        }
+      }
+    }
+    // Negotiated inner and content limits also apply after authentication,
+    // and invalid records do not release even their otherwise valid prefix.
+    for (bool inner_limit : {false, true}) {
+      for (bool corrupt : {false, true}) {
+        RecordCipher receiver(secret, suite);
+        if (inner_limit) receiver.SetLimit(64);
+        else receiver.SetContentLimit(63);
+        auto record = Protect(Bytes(65, 23), 0, suite);
+        if (corrupt) record.back() ^= 1;
+        Bytes content;
+        uint8_t type = 0;
+        Check(!receiver.Open(record, &type, &content) && content.empty() &&
+                  receiver.alert() == (corrupt ? 20 : 22),
+              "negotiated record limits do not replace tag authentication");
+        ++cases;
+      }
+    }
+    constexpr uint64_t kLastSequence = std::numeric_limits<uint64_t>::max();
+    RecordCipher last_receiver(secret, suite);
+    ProtocolRegressionPeer::Sequence(last_receiver, kLastSequence - 1);
+    Bytes content;
+    uint8_t type = 0;
+    Check(last_receiver.Open(Protect(Bytes{7, 23}, kLastSequence - 1, suite),
+                             &type, &content) && content == Bytes{7},
+          "last permitted receive sequence works for every AEAD");
+    content.clear();
+    Check(!last_receiver.Open(Protect(Bytes{7, 23}, kLastSequence, suite),
+                              &type, &content) && content.empty() &&
+              ProtocolRegressionPeer::Accounting(last_receiver) ==
+                  std::make_pair(kLastSequence, uint64_t{1}),
+          "receive sequence never wraps or accounts an exhausted nonce");
+    const uint64_t send_limit = suite == 0x1303 ? kLastSequence :
+        suite == 0x1304 || suite == 0x1305 ? uint64_t{1} << 23 : 23726566;
+    RecordCipher sender(secret, suite), receiver(secret, suite);
+    ProtocolRegressionPeer::Sequence(sender, send_limit - 1);
+    Bytes wire;
+    Check(sender.needs_update() && sender.Seal(Bytes{7}, 23, &wire) &&
+              !sender.Seal(Bytes{7}, 23, &wire),
+          "conservative send quota and KeyUpdate threshold are preserved");
+    if (send_limit != kLastSequence) {
+      ProtocolRegressionPeer::Sequence(receiver, send_limit);
+      Check(receiver.Open(Protect(Bytes{7, 23}, send_limit, suite), &type,
+                           &content) && content == Bytes{7},
+            "receive accounting does not impose the conservative send quota");
+    }
+  }
+  std::cout << "AEAD record boundaries: " << cases
+            << " size/tag/limit cases plus per-suite sequence and quota checks passed\n";
 }
 
 Bytes ServerHello(ByteSpan extensions) {
@@ -1947,6 +2059,7 @@ void RunNativeStageLifecycleTests(const std::shared_ptr<net::httpps::NativeProvi
 void RunProtocolRegressionTests() {
   RecordAlerts();
   RecordFramingAlerts();
+  RecordAeadSizeBoundaries();
   UnexpectedMessageAlerts();
   VersionAlerts();
   HelloResponseOffers();

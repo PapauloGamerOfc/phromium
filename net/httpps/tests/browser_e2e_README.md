@@ -8,7 +8,7 @@ disables the sandbox, or bypasses a browser certificate error through CDP.
 
 Prerequisites: Python 3.11+, the reference server's `requirements-dev.txt`
 (including the `h2` fixture dependency), and a clean checkout of
-`tls20-server` at `da399bb040e24120fc4f303c746291a4a9088a1e`. The revision is
+`tls20-server` at `926f63144f3191266b3879ab6be445ada120a613`. The revision is
 checked before importing its protocol implementation. No dependencies are
 downloaded by the script.
 
@@ -21,6 +21,24 @@ provenance check, never certificate validation. Historical clean-revision
 results do not validate a subsequent optional-profile expansion.
 Use the server and browser from the same migration; the old numbered prototype
 is not wire-compatible with the current spec.
+
+## Record authentication and key-share vector boundaries
+
+The record engine authenticates a ciphertext within the outer record-size
+ceiling before classifying an excessive inner plaintext as `record_overflow`
+(22). A corrupt tag remains `bad_record_mac` (20); an excessive outer length
+still fails before allocation or decryption. Accounting no longer assumes that
+every suite uses a 16-byte tag. This preserves the eight-byte-tag CCM8 and GOST
+paths, negotiated limits, plaintext cleansing and sequence/usage safeguards.
+Permanent regressions cover 140 size/tag/padding/limit cases in the five standard
+AEAD suites and 96 cases in the four explicitly configured GOST suites, plus
+sequence exhaustion and send-quota controls.
+
+The matching server rejects an empty `key_exchange` in any present
+KeyShareEntry, including unknown/GREASE groups, with `decode_error` (50).
+An entirely empty `client_shares` list is different and remains valid for HRR
+or PSK-only negotiation. Its regressions include authenticated positive controls
+and malformed CH1/CH2 exchanges; nonempty unknown shares are still ignored.
 
 ## Empty CT requests and ClientHello extension pairing
 

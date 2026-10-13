@@ -31,6 +31,64 @@ Bytes Hex(std::string_view input) {
   return result;
 }
 
+void GostRecordBoundaries(const std::shared_ptr<NativeProvider>& provider) {
+  size_t cases = 0;
+  for (uint16_t suite : {0xc103, 0xc104, 0xc105, 0xc106}) {
+    const Bytes secret(SuiteHashLength(suite), 0x73);
+    const size_t tag = GostTagLength(suite);
+    const auto key = SuiteLabel(suite, secret, "key", {}, 32, provider.get());
+    const auto nonce = SuiteLabel(suite, secret, "iv", {}, tag, provider.get());
+    for (size_t inner : {16385, 16386, 16624, 16625, 16632, 16633}) {
+      for (bool padded : {false, true}) {
+        Bytes plaintext(inner, padded ? 0 : 0x78);
+        plaintext[padded ? 1 : inner - 1] = 23;
+        const size_t length = inner + tag;
+        Bytes wire{23, 3, 3, static_cast<uint8_t>(length >> 8),
+                   static_cast<uint8_t>(length)};
+        // Bypass RecordCipher::Seal's valid-inner limit so the receiver sees
+        // authenticated invalid records, with each suite's actual tag size.
+        NativeGostRecord protector(provider, suite, key);
+        Bytes encrypted;
+        Check(protector.Crypt(true, 0, nonce, wire, plaintext, &encrypted) &&
+                  encrypted.size() == length,
+              "independent GOST record boundary protection");
+        wire.insert(wire.end(), encrypted.begin(), encrypted.end());
+        for (bool corrupt : {false, true}) {
+          auto record = wire;
+          if (corrupt) record.back() ^= 1;
+          RecordCipher receiver(secret, suite, provider);
+          Bytes content;
+          uint8_t type = 0;
+          const bool accepted = inner == 16385 && !corrupt;
+          Check(receiver.Open(record, &type, &content) == accepted,
+                "GOST record size/tag bounds never release invalid data");
+          ++cases;
+          if (accepted) {
+            Check(type == 23 && content == Bytes(padded ? 1 : inner - 1,
+                                                 padded ? 0 : 0x78),
+                  "GOST maximum inner record strips padding correctly");
+          } else {
+            const uint8_t expected = wire.size() > kMaxRecord || !corrupt ? 22 : 20;
+            if (receiver.alert() != expected)
+              std::cerr << "suite=" << std::hex << suite << std::dec
+                        << " inner=" << inner << " padded=" << padded
+                        << " corrupt=" << corrupt << " alert="
+                        << unsigned(receiver.alert()) << " expected="
+                        << unsigned(expected) << '\n';
+            Check(content.empty() && type == 0 && receiver.alert() == expected,
+                  "short-tag GOST authenticates before inner overflow classification");
+            Check(!receiver.Open(wire, &type, &content) && content.empty() &&
+                      receiver.alert() == expected,
+                  "GOST record failure is terminal with no released plaintext");
+          }
+        }
+      }
+    }
+  }
+  std::cout << "GOST record boundaries: " << cases
+            << " size/tag/padding cases passed\n";
+}
+
 void PersistentWorkerLifetimes(std::string_view library, std::string_view helper) {
   // Creator/consumer workers remain alive while a different thread destroys
   // their provider and keys. In particular, thread exit must not visit TLS
@@ -154,6 +212,7 @@ void RunGostProviderTests(std::string_view library, std::string_view module) {
   using namespace net::httpps;
   auto provider = NativeProvider::Load(library, module);
   Check(provider && provider->SupportsGost(), "explicit GOST capability");
+  GostRecordBoundaries(provider);
   RunNativeStageLifecycleTests(provider);
 #if defined(_WIN32)
   // A trusted JSON profile encodes paths as UTF-8, including characters outside
