@@ -1,6 +1,7 @@
 // Isolated OpenSSL-allocation observer. These hooks are never installed in the
 // browser or in the normal interoperability driver, and read only live memory.
 #include "net/httpps/native_provider.h"
+#include "net/httpps/pinning.h"
 
 #include <algorithm>
 #include <array>
@@ -8,10 +9,12 @@
 #include <cstdlib>
 #include <cstring>
 #include <new>
+#include <limits>
 #include <string>
 #include <string_view>
 
 #include "third_party/boringssl/src/include/openssl/mem.h"
+#include "third_party/boringssl/src/include/openssl/curve25519.h"
 
 #if defined(_WIN32)
 #ifndef NOMINMAX
@@ -25,6 +28,7 @@
 namespace {
 using net::httpps::Bytes;
 using net::httpps::NativeProvider;
+using net::httpps::ByteSpan;
 
 // All bytes are public test fixtures, not real credentials.
 constexpr std::array<uint8_t, 32> kSecret = {
@@ -40,12 +44,13 @@ size_t fail_cpp_allocation_size = 0;
 std::array<Allocation, 2048> cpp_allocations;
 std::array<std::array<uint8_t, 32>, 3> binder_patterns;
 bool observing_binder = false;
+bool injecting_provider = false;
 size_t binder_exposed = 0;
 size_t provider_calls = 0;
 size_t fail_provider_call = 0;
 
 bool RejectProviderAllocation() {
-  if (!observing_binder) return false;
+  if (!observing_binder && !injecting_provider) return false;
   ++provider_calls;
   return fail_provider_call && provider_calls == fail_provider_call;
 }
@@ -174,6 +179,32 @@ Bytes ExpandOracle(const NativeProvider& provider, const Bytes& info, size_t siz
   result.resize(size);
   return result;
 }
+
+Bytes TestFrame(uint8_t type, ByteSpan body) {
+  Bytes result{type, static_cast<uint8_t>(body.size() >> 16),
+      static_cast<uint8_t>(body.size() >> 8), static_cast<uint8_t>(body.size())};
+  result.insert(result.end(), body.begin(), body.end());
+  return result;
+}
+
+Bytes ClientRequest() {
+  net::httpps::Secret key{}, share{};
+  key.fill(0x29);
+  X25519_public_from_private(share.data(), key.data());
+  Bytes body{1, 7, 0, 44, 0, 50, 0, 4, 0, 2, 8, 7, 0xff, 3, 0, 32};
+  body.insert(body.end(), share.begin(), share.end());
+  return TestFrame(13, body);
+}
+
+template <class F> bool Fault(size_t allocation, F&& operation) {
+  provider_calls = 0;
+  fail_provider_call = allocation;
+  injecting_provider = true;
+  const bool result = operation();
+  injecting_provider = false;
+  fail_provider_call = 0;
+  return result;
+}
 }  // namespace
 
 // Force an exception specifically at Sm3Expand's output allocation, after the
@@ -205,6 +236,123 @@ void operator delete(void* pointer, size_t) noexcept { ReleaseCpp(pointer); }
 namespace net::httpps {
 class ProtocolRegressionPeer {
  public:
+  static void Prepare(Client& client, const std::shared_ptr<NativeProvider>& provider) {
+    client.suite_ = client.early_suite_ = 0x00c6;
+    client.state_ = Client::State::kEstablished;
+    client.deadline_milliseconds_ = std::numeric_limits<int64_t>::max();
+    client.s_hs_ = Bytes(32, 0x69);
+    client.c_hs_ = client.c_app_ = Bytes(32, 0x23);
+    client.root_ = Bytes(32, 0x31);
+    client.exporter_ = client.early_exporter_ = Bytes(32, 0x45);
+    client.transcript_ = client.initial_transcript_ = Bytes(80, 0x54);
+    client.sender_ = std::make_unique<RecordCipher>(client.c_app_, 0x00c6, provider);
+    client.post_handshake_auth_offered_ = true;
+  }
+
+  static bool Finished(const std::shared_ptr<NativeProvider>& provider,
+                       size_t failure, Bytes* result) {
+    ClientOptions options; options.native_provider = provider;
+    Client client("example.test", {}, false, options);
+    Prepare(client, provider);
+    return Fault(failure, [&] {
+      *result = client.Finished(client.s_hs_, client.transcript_);
+      return result->size() == 32;
+    });
+  }
+
+  static bool VerifyFinished(const std::shared_ptr<NativeProvider>& provider,
+                             ByteSpan proof, size_t failure, Bytes* result) {
+    ClientOptions options; options.native_provider = provider;
+    Client client("example.test", {}, false, options);
+    Prepare(client, provider);
+    client.state_ = Client::State::kFinished;
+    const auto frame = TestFrame(20, proof);
+    const bool ok = Fault(failure, [&] { return client.AcceptFrame(frame); });
+    if (ok) {
+      *result = client.TakeOutput();
+      for (const auto* secret : {&client.c_app_, &client.s_app_, &client.exporter_, &client.resumption_})
+        result->insert(result->end(), secret->begin(), secret->end());
+    } else {
+      Check(client.state_ == Client::State::kFailed, "Finished failure is terminal");
+      result->clear();
+    }
+    return ok;
+  }
+
+  static bool Export(const std::shared_ptr<NativeProvider>& provider, bool early,
+                     size_t length, size_t failure, Bytes* result) {
+    ClientOptions options; options.native_provider = provider;
+    Client client("example.test", {}, false, options);
+    Prepare(client, provider);
+    client.state_ = Client::State::kHello;
+    client.offered_psks_.emplace_back();
+    *result = Bytes(40, 0x61);
+    const bool ok = Fault(failure, [&] {
+      // The output intentionally aliases its input context.
+      return early ? client.ExportEarly("fixture", *result, length, result)
+                   : client.Export("fixture", *result, length, result);
+    });
+    Check(ok || result->empty(), "export failure clears old output");
+    return ok;
+  }
+
+  static bool ServerProof(const std::shared_ptr<NativeProvider>& provider,
+                          size_t failure, Bytes* result) {
+    ClientOptions options; options.native_provider = provider;
+    Client client("example.test", {}, false, options);
+    Prepare(client, provider);
+    client.a_.fill(0x39);
+    Secret server{}; server.fill(0x42);
+    X25519_public_from_private(client.S_.data(), server.data());
+    const bool ok = Fault(failure, [&] { return client.PrepareServerProof(); });
+    *result = ok ? client.expected_proof_ : Bytes{};
+    return ok;
+  }
+
+  static bool Pha(const std::shared_ptr<NativeProvider>& provider,
+                  size_t failure, Bytes* result) {
+    ClientOptions options; options.native_provider = provider;
+    options.post_handshake_auth = true;
+    Client client("example.test", {}, false, options);
+    Prepare(client, provider);
+    const auto request = ClientRequest();
+    const bool ok = Fault(failure, [&] { return client.AcceptPostHandshake(request); });
+    *result = ok ? client.TakeOutput() : Bytes{};
+    return ok;
+  }
+
+  static bool ClientAuthenticator(const std::shared_ptr<NativeProvider>& provider,
+                                  size_t failure, Bytes* result) {
+    ClientOptions options; options.native_provider = provider;
+    Client client("example.test", {}, false, options);
+    Prepare(client, provider);
+    const auto request = ClientRequest();
+    return Fault(failure, [&] { return client.AuthenticateClient(request, nullptr, result); });
+  }
+
+  static bool VerifyRefusal(const std::shared_ptr<NativeProvider>& provider,
+                            bool empty, size_t failure) {
+    ClientOptions options; options.native_provider = provider;
+    Client client("example.test", {}, false, options);
+    Prepare(client, provider);
+    Bytes request;
+    Check(client.RequestServerAuthenticator(Bytes{7}, {}, &request), "server authenticator request");
+    Bytes transcript, key;
+    Check(client.AuthenticatorKeys(true, &transcript, &key), "authenticator oracle exporters");
+    const auto certificate = TestFrame(11, Bytes{1, 7, 0, 0, 0});
+    transcript.insert(transcript.end(), request.begin(), request.end());
+    transcript.insert(transcript.end(), certificate.begin(), certificate.end());
+    auto proof = SuiteMac(0x00c6, key, SuiteHash(0x00c6, transcript, provider.get()), provider.get());
+    Check(proof.size() == 32, "authenticator refusal independent Finished oracle");
+    const auto response = TestFrame(20, empty ? Bytes{} : proof);
+    bool authenticated = true;
+    const bool ok = Fault(failure, [&] {
+      return client.ValidateServerAuthenticator(response, {}, &authenticated, request);
+    });
+    Check(!authenticated, "refusal or invalid authenticator never authenticates identity");
+    return ok;
+  }
+
   static bool Bind(const std::shared_ptr<NativeProvider>& provider, int identity,
                    bool retry, size_t failure, Bytes* result) {
     ClientOptions options;
@@ -283,6 +431,7 @@ void BinderErasure(const std::shared_ptr<NativeProvider>& provider) {
         rejections += !accepted;
         ++cases;
         Check(binder_exposed == 0, "failed binder derivation erases all temporary keys before free");
+        Check(!accepted || actual == expected, "provider failure cannot produce a different successful binder");
       }
     }
   }
@@ -291,10 +440,148 @@ void BinderErasure(const std::shared_ptr<NativeProvider>& provider) {
   std::printf("Binder erasure: %zu injected allocations, %zu rejections, 6 successful controls passed\n",
               cases, rejections);
 }
+
+template <class F> size_t CheckFaults(const char* name, F&& operation,
+                                     const Bytes* oracle = nullptr) {
+  Bytes expected;
+  Check(operation(0, &expected), name);
+  const size_t calls = provider_calls;
+  Check(calls > 0 && calls < 8192, "bounded dynamic provider fault schedule");
+  Check(!oracle || expected == *oracle, "healthy result matches independent oracle");
+  size_t rejected = 0;
+  for (size_t failure = 1; failure <= calls; ++failure) {
+    Bytes actual;
+    const bool ok = operation(failure, &actual);
+    rejected += !ok;
+    Check(!ok || actual == expected, name);
+  }
+  Check(rejected > 0, "each provider chain actually rejects injected failures");
+  std::printf("Provider fail-closed %s: %zu allocations, %zu rejections\n", name, calls, rejected);
+  return calls;
+}
+
+Bytes PinReply(ByteSpan proof) {
+  Bytes reply{static_cast<uint8_t>(proof.size())};
+  reply.insert(reply.end(), proof.begin(), proof.end());
+  reply.insert(reply.end(), {0, 1, 0x43, 0, 0, 0, 100});
+  return reply;
+}
+
+void FailClosed(const std::shared_ptr<NativeProvider>& provider) {
+  using namespace net::httpps;
+  const Bytes secret(32, 0x69), transcript(80, 0x54);
+  const auto hash = SuiteHash(0x00c6, transcript, provider.get());
+  const auto key = SuiteLabel(0x00c6, secret, "finished", {}, 32, provider.get());
+  const auto proof = SuiteMac(0x00c6, key, hash, provider.get());
+  const auto empty_key_proof = SuiteMac(0x00c6, {}, hash, provider.get());
+  const auto empty_hash_proof = SuiteMac(0x00c6, key, {}, provider.get());
+  Check(proof.size() == 32 && empty_key_proof.size() == 32 && empty_hash_proof.size() == 32,
+        "raw primitive still permits legitimate empty keys/messages");
+  CheckFaults("Finished", [&](size_t failure, Bytes* out) {
+    return ProtocolRegressionPeer::Finished(provider, failure, out);
+  }, &proof);
+  const size_t handshake_calls = CheckFaults("handshake Finished and application keys", [&](size_t failure, Bytes* out) {
+    return ProtocolRegressionPeer::VerifyFinished(provider, proof, failure, out);
+  });
+  for (const auto& invalid : {empty_key_proof, empty_hash_proof}) {
+    for (size_t failure = 0; failure <= handshake_calls; ++failure) {
+      Bytes out;
+      Check(!ProtocolRegressionPeer::VerifyFinished(provider, invalid, failure, &out),
+            "state machine rejects Finished derived with missing key or transcript hash");
+    }
+  }
+  for (bool early : {false, true}) {
+    for (size_t length : {0u, 1u, 32u, 64u}) {
+      const auto derived = SuiteLabel(0x00c6, Bytes(32, 0x45), "fixture",
+          SuiteHash(0x00c6, {}, provider.get()), 32, provider.get());
+      const auto expected = SuiteLabel(0x00c6, derived, "exporter",
+          SuiteHash(0x00c6, Bytes(40, 0x61), provider.get()), length, provider.get());
+      CheckFaults(early ? "early exporter" : "exporter", [&](size_t failure, Bytes* out) {
+        return ProtocolRegressionPeer::Export(provider, early, length, failure, out);
+      }, &expected);
+    }
+  }
+  CheckFaults("server CertificateVerify", [&](size_t failure, Bytes* out) {
+    return ProtocolRegressionPeer::ServerProof(provider, failure, out);
+  });
+  CheckFaults("post-handshake client Finished", [&](size_t failure, Bytes* out) {
+    return ProtocolRegressionPeer::Pha(provider, failure, out);
+  });
+  CheckFaults("client exported authenticator refusal", [&](size_t failure, Bytes* out) {
+    return ProtocolRegressionPeer::ClientAuthenticator(provider, failure, out);
+  });
+  Check(ProtocolRegressionPeer::VerifyRefusal(provider, false, 0), "healthy server authenticator refusal");
+  const size_t refusal_calls = provider_calls;
+  size_t refusal_rejected = 0;
+  for (size_t failure = 0; failure <= refusal_calls; ++failure) {
+    Check(!ProtocolRegressionPeer::VerifyRefusal(provider, true, failure),
+          "empty Finished is never accepted during a provider failure");
+    if (failure) refusal_rejected += !ProtocolRegressionPeer::VerifyRefusal(provider, false, failure);
+  }
+  Check(refusal_rejected > 0, "valid refusal verification rejects injected crypto failures");
+  std::printf("Provider fail-closed server exported authenticator: %zu allocations, %zu rejections\n",
+              refusal_calls, refusal_rejected);
+
+  Secret private_key{}, public_key{};
+  private_key.fill(0x29);
+  X25519_public_from_private(public_key.data(), private_key.data());
+  Bytes spki{0x30, 0x2a, 0x30, 5, 6, 3, 0x2b, 0x65, 0x6e, 3, 0x21, 0};
+  spki.insert(spki.end(), public_key.begin(), public_key.end());
+  const Bytes root(32, 0x31), pin_transcript(80, 0x54);
+  const auto pin_hash = SuiteHash(0x00c6, pin_transcript, provider.get());
+  const auto pin_secret = SuiteLabel(0x00c6, root, "pinning secret", pin_hash, 32, provider.get());
+  const auto proof_secret = SuiteLabel(0x00c6, root, "pinning proof 1", pin_hash, 32, provider.get());
+  Bytes pin_input(StringBytes("pinning proof 2").begin(), StringBytes("pinning proof 2").end());
+  const auto spki_hash = SuiteHash(0x00c6, spki, provider.get());
+  Bytes truncated_input = pin_input;
+  truncated_input.insert(truncated_input.end(), spki_hash.begin(), spki_hash.end());
+  pin_input.insert(pin_input.end(), proof_secret.begin(), proof_secret.end());
+  pin_input.insert(pin_input.end(), spki_hash.begin(), spki_hash.end());
+  const auto pin_proof = SuiteMac(0x00c6, pin_secret, pin_input, provider.get());
+  const auto truncated_proof = SuiteMac(0x00c6, pin_secret, truncated_input, provider.get());
+  const auto enroll = PinReply({}), renewal = PinReply(pin_proof), invalid_renewal = PinReply(truncated_proof);
+  CheckFaults("pin enrollment", [&](size_t failure, Bytes* out) {
+    PinningCache cache(1, [] { return int64_t{1000}; });
+    auto first = cache.Begin("example.test", 343, "partition");
+    const bool ok = Fault(failure, [&] {
+      return first->Verify(ByteSpan(enroll), 0x00c6, root, pin_transcript, spki, provider.get());
+    });
+    Check(first->Commit() == ok, "failed pin derivation cannot be committed");
+    auto next = cache.Begin("example.test", 343, "partition");
+    Check(next->had_pin() == ok, "failed enrollment leaves no persistent pin");
+    if (ok) Check(next->Verify(ByteSpan(renewal), 0x00c6, root, pin_transcript, spki, provider.get()),
+                  "enrolled secret matches independent oracle");
+    return ok;
+  });
+  size_t renewal_calls = CheckFaults("pin renewal", [&](size_t failure, Bytes* out) {
+    PinningCache cache(1, [] { return int64_t{1000}; });
+    auto first = cache.Begin("example.test", 343, "partition");
+    Check(first->Verify(ByteSpan(enroll), 0x00c6, root, pin_transcript, spki, provider.get()) && first->Commit(), "pin fixture enrollment");
+    auto next = cache.Begin("example.test", 343, "partition");
+    const bool ok = Fault(failure, [&] {
+      return next->Verify(ByteSpan(renewal), 0x00c6, root, pin_transcript, spki, provider.get());
+    });
+    Check(next->Commit() == ok, "failed renewal cannot be committed");
+    auto renewed = cache.Begin("example.test", 343, "partition");
+    Check(renewed->had_pin() &&
+          renewed->Verify(ByteSpan(renewal), 0x00c6, root, pin_transcript, spki, provider.get()),
+          "successful renewal or preserved original pin matches independent oracle");
+    return ok;
+  });
+  for (size_t failure = 0; failure <= renewal_calls; ++failure) {
+    PinningCache cache(1, [] { return int64_t{1000}; });
+    auto first = cache.Begin("example.test", 343, "partition");
+    Check(first->Verify(ByteSpan(enroll), 0x00c6, root, pin_transcript, spki, provider.get()) && first->Commit(), "negative pin fixture enrollment");
+    auto next = cache.Begin("example.test", 343, "partition");
+    Check(!Fault(failure, [&] {
+      return next->Verify(ByteSpan(invalid_renewal), 0x00c6, root, pin_transcript, spki, provider.get());
+    }) && !next->Commit(), "truncated pin proof cannot become valid after a provider failure");
+  }
+}
 }  // namespace
 
 int main(int argc, char** argv) {
-  Check(argc == 2 || argc == 3, "usage: provider_erasure_test absolute-provider [success|failure|exception|binders]");
+  Check(argc == 2 || argc == 3, "usage: provider_erasure_test absolute-provider [success|failure|exception|binders|chains]");
   const std::string path(argv[1]);
 #if defined(_WIN32)
   Check(path.starts_with("\\\\") || (path.size() >= 3 && path[1] == ':' &&
@@ -331,7 +618,7 @@ int main(int argc, char** argv) {
   observing = false;
 
   const std::string_view mode = argc == 3 ? argv[2] : "all";
-  Check(mode == "all" || mode == "success" || mode == "failure" || mode == "exception" || mode == "binders",
+  Check(mode == "all" || mode == "success" || mode == "failure" || mode == "exception" || mode == "binders" || mode == "chains",
         "known test mode");
   size_t cases = 0;
   if (mode == "all" || mode == "success") {
@@ -378,5 +665,6 @@ int main(int argc, char** argv) {
   }
   std::printf("SM3 parameter erasure: %zu cases and 3 observer controls passed\n", cases);
   if (mode == "all" || mode == "binders") BinderErasure(provider);
+  if (mode == "all" || mode == "chains") FailClosed(provider);
   return 0;
 }

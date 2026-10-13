@@ -272,13 +272,22 @@ struct Erase {
 };
 Bytes Proof(uint16_t suite, ByteSpan finished, const Secret& private_key,
             const Secret& peer, ByteSpan transcript, bool server, const NativeProvider* provider) {
+  const auto hash_length = SuiteHashLength(suite);
+  if (!hash_length || finished.size() != hash_length)
+    return {};
   Erase shared{Bytes(32)};
   if (!X25519(shared.value.data(), private_key.data(), peer.data()))
     return {};
   auto hash = SuiteHash(suite, transcript, provider);
+  if (hash.size() != hash_length)
+    return {};
   Erase root{SuiteMac(suite, finished, shared.value, provider)};
+  if (root.value.size() != hash_length)
+    return {};
   Erase key{SuiteLabel(suite, root.value, server ? "server ea mac" : "client ea mac", hash,
-                      SuiteHashLength(suite), provider)};
+                      hash_length, provider)};
+  if (key.value.size() != hash_length)
+    return {};
   Bytes context(64, 0x20);
   Append(&context, StringBytes(server ? "TLS 2.0, server exported authenticator"
                                      : "TLS 2.0, client exported authenticator"));
@@ -312,11 +321,19 @@ bool Client::ChannelBinding(Bytes* output) const {
 }
 
 bool Client::AuthenticatorKeys(bool server, Bytes* context, Bytes* finished) const {
-  return AuthenticatorReady() && Export(server ? "EXPORTER-server authenticator handshake context"
-                                              : "EXPORTER-client authenticator handshake context",
-      {}, SuiteHashLength(suite_), context) &&
-      Export(server ? "EXPORTER-server authenticator finished key"
-                    : "EXPORTER-client authenticator finished key", {}, SuiteHashLength(suite_), finished);
+  const auto hash_length = SuiteHashLength(suite_);
+  Erase next_context, next_finished;
+  if (!AuthenticatorReady() || !hash_length ||
+      !Export(server ? "EXPORTER-server authenticator handshake context"
+                     : "EXPORTER-client authenticator handshake context",
+          {}, hash_length, &next_context.value) || next_context.value.size() != hash_length ||
+      !Export(server ? "EXPORTER-server authenticator finished key"
+                     : "EXPORTER-client authenticator finished key",
+          {}, hash_length, &next_finished.value) || next_finished.value.size() != hash_length)
+    return false;
+  *context = std::move(next_context.value);
+  *finished = std::move(next_finished.value);
+  return true;
 }
 
 bool Client::RequestServerAuthenticator(ByteSpan context,
@@ -402,16 +419,21 @@ bool Client::AuthenticateClient(ByteSpan request, const ClientCredential* creden
         if (!credential->ocsp_responses[index].empty())
           identity.extensions[index].emplace(5, Frame(1, credential->ocsp_responses[index]));
   }
-  Bytes certificate, transcript;
-  Erase finished;
+  Bytes certificate;
+  Erase transcript, handshake_context, finished;
   if (!CertificateOffers(identity, parsed.extensions) || !Certificate(identity, &certificate) ||
-      !AuthenticatorKeys(false, &transcript, &finished.value))
+      !AuthenticatorKeys(false, &handshake_context.value, &finished.value))
     return false;
-  Append(&transcript, request);
-  Append(&transcript, certificate);
+  // Reserve before appending so reallocation cannot release an uncleansed
+  // allocation containing the exported HandshakeContext.
+  transcript.value.reserve(handshake_context.value.size() + request.size() + certificate.size() +
+                           SuiteHashLength(suite_) + 8);
+  Append(&transcript.value, handshake_context.value);
+  Append(&transcript.value, request);
+  Append(&transcript.value, certificate);
   Bytes result;
   if (credential) {
-    auto proof = Proof(suite_, finished.value, credential->private_key, parsed.share, transcript, false, options_.native_provider.get());
+    auto proof = Proof(suite_, finished.value, credential->private_key, parsed.share, transcript.value, false, options_.native_provider.get());
     if (proof.size() != SuiteHashLength(suite_))
       return false;
     Bytes body{0xfe, 1};
@@ -419,9 +441,15 @@ bool Client::AuthenticateClient(ByteSpan request, const ClientCredential* creden
     auto verify = Frame(15, body);
     result = certificate;
     Append(&result, verify);
-    Append(&transcript, verify);
+    Append(&transcript.value, verify);
   }
-  Append(&result, Frame(20, Mac(finished.value, Hash(transcript))));
+  auto hash = Hash(transcript.value);
+  if (hash.size() != SuiteHashLength(suite_))
+    return false;
+  auto verify_data = Mac(finished.value, hash);
+  if (verify_data.size() != SuiteHashLength(suite_))
+    return false;
+  Append(&result, Frame(20, verify_data));
   if (result.size() > options_.authenticator_message_budget)
     return false;
   *authenticator = std::move(result);
@@ -467,17 +495,20 @@ bool Client::ValidateServerAuthenticator(ByteSpan authenticator,
     if (!Offers(offers))
       return false;
   }
-  Bytes empty_certificate, transcript;
-  Erase finished;
-  if (!AuthenticatorKeys(true, &transcript, &finished.value))
+  Bytes empty_certificate;
+  Erase transcript, handshake_context, finished;
+  if (!AuthenticatorKeys(true, &handshake_context.value, &finished.value))
     return false;
   if (refusal) {
     if (!Certificate(identity, &empty_certificate))
       return false;
     certificate = empty_certificate;
   }
-  Append(&transcript, pending.request);
-  Append(&transcript, certificate);
+  transcript.value.reserve(handshake_context.value.size() + pending.request.size() +
+                           certificate.size() + SuiteHashLength(suite_) + 8);
+  Append(&transcript.value, handshake_context.value);
+  Append(&transcript.value, pending.request);
+  Append(&transcript.value, certificate);
   if (!refusal) {
     ByteSpan verify, proof;
     if (!validator || !CertificateOffers(identity, offers) ||
@@ -489,14 +520,20 @@ bool Client::ValidateServerAuthenticator(ByteSpan authenticator,
     Secret authorized;
     if (!validator(identity, offers, &authorized) || !AuthenticatorReady())
       return false;
-    auto expected = Proof(suite_, finished.value, pending.private_key, authorized, transcript, true, options_.native_provider.get());
-    if (!Equal(proof, expected))
+    auto expected = Proof(suite_, finished.value, pending.private_key, authorized, transcript.value, true, options_.native_provider.get());
+    if (expected.size() != SuiteHashLength(suite_) || !Equal(proof, expected))
       return false;
-    Append(&transcript, verify);
+    Append(&transcript.value, verify);
   }
   ByteSpan frame, value;
   if (!reader.Frame(20, &frame, &value) || !reader.input.empty() ||
-      !Equal(value, Mac(finished.value, Hash(transcript))))
+      value.size() != SuiteHashLength(suite_))
+    return false;
+  auto hash = Hash(transcript.value);
+  if (hash.size() != SuiteHashLength(suite_))
+    return false;
+  auto expected = Mac(finished.value, hash);
+  if (expected.size() != SuiteHashLength(suite_) || !Equal(value, expected))
     return false;
   *authenticated = !refusal;
   return true;

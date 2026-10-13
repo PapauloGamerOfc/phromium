@@ -697,8 +697,11 @@ Bytes SuiteHash(uint16_t suite, ByteSpan input, const NativeProvider* provider) 
     return {};
   Bytes output(EVP_MD_size(digest));
   unsigned length = 0;
-  if (!EVP_Digest(input.data(), input.size(), output.data(), &length, digest, nullptr))
+  if (!EVP_Digest(input.data(), input.size(), output.data(), &length, digest, nullptr) ||
+      length != output.size()) {
+    OPENSSL_cleanse(output.data(), output.size());
     return {};
+  }
   return output;
 }
 
@@ -711,8 +714,11 @@ Bytes SuiteMac(uint16_t suite, ByteSpan key, ByteSpan input, const NativeProvide
     return {};
   Bytes output(EVP_MD_size(digest));
   unsigned length = 0;
-  if (!HMAC(digest, key.data(), key.size(), input.data(), input.size(), output.data(), &length))
+  if (!HMAC(digest, key.data(), key.size(), input.data(), input.size(), output.data(), &length) ||
+      length != output.size()) {
+    OPENSSL_cleanse(output.data(), output.size());
     return {};
+  }
   return output;
 }
 
@@ -741,6 +747,7 @@ Bytes SuiteLabel(uint16_t suite, ByteSpan secret, std::string_view label,
   if (gost) return provider->GostExpand(secret, info, length);
   if (!HKDF_expand(result.data(), result.size(), digest, secret.data(),
                    secret.size(), info.data(), info.size())) {
+    OPENSSL_cleanse(result.data(), result.size());
     return {};
   }
   return result;
@@ -778,9 +785,13 @@ std::optional<ExternalPSK> ImportPSK(
   if (result.identity.size() > 65535)
     return std::nullopt;
   auto extracted = SuiteMac(base_suite, Bytes(SuiteHashLength(base_suite)), base_key);
+  ScopedSecretCleanser cleanse_extracted(extracted);
+  const auto identity_hash = SuiteHash(base_suite, result.identity);
+  if (extracted.size() != SuiteHashLength(base_suite) ||
+      identity_hash.size() != SuiteHashLength(base_suite))
+    return std::nullopt;
   result.secret = SuiteLabel(base_suite, extracted, "derived psk",
-                            SuiteHash(base_suite, result.identity), SuiteHashLength(target_suite));
-  OPENSSL_cleanse(extracted.data(), extracted.size());
+                            identity_hash, SuiteHashLength(target_suite));
   if (result.secret.size() != SuiteHashLength(target_suite))
     return std::nullopt;
   result.hostname = std::move(hostname);
@@ -990,9 +1001,17 @@ Client::~Client() {
 }
 
 Bytes Client::Hash(ByteSpan input) const { return SuiteHash(suite_, input, options_.native_provider.get()); }
-Bytes Client::Mac(ByteSpan key, ByteSpan input) const { return SuiteMac(suite_, key, input, options_.native_provider.get()); }
+Bytes Client::Mac(ByteSpan key, ByteSpan input) const {
+  // Every key in the connection schedule is Hash.length bytes. An empty
+  // result from a failed primitive must never become a new HMAC key.
+  if (!SuiteHashLength(suite_) || key.size() != SuiteHashLength(suite_))
+    return {};
+  return SuiteMac(suite_, key, input, options_.native_provider.get());
+}
 Bytes Client::Label(ByteSpan secret, std::string_view label, ByteSpan context,
                     size_t length) const {
+  if (!SuiteHashLength(suite_) || secret.size() != SuiteHashLength(suite_))
+    return {};
   return SuiteLabel(suite_, secret, label, context,
       length == static_cast<size_t>(-1) ? SuiteHashLength(suite_) : length, options_.native_provider.get());
 }
@@ -1004,16 +1023,18 @@ bool Client::DeriveSecret(ByteSpan secret, std::string_view label,
   ScopedSecretCleanser cleanse_derived(derived);
   OPENSSL_cleanse(output->data(), output->size());
   output->clear();
-  if (derived.size() != SuiteHashLength(suite_))
+  if (!SuiteHashLength(suite_) || derived.size() != SuiteHashLength(suite_))
     return false;
   output->swap(derived);
   return true;
 }
 Bytes Client::Finished(ByteSpan secret, ByteSpan transcript) const {
   auto key = Label(secret, "finished", {});
-  auto value = Mac(key, Hash(transcript));
-  OPENSSL_cleanse(key.data(), key.size());
-  return value;
+  ScopedSecretCleanser cleanse_key(key);
+  const auto hash = Hash(transcript);
+  if (key.size() != SuiteHashLength(suite_) || hash.size() != SuiteHashLength(suite_))
+    return {};
+  return Mac(key, hash);
 }
 
 void Client::EraseHandshakeSecrets() {
@@ -1436,27 +1457,39 @@ bool Client::AppendClientAuthentication() {
   if (!selected)
     return true;  // Ordinary no-credential response, not an authenticated user.
   authenticated_client_identity_ = CredentialIdentity(client_credential_->certificates);
-  Secret shared{};
+  Bytes shared(32);
+  ScopedSecretCleanser cleanse_shared(shared);
   if (!X25519(shared.data(), client_credential_->private_key.data(),
               client_verifier_share_.data()))
     return Fail();
   const auto transcript_hash = Hash(transcript_);
-  auto exported = Label(exporter_, "EXPORTER-TLS20-Client-Auth", Hash({}));
-  auto salt = Label(exported, "exporter", Hash(transcript_hash));
+  const auto empty_hash = Hash({});
+  const auto context_hash = Hash(transcript_hash);
+  const auto size = SuiteHashLength(suite_);
+  if (transcript_hash.size() != size || empty_hash.size() != size || context_hash.size() != size)
+    return Fail(Error::kProtocol, 80);
+  auto exported = Label(exporter_, "EXPORTER-TLS20-Client-Auth", empty_hash);
+  ScopedSecretCleanser cleanse_exported(exported);
+  auto salt = Label(exported, "exporter", context_hash);
+  ScopedSecretCleanser cleanse_salt(salt);
   auto root = Mac(salt, shared);
+  ScopedSecretCleanser cleanse_root(root);
   auto key = Label(root, "client mac", {});
+  ScopedSecretCleanser cleanse_key(key);
+  if (exported.size() != size || salt.size() != size || root.size() != size || key.size() != size)
+    return Fail(Error::kProtocol, 80);
   Bytes input(64, 0x20);
   Append(&input, Octets("TLS 2.0, client CertificateVerify"));
   input.push_back(0);
   Append(&input, transcript_hash);
   auto proof = Mac(key, input);
+  ScopedSecretCleanser cleanse_proof(proof);
+  if (proof.size() != size)
+    return Fail(Error::kProtocol, 80);
   Bytes body{0xfe, 1};
   Vector16(&body, proof);
   auto frame = Frame(15, body);
   const bool ok = SealHandshake(frame) && AppendTranscript(frame);
-  for (auto* secret : {&exported, &salt, &key, &root, &proof})
-    OPENSSL_cleanse(secret->data(), secret->size());
-  OPENSSL_cleanse(shared.data(), shared.size());
   if (!options_.post_handshake_auth)
     client_credential_.reset();
   if (!ok)
@@ -2173,17 +2206,24 @@ bool Client::Start(const SessionTicket* ticket, ByteSpan early_data,
     const uint16_t ps = offered_psks_.front().cipher_suite;
     const size_t hs = SuiteHashLength(ps);
     auto early = SuiteMac(ps, Bytes(hs), offered_psks_.front().secret, options_.native_provider.get());
-    early_exporter_ = SuiteLabel(ps, early, "e exp master", SuiteHash(ps, transcript_, options_.native_provider.get()), hs, options_.native_provider.get());
+    ScopedSecretCleanser cleanse_early(early);
+    const auto hash = SuiteHash(ps, transcript_, options_.native_provider.get());
+    if (early.size() != hs || hash.size() != hs)
+      return Fail(Error::kProtocol, 80);
+    early_exporter_ = SuiteLabel(ps, early, "e exp master", hash, hs, options_.native_provider.get());
+    if (early_exporter_.size() != hs)
+      return Fail(Error::kProtocol, 80);
     Diagnostic("TLS20_EARLY_EXPORTER_SECRET", early_exporter_, true);
     if (early_offered_) {
-      auto traffic = SuiteLabel(ps, early, "c e traffic", SuiteHash(ps, transcript_, options_.native_provider.get()), hs, options_.native_provider.get());
+      auto traffic = SuiteLabel(ps, early, "c e traffic", hash, hs, options_.native_provider.get());
+      ScopedSecretCleanser cleanse_traffic(traffic);
+      if (traffic.size() != hs)
+        return Fail(Error::kProtocol, 80);
       Diagnostic("TLS20_CLIENT_EARLY_TRAFFIC_SECRET", traffic);
       early_sender_ = std::make_unique<RecordCipher>(traffic, ps, options_.native_provider);
       if (offered_ticket_)
         early_sender_->SetLimit(offered_ticket_->peer_record_limit);
-      OPENSSL_cleanse(traffic.data(), traffic.size());
     }
-    OPENSSL_cleanse(early.data(), early.size());
     while (!early_data.empty()) {
       Bytes record;
       size_t count = std::min(early_data.size(), kMaxRecordContent);
@@ -2255,13 +2295,21 @@ bool Client::BindClientHello(Bytes* hello, ByteSpan prefix) const {
     const size_t length = SuiteHashLength(suite);
     auto early = SuiteMac(suite, Bytes(length), psk.secret, options_.native_provider.get());
     ScopedSecretCleanser cleanse_early(early);
+    const auto empty_hash = SuiteHash(suite, {}, options_.native_provider.get());
+    const auto transcript_hash = SuiteHash(suite, truncated, options_.native_provider.get());
+    if (!length || early.size() != length || empty_hash.size() != length || transcript_hash.size() != length)
+      return false;
     const std::string_view label = i == 0 && offered_ticket_ ? "res binder"
         : psk.imported ? "imp binder" : "ext binder";
-    auto binder = SuiteLabel(suite, early, label, SuiteHash(suite, {}, options_.native_provider.get()), length, options_.native_provider.get());
+    auto binder = SuiteLabel(suite, early, label, empty_hash, length, options_.native_provider.get());
     ScopedSecretCleanser cleanse_binder(binder);
+    if (binder.size() != length)
+      return false;
     auto finished = SuiteLabel(suite, binder, "finished", {}, length, options_.native_provider.get());
     ScopedSecretCleanser cleanse_finished(finished);
-    auto proof = SuiteMac(suite, finished, SuiteHash(suite, truncated, options_.native_provider.get()), options_.native_provider.get());
+    if (finished.size() != length)
+      return false;
+    auto proof = SuiteMac(suite, finished, transcript_hash, options_.native_provider.get());
     ScopedSecretCleanser cleanse_proof(proof);
     if (proof.size() != length)
       return false;
@@ -2411,6 +2459,8 @@ bool Client::RetryHello(ByteSpan frame, ByteSpan cookie, uint16_t group) {
   if (group)
     traffic_group_ = group;
   auto inner_hash = Hash(client_hello_);
+  if (inner_hash.size() != SuiteHashLength(suite_))
+    return Fail(Error::kProtocol, 80);
   transcript_.assign(Octets(kPreface).begin(), Octets(kPreface).end());
   Append(&transcript_, Frame(254, inner_hash));
   if (!AppendTranscript(frame))
@@ -2524,23 +2574,31 @@ bool Client::PrepareServerProof() {
   if (!Deadline() || S_ == A_ || S_ == B_ || S_ == E_) {
     return Fail();
   }
-  Secret shared{};
+  Bytes shared(32);
+  ScopedSecretCleanser cleanse_shared(shared);
   if (!X25519(shared.data(), a_.data(), S_.data())) {
     return Fail();
   }
-  auto salt = Label(root_, "auth salt", Hash(transcript_));
+  const auto hash = Hash(transcript_);
+  const auto size = SuiteHashLength(suite_);
+  if (hash.size() != size)
+    return Fail(Error::kProtocol, 80);
+  auto salt = Label(root_, "auth salt", hash);
+  ScopedSecretCleanser cleanse_salt(salt);
   auto auth_root = Mac(salt, shared);
+  ScopedSecretCleanser cleanse_root(auth_root);
   auto proof_key = Label(auth_root, "server mac", {});
+  ScopedSecretCleanser cleanse_key(proof_key);
+  if (salt.size() != size || auth_root.size() != size || proof_key.size() != size)
+    return Fail(Error::kProtocol, 80);
   Bytes context(64, 0x20);
   Append(&context, Octets("TLS 2.0, server CertificateVerify"));
   context.push_back(0);
-  Append(&context, Hash(transcript_));
+  Append(&context, hash);
   expected_proof_ = Mac(proof_key, context);
-  OPENSSL_cleanse(shared.data(), shared.size());
-  OPENSSL_cleanse(salt.data(), salt.size());
+  if (expected_proof_.size() != size)
+    return Fail(Error::kProtocol, 80);
   OPENSSL_cleanse(a_.data(), a_.size());
-  OPENSSL_cleanse(auth_root.data(), auth_root.size());
-  OPENSSL_cleanse(proof_key.data(), proof_key.size());
   state_ = State::kProof;
   return true;
 }
@@ -2743,16 +2801,22 @@ bool Client::AcceptFrame(ByteSpan frame) {
         pinning_transcript_ = transcript_;
       Bytes zeros(SuiteHashLength(suite_));
       auto early = Mac(zeros, psk_selected_ ? offered_psks_[selected_psk_].secret : zeros);
-      auto derived = Label(early, "derived", Hash({}));
+      ScopedSecretCleanser cleanse_early(early);
+      const auto empty_hash = Hash({});
+      const auto transcript_hash = Hash(transcript_);
+      if (empty_hash.size() != zeros.size() || transcript_hash.size() != zeros.size())
+        return Fail(Error::kProtocol, 80);
+      auto derived = Label(early, "derived", empty_hash);
+      ScopedSecretCleanser cleanse_derived(derived);
       root_ = Mac(derived, shared);
-      OPENSSL_cleanse(early.data(), early.size());
-      OPENSSL_cleanse(derived.data(), derived.size());
+      if (root_.size() != zeros.size())
+        return Fail(Error::kProtocol, 80);
       OPENSSL_cleanse(shared.data(), shared.size());
       OPENSSL_cleanse(b_.data(), b_.size());
       OPENSSL_cleanse(ec_private_.data(), ec_private_.size());
       OPENSSL_cleanse(kem_seed_.data(), kem_seed_.size());
-      if (!DeriveSecret(root_, "c hs traffic", Hash(transcript_), &c_hs_) ||
-          !DeriveSecret(root_, "s hs traffic", Hash(transcript_), &s_hs_)) {
+      if (!DeriveSecret(root_, "c hs traffic", transcript_hash, &c_hs_) ||
+          !DeriveSecret(root_, "s hs traffic", transcript_hash, &s_hs_)) {
         return Fail();
       }
       sender_ = std::make_unique<RecordCipher>(c_hs_, suite_, options_.native_provider);
@@ -3230,12 +3294,17 @@ bool Client::AcceptFrame(ByteSpan frame) {
           !client_auth_requested_ || client_certificate_type_ != 2 || !ClientCredentialMatchesRequest())) ||
           (resumed_ && authenticated_client_identity_ == Secret{})))
         return Fail(Error::kCertificate);
-      auto derived = Label(root_, "derived", Hash({}));
+      const auto hash_length = SuiteHashLength(suite_);
+      const auto empty_hash = Hash({});
+      const auto transcript_hash = Hash(transcript_);
+      if (empty_hash.size() != hash_length || transcript_hash.size() != hash_length)
+        return Fail(Error::kProtocol, 80);
+      auto derived = Label(root_, "derived", empty_hash);
+      ScopedSecretCleanser cleanse_derived(derived);
       master_ = Mac(derived, Bytes(SuiteHashLength(suite_)));
-      OPENSSL_cleanse(derived.data(), derived.size());
-      if (!DeriveSecret(master_, "c ap traffic", Hash(transcript_), &c_app_) ||
-          !DeriveSecret(master_, "s ap traffic", Hash(transcript_), &s_app_) ||
-          !DeriveSecret(master_, "exp master", Hash(transcript_), &exporter_))
+      if (!DeriveSecret(master_, "c ap traffic", transcript_hash, &c_app_) ||
+          !DeriveSecret(master_, "s ap traffic", transcript_hash, &s_app_) ||
+          !DeriveSecret(master_, "exp master", transcript_hash, &exporter_))
         return Fail();
       output_.clear();
       Diagnostic("TLS20_CLIENT_TRAFFIC_SECRET_0", c_app_);
@@ -3251,13 +3320,19 @@ bool Client::AcceptFrame(ByteSpan frame) {
       }
       if (!AppendClientAuthentication())
         return false;
-      auto client_finished = Frame(20, Finished(c_hs_, transcript_));
+      auto finished = Finished(c_hs_, transcript_);
+      ScopedSecretCleanser cleanse_finished(finished);
+      if (finished.size() != hash_length)
+        return Fail(Error::kProtocol, 80);
+      auto client_finished = Frame(20, finished);
       if (++handshake_records_ > 4096 ||
           !SealHandshake(client_finished) ||
           !AppendTranscript(client_finished)) {
         return Fail();
       }
-      if (!DeriveSecret(master_, "res master", Hash(transcript_), &resumption_))
+      const auto resumption_hash = Hash(transcript_);
+      if (resumption_hash.size() != hash_length ||
+          !DeriveSecret(master_, "res master", resumption_hash, &resumption_))
         return Fail();
       state_ = State::kFlushing;
       return true;
@@ -3400,7 +3475,11 @@ bool Client::AcceptPostHandshake(ByteSpan frame) {
     }
     if (!AppendClientAuthentication())
       return false;
-    if (!SealHandshake(Frame(20, Finished(c_app_, transcript_))))
+    auto finished = Finished(c_app_, transcript_);
+    ScopedSecretCleanser cleanse_finished(finished);
+    if (finished.size() != SuiteHashLength(suite_))
+      return Fail(Error::kProtocol, 80);
+    if (!SealHandshake(Frame(20, finished)))
       return Fail();
     transcript_.clear();
     return true;
@@ -3494,27 +3573,60 @@ std::vector<SessionTicket> Client::TakeTickets() {
 
 bool Client::Export(std::string_view label, ByteSpan context, size_t length,
                     Bytes* output) const {
-  if (state_ == State::kFailed || exporter_.size() != SuiteHashLength(suite_) ||
-      label.size() > 249 || length > 255 * SuiteHashLength(suite_))
+  const auto reject = [&] {
+    OPENSSL_cleanse(output->data(), output->size());
+    output->clear();
     return false;
-  auto secret = Label(exporter_, label, Hash({}));
-  *output = Label(secret, "exporter", Hash(context), length);
-  OPENSSL_cleanse(secret.data(), secret.size());
-  return output->size() == length;
+  };
+  if (!SuiteHashLength(suite_) || state_ == State::kFailed || exporter_.size() != SuiteHashLength(suite_) ||
+      label.size() > 249 || length > 255 * SuiteHashLength(suite_))
+    return reject();
+  const auto empty_hash = Hash({});
+  const auto context_hash = Hash(context);
+  if (empty_hash.size() != SuiteHashLength(suite_) || context_hash.size() != SuiteHashLength(suite_))
+    return reject();
+  auto secret = Label(exporter_, label, empty_hash);
+  ScopedSecretCleanser cleanse_secret(secret);
+  if (secret.size() != SuiteHashLength(suite_))
+    return reject();
+  auto result = Label(secret, "exporter", context_hash, length);
+  ScopedSecretCleanser cleanse_result(result);
+  if (result.size() != length)
+    return reject();
+  // Finish reading label/context before touching a possibly aliased output.
+  OPENSSL_cleanse(output->data(), output->size());
+  output->swap(result);
+  return true;
 }
 
 bool Client::ExportEarly(std::string_view label, ByteSpan context, size_t length,
                          Bytes* output) const {
   const uint16_t suite = early_suite_;
   const size_t size = SuiteHashLength(suite);
+  const auto reject = [&] {
+    OPENSSL_cleanse(output->data(), output->size());
+    output->clear();
+    return false;
+  };
   if (offered_psks_.empty() || retried_ || state_ == State::kFailed || closed() || close_sent_ ||
       (state_ != State::kHello && (!psk_selected_ || selected_psk_ != 0)) ||
       early_exporter_.size() != size || label.size() > 249 || length > 255 * size)
-    return false;
-  auto secret = SuiteLabel(suite, early_exporter_, label, SuiteHash(suite, {}, options_.native_provider.get()), size, options_.native_provider.get());
-  *output = SuiteLabel(suite, secret, "exporter", SuiteHash(suite, context, options_.native_provider.get()), length, options_.native_provider.get());
-  OPENSSL_cleanse(secret.data(), secret.size());
-  return output->size() == length;
+    return reject();
+  const auto empty_hash = SuiteHash(suite, {}, options_.native_provider.get());
+  const auto context_hash = SuiteHash(suite, context, options_.native_provider.get());
+  if (!size || empty_hash.size() != size || context_hash.size() != size)
+    return reject();
+  auto secret = SuiteLabel(suite, early_exporter_, label, empty_hash, size, options_.native_provider.get());
+  ScopedSecretCleanser cleanse_secret(secret);
+  if (secret.size() != size)
+    return reject();
+  auto result = SuiteLabel(suite, secret, "exporter", context_hash, length, options_.native_provider.get());
+  ScopedSecretCleanser cleanse_result(result);
+  if (result.size() != length)
+    return reject();
+  OPENSSL_cleanse(output->data(), output->size());
+  output->swap(result);
+  return true;
 }
 
 bool Client::RequestKeyUpdate(bool request_peer, Bytes* record) {

@@ -46,9 +46,19 @@ uint32_t Read32(ByteSpan value) {
 
 Bytes Derive(uint16_t suite, ByteSpan root, std::string_view label,
              ByteSpan transcript, const NativeProvider* provider) {
-  return SuiteLabel(suite, root, label, SuiteHash(suite, transcript, provider),
-                    SuiteHashLength(suite), provider);
+  const auto hash_length = SuiteHashLength(suite);
+  if (!hash_length || root.size() != hash_length)
+    return {};
+  auto hash = SuiteHash(suite, transcript, provider);
+  if (hash.size() != hash_length)
+    return {};
+  return SuiteLabel(suite, root, label, hash, hash_length, provider);
 }
+
+struct Erase {
+  Bytes value;
+  ~Erase() { OPENSSL_cleanse(value.data(), value.size()); }
+};
 
 }  // namespace
 
@@ -162,22 +172,24 @@ bool PinAttempt::Verify(std::optional<ByteSpan> server_extension,
     if (!proof.empty())
       return false;
   } else {
-    auto proof_secret = Derive(suite, handshake_secret, "pinning proof 1",
-                               transcript_through_sh, provider);
-    Bytes proof_input;
+    Erase proof_secret{Derive(suite, handshake_secret, "pinning proof 1",
+                             transcript_through_sh, provider)};
+    if (proof_secret.value.size() != hash_length)
+      return false;
+    auto spki_hash = SuiteHash(suite, effective_spki, provider);
+    if (spki_hash.size() != hash_length)
+      return false;
+    Erase proof_input;
     // No insertion may release a previous allocation holding proof_secret.
-    proof_input.reserve(StringBytes("pinning proof 2").size() +
-                        proof_secret.size() + hash_length);
-    Append(&proof_input, StringBytes("pinning proof 2"));
-    Append(&proof_input, proof_secret);
-    Append(&proof_input, SuiteHash(suite, effective_spki, provider));
-    auto expected = SuiteMac(suite, previous_->secret, proof_input, provider);
-    const bool valid = expected.size() == hash_length &&
-        proof.size() == expected.size() &&
-        CRYPTO_memcmp(proof.data(), expected.data(), expected.size()) == 0;
-    OPENSSL_cleanse(proof_secret.data(), proof_secret.size());
-    OPENSSL_cleanse(proof_input.data(), proof_input.size());
-    OPENSSL_cleanse(expected.data(), expected.size());
+    proof_input.value.reserve(StringBytes("pinning proof 2").size() +
+                              proof_secret.value.size() + hash_length);
+    Append(&proof_input.value, StringBytes("pinning proof 2"));
+    Append(&proof_input.value, proof_secret.value);
+    Append(&proof_input.value, spki_hash);
+    Erase expected{SuiteMac(suite, previous_->secret, proof_input.value, provider)};
+    const bool valid = expected.value.size() == hash_length &&
+        proof.size() == expected.value.size() &&
+        CRYPTO_memcmp(proof.data(), expected.value.data(), expected.value.size()) == 0;
     if (!valid)
       return false;
   }

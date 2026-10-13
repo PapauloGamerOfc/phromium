@@ -8,7 +8,7 @@ disables the sandbox, or bypasses a browser certificate error through CDP.
 
 Prerequisites: Python 3.11+, the reference server's `requirements-dev.txt`
 (including the `h2` fixture dependency), and a clean checkout of
-`tls20-server` at `c7d9a33b9a7aef98e63e05ffed33042cb816fdf6`. The revision is
+`tls20-server` at `0ce3e4820291f13f8e52091b8540ebfd983feeb3`. The revision is
 checked before importing its protocol implementation. No dependencies are
 downloaded by the script.
 
@@ -21,6 +21,15 @@ provenance check, never certificate validation. Historical clean-revision
 results do not validate a subsequent optional-profile expansion.
 Use the server and browser from the same migration; the old numbered prototype
 is not wire-compatible with the current spec.
+
+## Fail-closed provider derivation
+
+Crypto-provider failure is not an empty cryptographic input. Key-schedule,
+proof, exporter, authenticator and pinning derivations check their intermediate
+results before consuming them; a failed derivation cannot become a successful
+MAC under an empty key or an empty transcript hash. Valid zero-length exporter
+outputs remain supported. Fault-injection tests run in an isolated native
+process, not in production browser code, and preserve successful output bytes.
 
 ## Initial request contexts and binder failure cleanup
 
