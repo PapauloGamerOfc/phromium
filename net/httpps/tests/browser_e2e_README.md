@@ -8,7 +8,7 @@ disables the sandbox, or bypasses a browser certificate error through CDP.
 
 Prerequisites: Python 3.11+, the reference server's `requirements-dev.txt`
 (including the `h2` fixture dependency), and a clean checkout of
-`tls20-server` at `926f63144f3191266b3879ab6be445ada120a613`. The revision is
+`tls20-server` at `df3041995b47140f3629656670953461bc7dc73d`. The revision is
 checked before importing its protocol implementation. No dependencies are
 downloaded by the script.
 
@@ -23,6 +23,13 @@ Use the server and browser from the same migration; the old numbered prototype
 is not wire-compatible with the current spec.
 
 ## Record authentication and key-share vector boundaries
+
+The reference client and browser reject an empty ServerHello `key_exchange`
+with `decode_error` (50), distinct from a nonempty but invalid group share (47).
+HRR's group-only form is not an empty KeyShareEntry. Version-selection errors
+take precedence over invalid cipher-suite or compression selections, as the
+specification requires. Regression cases retain the separate second-HRR rule
+and exercise initial and retry flows without relaxing any authentication check.
 
 The record engine authenticates a ciphertext within the outer record-size
 ceiling before classifying an excessive inner plaintext as `record_overflow`

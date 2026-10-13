@@ -1117,6 +1117,130 @@ void VersionAlerts() {
         "plaintext user_canceled ignores record legacy version");
 }
 
+void HelloVersionAndShareBoundaries() {
+  // Exercise actual initial/retry state, not a parser detached from the
+  // client's offers. A missing/malformed version must not be hidden by an
+  // unoffered cipher suite or nonzero compression, including in HRR or in the
+  // response to CH2. Invalid legacy_version remains a separate framing error.
+  const auto start = [](Client& client, bool after_retry) {
+    Check(client.Start(), "Hello boundary fixture starts");
+    client.TakeOutput();
+    if (after_retry) {
+      Check(ReceivePlaintextHandshake(client, CookieRetry()),
+            "cookie-only retry reaches a real second ClientHello");
+      Check(!client.TakeOutput().empty(), "second ClientHello is emitted");
+    }
+  };
+  const auto response = [](bool retry, uint16_t suite, ByteSpan extensions,
+                           uint8_t compression = 0, uint16_t legacy = 0x0303) {
+    const auto baseline = CookieRetry();
+    Bytes body(baseline.begin() + 4, baseline.begin() + 42);
+    if (!retry) std::fill(body.begin() + 2, body.begin() + 34, 0x53);
+    body[35] = static_cast<uint8_t>(suite >> 8);
+    body[36] = static_cast<uint8_t>(suite);
+    body[37] = compression;
+    body[0] = static_cast<uint8_t>(legacy >> 8);
+    body[1] = static_cast<uint8_t>(legacy);
+    Append(&body, Vector16(extensions));
+    return Frame(2, body);
+  };
+  Secret key, private_key;
+  X25519_keypair(key.data(), private_key.data());
+  Bytes valid_share{0, 29};
+  Append(&valid_share, Vector16(key));
+  struct VersionCase { bool present; Bytes value; uint8_t alert; };
+  const VersionCase versions[] = {
+      {false, {}, 109}, {true, {}, 50}, {true, {4}, 50},
+      {true, {4, 0, 0}, 50}, {true, {3, 4}, 47}, {true, {4, 0}, 0}};
+  size_t cases = 0;
+  for (bool after_retry : {false, true}) {
+    for (bool retry : {false, true}) {
+      for (uint16_t suite : {0x1301, 0xeeee}) {
+        for (uint8_t compression : {0, 1}) {
+          for (uint16_t legacy : {0x0303, 0x0400}) {
+            for (const auto& version : versions) {
+              Client client("example.test", {}, true);
+              start(client, after_retry);
+              Bytes extensions;
+              if (version.present) Extension(&extensions, 43, version.value);
+              if (retry) Extension(&extensions, 44, Bytes{0, 1, 7});
+              else Extension(&extensions, 51, valid_share);
+              const uint8_t alert = legacy != 0x0303 ? 70 : version.alert ? version.alert :
+                  compression ? 47 : retry && after_retry ? 10 : suite == 0xeeee ? 47 : 0;
+              Check(ReceivePlaintextHandshake(client, response(retry, suite, extensions,
+                                                               compression, legacy)) ==
+                        (alert == 0),
+                    "version validation precedes suite and compression checks in SH and HRR");
+              ++cases;
+              if (alert) {
+                const auto fatal = client.TakeFatalAlert();
+                if (fatal != Bytes({21, 3, 3, 0, 2, 2, alert}))
+                  std::cerr << "Hello version precedence: retry=" << retry
+                            << " after_retry=" << after_retry << " suite=" << suite
+                            << " compression=" << unsigned(compression)
+                            << " legacy=" << legacy << " version_bytes="
+                            << version.value.size() << " expected=" << unsigned(alert)
+                            << " actual=" << (fatal.empty() ? -1 : int(fatal.back())) << '\n';
+                Check(fatal == Bytes({21, 3, 3, 0, 2, 2, alert}),
+                      "Hello version/suite/compression precedence emits the exact fatal alert");
+                Check(ProtocolRegressionPeer::SecretsErased(client) &&
+                          client.TakeOutput().empty(),
+                      "invalid Hello response erases secrets and queued output");
+              } else if (retry) {
+                Check(!client.TakeOutput().empty() && client.TakeFatalAlert().empty(),
+                      "valid first HRR still emits a second ClientHello");
+              } else {
+                Check(ProtocolRegressionPeer::HasHandshakeSecrets(client) &&
+                          client.TakeFatalAlert().empty(),
+                      "valid ServerHello derives handshake traffic secrets");
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+  // A ServerHello KeyShareEntry is nonempty for every group, including
+  // unknown/GREASE values. This is distinct from HRR's two-byte group-only
+  // encoding (covered in HelloResponseSyntax). Nonempty but unoffered groups
+  // and incorrect X25519 widths remain semantic failures (alert 47).
+  for (bool after_retry : {false, true}) {
+    for (uint16_t group : {29, 23, 0x0a0a, 0xffff}) {
+      for (size_t size : {0u, 31u, 32u, 33u}) {
+        ClientOptions options;
+        options.grease = true;
+        Client client("example.test", {}, true, options);
+        start(client, after_retry);
+        Bytes extensions, share;
+        U16(&share, group);
+        Bytes public_key(key.begin(), key.end());
+        public_key.resize(size, 0x53);
+        Append(&share, Vector16(public_key));
+        Extension(&extensions, 43, Bytes{4, 0});
+        Extension(&extensions, 51, share);
+        const uint8_t alert = !size ? 50 : group == 29 && size == 32 ? 0 : 47;
+        Check(ReceivePlaintextHandshake(client, response(false, 0x1301, extensions)) ==
+                  (alert == 0),
+              "key-share syntax precedes group/width semantics before and after retry");
+        ++cases;
+        if (alert) {
+          CheckAlert(client, alert, false);
+          Check(ProtocolRegressionPeer::SecretsErased(client) &&
+                    client.TakeOutput().empty(),
+                "invalid key share cannot retain traffic state or output");
+        } else {
+          Check(ProtocolRegressionPeer::HasHandshakeSecrets(client) &&
+                    client.TakeFatalAlert().empty(),
+                "valid X25519 response remains usable with GREASE enabled");
+        }
+      }
+    }
+  }
+  Check(cases == 224, "complete Hello version/share regression matrix");
+  std::cout << "Hello version and key-share boundaries: " << cases
+            << " initial/retry cases passed\n";
+}
+
 void KeyUpdates() {
   for (uint8_t response : {0, 1}) {
     Client client("example.test", {}, true);
@@ -2062,6 +2186,7 @@ void RunProtocolRegressionTests() {
   RecordAeadSizeBoundaries();
   UnexpectedMessageAlerts();
   VersionAlerts();
+  HelloVersionAndShareBoundaries();
   HelloResponseOffers();
   HelloResponseSyntax();
   HelloSessionSyntax();

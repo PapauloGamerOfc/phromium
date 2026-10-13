@@ -2585,7 +2585,7 @@ bool Client::AcceptFrame(ByteSpan frame) {
       const size_t session_size = body[34];
       if (session_size > 32 || session_size > body.size() - 40)
         return Fail(Error::kProtocol, 50);
-      if (body[34] != 0 || body[37] != 0) {
+      if (body[34] != 0) {
         return Fail();
       }
       std::map<uint16_t, Bytes> extensions;
@@ -2597,6 +2597,10 @@ bool Client::AcceptFrame(ByteSpan frame) {
       if (extensions.at(43).size() != 2)
         return Fail(Error::kProtocol, 50);
       if (extensions.at(43) != Bytes({4, 0}))
+        return Fail(Error::kProtocol, 47);
+      // Compression is a negotiated parameter, so version diagnostics take
+      // precedence over a nonzero selection, as they do for cipher suites.
+      if (body[37] != 0)
         return Fail(Error::kProtocol, 47);
       constexpr std::array<uint8_t, 32> kRetryRandom = {
           0xcf,0x21,0xad,0x74,0xe5,0x9a,0x61,0x11,
